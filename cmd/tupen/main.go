@@ -4,56 +4,30 @@ package main
 import (
 	"log"
 
-	"github.com/echoVic/Tupen/internal/capture"
+	"github.com/echoVic/Tupen/internal/app"
 	"github.com/egoist/mygo"
 )
 
 func main() {
-	app := mygo.App
-	app.SetName("Tupen")
-	mygo.Bind(capture.CaptureService{})
-	app.SetMenu(mygo.NewMenu([]*mygo.MenuItem{
-		{Role: mygo.RoleAppMenu},
-		{Label: "File", Submenu: []*mygo.MenuItem{
-			{Role: mygo.RoleQuit},
-		}},
-		{Role: mygo.RoleEditMenu},
-		{Role: mygo.RoleWindowMenu},
-	}))
+	// A screenshot utility must have one instance: hotkeys, the tray icon
+	// and the pin windows all belong to it.
+	if !mygo.App.RequestSingleInstanceLock() {
+		return
+	}
+	mygo.App.SetName("Tupen")
+	mygo.App.SetVersion("0.1.0")
 
-	app.WhenReady(func() {
-		mygo.NewWindow(mygo.WindowOptions{
-			Title:           "Tupen",
-			Width:           1360,
-			Height:          880,
-			MinWidth:        760,
-			MinHeight:       540,
-			TitleBarStyle:   mygo.TitleBarHiddenInset,
-			TitleBarHeight:  52,
-			BackgroundColor: "#141412",
-			URL:             "/",
-		})
+	tupen := app.New()
+	tupen.Bind()
+	mygo.App.OnSecondInstance(func(args []string, workingDir string) {
+		tupen.ShowMain()
 	})
+	mygo.App.WhenReady(tupen.Start)
+	// Closing the last window only puts Tupen to sleep: the menu bar icon
+	// and the global shortcuts keep working until the user quits.
+	mygo.App.OnWindowAllClosed(func() {})
 
-	// A screenshot utility should stay available after its editor window closes.
-	app.OnWindowAllClosed(func() {})
-	app.OnActivate(func(hasVisibleWindows bool) {
-		if !hasVisibleWindows {
-			mygo.NewWindow(mygo.WindowOptions{
-				Title:           "Tupen",
-				Width:           1360,
-				Height:          880,
-				MinWidth:        760,
-				MinHeight:       540,
-				TitleBarStyle:   mygo.TitleBarHiddenInset,
-				TitleBarHeight:  52,
-				BackgroundColor: "#141412",
-				URL:             "/",
-			})
-		}
-	})
-
-	if err := app.Run(); err != nil {
+	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)
 	}
 }

@@ -1,0 +1,283 @@
+# Tupen 真实功能开发计划（Round 1，Lead 维护）
+
+> 状态：进行中。本文件是 **接口契约的唯一来源**。任何一方需要改动契约，先给 Lead 发消息，不要自行改接口。
+> 背景：仓库当前是「设计原型 + MyGo 桌面壳」。本轮把核心链路做真：真实区域截图 → 标注 → 复制/导出/固定 → 历史/截图架 → 全局快捷键/托盘/设置接线。
+> 视觉与交互的基准是 `outputs/tupen-design.html`（保持现有 UI 语言与布局，不要重新设计）。
+
+## 0. 环境与命令
+
+- 工作目录：`<repo>`（所有成员共享同一文件系统）
+- 桌面框架：MyGo v0.8.3，源码与文档在 `$(go env GOMODCACHE)/github.com/egoist/mygo@v0.8.3`（重点看 `docs/windows.md` `docs/bindings.md` `docs/frontend.md` `docs/data-transfer.md` `docs/launchers.md` `docs/app.md`）
+- MyGo 能力（已确认可用）：`mygo.NewWindow`（Panel/Frameless/Transparent/AlwaysOnTop/SetBounds/SetOpacity/Hide/Show/Focus）、`mygo.BindAs` 绑定服务、`mygo.NewEvent[T]` 事件、`mygo.Protocol.Handle` 自定义协议、`mygo.GlobalShortcut.Register`、`mygo.Clipboard.WriteImage/ReadImage`、`mygo.Dialog.Save`、`mygo.NewTray`、`mygo.Screen.Displays/CursorScreenPoint`、`mygo.App.Path(PathUserData/PathCache)`、`mygo.App.SetOpenAtLogin`、`mygo.Dialog.Message`
+- 常用命令：
+  - Go 测试：`GOTOOLCHAIN=auto go test ./...`
+  - 前端构建：`npm run build:web`
+  - 完整桌面包：`mygo build`（通过 `node_modules/.bin/mygo`；产出 `build/darwin-arm64/Tupen.app`）
+  - 开发运行：`npm run dev`（**只有 Lead 可以运行**；会占用 5173 并重新生成 `frontend/src/mygo.ts`）
+- 进程卫生：不要留后台进程。前端成员自测可以短暂 `npx vite --config vite.config.ts`，结束前必须 kill；端口 5173 只允许一个占用。
+
+## 1. 职责与文件所有权（写权限互斥）
+
+| 成员 | 写作用域 | 内容 |
+|---|---|---|
+| Lead | `cmd/tupen/main.go`、`internal/app/`、`work/plan.md`、`README.md`、`.gitignore`、`outputs/` | 应用编排（窗口/托盘/协议/快捷键/截图流程）、绑定服务、事件、主入口、集成与验收 |
+| go-native | `internal/capture/`、`internal/store/`、`go.mod`、`go.sum` | 原生截图后端（macOS 实装 / Windows 可编译后端）、历史存储与缩略图、单元测试 |
+| frontend | `frontend/`、`vite.config.ts` | 主页面真实化（截图结果、标注、导出/复制/固定、历史/截图架、设置接线）、`overlay.html`、`pin.html`、bridge 封装 |
+| verifier（后续） | 只读 + 报告 | 独立验收，不改产品代码 |
+
+不要修改不属于自己的文件；不要 git commit / push（Lead 统一处理）。不要改 `outputs/tupen-design.html`。
+
+## 2. 架构
+
+```
+cmd/tupen/main.go            入口：单实例、protocol 注册、绑定、托盘、窗口、WhenReady、自检模式
+internal/app/                编排层：App + 绑定服务 Capture/History + 事件 + 截图流程 + 设置
+internal/capture/            纯截屏：几何 + 平台后端（darwin/windows/other）+ 权限 + 测试
+internal/store/              历史持久化：PNG 原图 + 缩略图 + index.json + 清理 + 测试
+frontend/index.html          主窗口页面（设计稿 UI，真实数据）
+frontend/overlay.html        区域选择覆盖层（透明全屏 panel）
+frontend/pin.html            固定到屏幕的小窗口
+frontend/src/bridge.ts       前端唯一 Go 调用封装（untyped call/on，浏览器降级）
+frontend/src/*.ts            从 index.html 内联脚本拆出的模块
+vite.config.ts               多页构建（index/overlay/pin）
+```
+
+数据目录：`mygo.App.Path(mygo.PathUserData)`（macOS: `~/Library/Application Support/Tupen`），截图与 index.json 存在其下 `captures/` 子目录。缩略图同目录 `<id>.thumb.jpg`。
+
+自定义协议 `shot://`：`mygo.Protocol.Handle("shot", mygo.FileServer(os.DirFS(capturesDir)))`，页面用 `shot://localhost/<文件>` 取图（Windows 用 `http://shot.localhost/<文件>`，由 Go 拼好 URL 返回给前端，前端不自己拼）。
+
+## 3. 冻结接口契约
+
+### 3.1 Go：`internal/capture`（go-native 实现）
+
+```go
+package capture
+
+// Rect 是屏幕坐标（DIP/point），原点是主屏左上角，可跨屏为负。
+type Rect struct { X, Y, Width, Height float64 }
+func (r Rect) Empty() bool
+type Point struct { X, Y float64 }
+func NormalizeSelection(start, end Point) Rect
+
+type CaptureOptions struct {
+    IncludeCursor bool
+    DelayMillis   int
+}
+
+// CaptureRegion 截取矩形区域，返回 PNG 字节。权限不足/失败返回 error。
+func CaptureRegion(rect Rect, opts CaptureOptions) ([]byte, error)
+
+// PermissionGranted 报告系统是否已授予屏幕录制权限（darwin 用 CGPreflightScreenCaptureAccess，
+// 通过 purego 调用；调用失败时返回 true 并让 CaptureRegion 的错误兜底）。
+func PermissionGranted() bool
+
+// OpenPermissionSettings 打开系统「屏幕录制」设置页（darwin；其他平台返回 ErrUnsupported）。
+func OpenPermissionSettings() error
+
+// Supported 报告当前平台是否有真实截图后端。
+func Supported() bool
+
+var ErrUnsupported = errors.New("capture: unsupported on this platform")
+```
+
+实现要点：
+- darwin：`/usr/sbin/screencapture`，参数 `-x -t png [-C] -R x,y,w,h <tmpfile>`。坐标是 point（DIP），输出是像素（Retina 自动 2x）。`DelayMillis>0` 时截图前 sleep（留给 overlay 消失）。临时文件用 `os.CreateTemp`。不要 `-c`（我们不需要直接进剪贴板）。
+- windows：可以有真实实现（GDI BitBlt，`golang.org/x/sys/windows`，纯 Go 可交叉编译）就做；做不动就返回 `ErrUnsupported`，但必须 `GOOS=windows go build ./...` 通过。不要引 cgo。
+- other（linux 等）：`ErrUnsupported`。
+- 单测：`buildScreencaptureArgs(rect, opts)` 之类的纯函数（参数顺序/取整/坐标格式）、Rect 归一化、`PixelRect(scale)` 取整。
+
+### 3.2 Go：`internal/store`（go-native 实现）
+
+```go
+package store
+
+type Entry struct {
+    ID        string    `json:"id"`
+    CreatedAt time.Time `json:"createdAt"`
+    Width     int       `json:"width"`
+    Height    int       `json:"height"`
+    Size      int64     `json:"size"`   // PNG 原图字节数
+    File      string    `json:"file"`   // 相对 captures 目录
+    Thumb     string    `json:"thumb"`  // 相对 captures 目录（JPEG）
+}
+
+func Open(dir string) (*Store, error) // 建目录、加载 index.json；损坏时忽略并重建
+func (s *Store) Dir() string
+func (s *Store) Save(png []byte, createdAt time.Time) (Entry, error)
+func (s *Store) List() []Entry                 // 新→旧
+func (s *Store) Get(id string) (Entry, bool)
+func (s *Store) ReadPNG(id string) ([]byte, error)
+func (s *Store) Delete(id string) error
+func (s *Store) Clear() error
+func (s *Store) Prune(retentionDays int, maxBytes int64) (removed int, err error) // 0 表示不限制
+```
+
+实现要点：缩略图最长边 320px、JPEG q80（`golang.org/x/image/draw` CatmullRom 或 ApproxBiLinear；依赖 v0.46.0 已在本地模块缓存）。index.json 原子写（临时文件+rename）。ID 用 `20060102-150405-[a-z0-9]{4}` 形式，文件系统安全。测试：Save/List/Get/ReadPNG/Delete/Clear/Prune、重开目录后索引一致、缩略图尺寸正确。
+
+### 3.3 Go：绑定服务（Lead 在 `internal/app` 实现；**方法名与语义冻结**）
+
+前端统一用 `call("<Service>.<Method>", ...)`，服务名固定为 `Capture` 与 `History`。
+
+`Capture` 服务：
+| 方法 | 参数 | 返回 | 语义 |
+|---|---|---|---|
+| `BeginRegion` | — | — | 隐藏主窗口，在鼠标所在显示器弹出 overlay |
+| `CancelRegion` | — | — | 取消选择，恢复主窗口 |
+| `FinishRegion` | `rect {x,y,width,height}`（overlay 本地 CSS px） | `{id}`（异步截图，id 在 capture:completed 里，绑定返回空占位对象） | 结束选择 → 截图 → 存历史 → 显示主窗口 → 发 `capture:completed` |
+| `CaptureFullScreen` | — | `{id}`（同上，异步） | 截鼠标所在整个显示器 |
+| `CopyImage` | `dataBase64 string`（纯 base64，无 data: 前缀） | — | 写系统剪贴板（PNG） |
+| `ExportImage` | `dataBase64 string, suggestedName string` | `string` | 保存对话框导出，返回路径，取消返回 "" |
+| `SaveImageToFolder` | `dataBase64 string` | `string` | 写入设置里的保存文件夹，返回路径 |
+| `PinImage` | `dataBase64 string` | `string` | 打开置顶贴图窗口，返回 pin id |
+| `PinClipboard` | — | `string` | 从剪贴板读图并固定 |
+| `ClosePin` | `id string` | — | 关闭贴图 |
+| `ApplySettings` | `settings`（见 3.4） | `Record<string,string>` | 应用设置；快捷键注册失败的 key→错误信息 |
+| `PermissionGranted` | — | `boolean` | 屏幕录制权限 |
+| `OpenPermissionSettings` | — | — | 打开系统设置页 |
+| `OverlayInfo` | — | `{displayX,displayY,width,height,scale}` | overlay 页面初始化/每次显示时读取 |
+| `ShowMainWindow` | — | — | 显示并聚焦主窗口 |
+
+`History` 服务：
+| 方法 | 参数 | 返回 |
+|---|---|---|
+| `List` | — | `HistoryEntry[]` |
+| `Get` | `id string` | `{id,width,height,url}` |
+| `Remove` | `id string` | — |
+| `Clear` | — | — |
+
+`HistoryEntry`：`{id, createdAt(RFC3339), width, height, size, url, thumbUrl}`。`url`/`thumbUrl` 是 Go 拼好的绝对 URL：当前截图走 session 目录 `/s/<id>.png`，历史截图走 `/h/<file>`；macOS/Linux 前缀 `shot://localhost`，Windows 前缀 `http://shot.localhost`。前端直接用，不要自己拼。
+
+导出归一化（Lead 实现）：`CopyImage`/`PinImage` 内部会把输入统一转成 PNG；`ExportImage`/`SaveImageToFolder` 接受 PNG 或 JPEG base64，Go 识别实际编码后按 `Settings.Format` + `Quality` 归一化落盘，并按目标格式补扩展名。前端传 canvas 的 PNG base64 即可，不必自己 encode JPEG。
+
+### 3.4 设置对象（前端 localStorage 为准，每次变更整体推给 Go）
+
+```ts
+interface Settings {
+  captureKey: string      // MyGo accelerator，默认 "CmdOrCtrl+Shift+1"（⌘⇧4 被 macOS 截图占用）
+  pinKey: string          // 如 "CmdOrCtrl+Shift+2"
+  ocrKey: string          // 如 "CmdOrCtrl+Shift+O"
+  afterCapture: "editor" | "clipboard" | "pin"
+  format: "PNG" | "JPEG"
+  quality: number         // 50..100
+  filenamePrefix: string
+  folder: string          // 如 "~/Pictures/Tupen"（Go 展开 ~）
+  includeCursor: boolean
+  sound: boolean
+  launchAtLogin: boolean
+  keepHistory: boolean
+  retentionDays: number   // 0=永不
+  historyLimitMB: number  // 0=不限
+  tooltip: boolean
+  pinOpacity?: number     // 30..100，贴图窗口不透明度
+  pinBorder?: boolean
+}
+```
+
+Go 侧 `Settings` struct 用同样的 camelCase json tag 解码；未知字段忽略。`ApplySettings` 语义：
+- 重新注册全局快捷键（unregister 旧的再 register；失败项进返回 map）
+- `launchAtLogin` → `mygo.App.SetOpenAtLogin`
+- `keepHistory/retentionDays/historyLimitMB` → 启动/变更时 `store.Prune`
+- 其余为截图流程/前端行为参数
+
+### 3.5 事件（Go `mygo.NewEvent[T]`，前端 `on(name, cb)`）
+
+| 事件 | payload |
+|---|---|
+| `capture:completed` | `{id, width, height, url, thumbUrl, source}` source: `"region"\|"screen"\|"clipboard"` |
+| `capture:cancelled` | `{reason}` |
+| `capture:failed` | `{message, permission:boolean}` |
+| `overlay:shown` | `{displayX,displayY,width,height,scale}`（发给 overlay 页面） |
+| `history:changed` | `{}` |
+| `toast` | `{text, kind}` kind: `"info"\|"success"\|"error"` |
+| `pin:init` | 发给 pin 窗口：`{id,url,width,height,opacity,border}`（Lead 在创建 pin 窗口后 Emit，只发事件、不依赖 query） |
+
+事件名带冒号：前端 `on("capture:completed", ...)` 用原始事件名字符串（不要用 `events.captureCompleted`，我们用 untyped API）。
+
+### 3.6 前端 bridge（frontend 实现，唯一原生调用入口）
+
+`frontend/src/bridge.ts` 导出：
+
+```ts
+export const hasNative = isMyGo();          // 浏览器静态预览时为 false
+export async function beginRegion(): Promise<void>
+export async function cancelRegion(): Promise<void>
+export async function finishRegion(rect: Rect): Promise<{ id: string }>
+export async function captureFullScreen(): Promise<{ id: string }>
+export async function copyImage(base64: string): Promise<void>
+export async function exportImage(base64: string, suggestedName: string): Promise<string>
+export async function saveImageToFolder(base64: string): Promise<string>
+export async function pinImage(base64: string): Promise<string>
+export async function pinClipboard(): Promise<string>
+export async function closePin(id: string): Promise<void>
+export async function applySettings(settings: Settings): Promise<Record<string, string>>
+export async function permissionGranted(): Promise<boolean>
+export async function openPermissionSettings(): Promise<void>
+export async function overlayInfo(): Promise<OverlayInfo>
+export async function showMainWindow(): Promise<void>
+export async function historyList(): Promise<HistoryEntry[]>
+export async function historyGet(id: string): Promise<{ id: string; width: number; height: number; url: string }>
+export async function historyRemove(id: string): Promise<void>
+export async function historyClear(): Promise<void>
+
+export function onCaptureCompleted(cb: (p: CaptureCompleted) => void): () => void
+export function onCaptureCancelled(cb: (p: { reason: string }) => void): () => void
+export function onCaptureFailed(cb: (p: { message: string; permission: boolean }) => void): () => void
+export function onOverlayShown(cb: (p: OverlayInfo) => void): () => void
+export function onHistoryChanged(cb: () => void): () => void
+export function onToast(cb: (p: { text: string; kind: string }) => void): () => void
+```
+
+浏览器降级（`hasNative === false`）：`beginRegion` 等走现有原型模拟（假的截图画布/示例结果），保证 `npm run dev:web` 静态预览仍可看可点；不要在无原生环境下 throw 到 UI。
+
+### 3.7 用户流程（验收标准）
+
+1. 主窗口点「截一张」→ 主窗口消失 → 出现全屏半透明 overlay → 拖框选区 → 松手 → overlay 消失 → 主窗口出现，编辑器显示**真实截图**，可继续标注。
+2. 全局快捷键（默认 `CmdOrCtrl+Shift+1`；⌘⇧4 被 macOS 自带截图占用，默认已避开）在应用后台时也能唤起 overlay 流程；完成/取消后回到主窗口。
+3. 标注后点「保存到剪贴板」→ 系统剪贴板得到带标注的 PNG（可用 `pbpaste -Prefer png > /tmp/x.png` 验证）。
+4. 「下载」按设置里的 PNG/JPEG、质量、文件名前缀走保存对话框导出。
+5. 「固定到屏幕」→ 出现无边框置顶小窗显示当前图，可关闭；`pinKey` 可固定剪贴板图片。
+6. 「历史」列出真实历史（缩略图+时间），点开进入编辑器；可删除/清空；截图架显示最近截图。
+7. 设置：录制快捷键立即生效（失败的组合键在设置页提示）；开机启动、保存文件夹、光标、提示音、截图后默认动作、历史保留策略生效。
+8. 托盘图标常驻：截取区域、截取全屏、固定剪贴板图片、显示主窗口、退出。
+9. 浏览器静态预览（无 MyGo）不报错、原型可演示。
+
+## 4. 现有设计稿要点（勿丢）
+
+- 单页应用三段视图：截图架 / 历史 / 偏好设置；暗色暖调（`--bg:#141412`、amber `#f3a24e`）；品牌 `tupen`/`Tupen`。
+- 编辑器：960×480 逻辑画布、20 个工具两组（拖拽/矩形/圆/线/箭头/画笔/文字/标签/马赛克/高亮/水印 | 固定/翻译/OCR/二维码/滚动/撤销/下载/取消/剪贴板）、属性条（颜色/粗细/文本）、结果面板、状态行。
+- 设置 6 分类（通用与截图/快捷键/保存与历史/标注与水印/贴图与截图架/识别与翻译）+ localStorage 持久化 + 分类重置。
+- 标注渲染逻辑（`drawShape`/`redraw`）是可用资产，保留；把 `background()` 的假截图替换为真实截图的底座图。
+- `outputs/tupen-toolbar-compact.png`、`outputs/tupen-settings.png` 是旧版截图（还是 shotline 品牌），仅参考，不复用。
+
+## 4.5 E2E 实测结论与已知限制（Lead，2026-11-09）
+
+已验证（构建产物 build/darwin-arm64/Tupen.app，selftest 模式见下）：
+- 真实区域截图 600×400pt → 1200×800px（Retina 2x）；光标/延时/临时文件清理单测+实测通过。
+- overlay 在鼠标所在显示器的可见工作区显示（Panel）；拖动选区 → FinishRegion 映射与直接截同一屏幕矩形逐像素一致（mean abs diff 0.00）；编辑器 canvas 载入真实尺寸。
+- Esc 取消（System Events 合成按键实测 overlay 隐藏、主窗口恢复）；点击遮罩/右键取消同样走 CancelRegion。
+- capture:completed 经 `shot://` URL fetch → createImageBitmap → canvas 正常（无 CORS/taint 问题，马赛克/导出可用）。
+- 工具栏「保存到剪贴板」真实写入系统剪贴板（1120×720 PNG，外部 pbpaste 验证过 PNGf）；「固定到屏幕」创建 Panel 贴图窗口并显示图片；历史/截图架真实缩略图、点击载入、删除/清空；设置页 6 分类真实渲染与持久化。
+- 托盘：菜单栏 T 图标可见，菜单项（截取区域/截取整个屏幕/固定剪贴板图片/显示主窗口/退出）完整，点击「截取区域」真实唤起 overlay。
+- 全局快捷键：Carbon 注册成功（三个快捷键均 registered=true）；**合成按键无法验证触发**（System Events 合成的键盘事件不会触发 Carbon 热键），需真实按键人工确认。
+- macOS 限制：Panel 是带 title 样式的窗口，AppKit 会把它的 frame 约束在屏幕可见工作区（built-in 屏 workArea={44,33,1684,1084}），因此 overlay 不覆盖菜单栏和 Dock 区域；代码按「实际窗口 frame」做坐标映射，不受影响。
+- 默认快捷键从 ⌘⇧4 改为 ⌘⇧1（⌘⇧4 被 macOS 截图占用）。
+- 真实退出路径（Cmd+Q / 菜单退出 / 托盘退出）已修复并纳入 E2E：`TUPEN_SELFTEST=quit` 调 `App.Quit()` 验证 5s 内走完且退出码 0（此前 overlay 的 OnClose 无条件 PreventDefault 会阻断退出）。
+- `shot://` 协议只放行 .png/.jpg/.jpeg（`imagesOnly` 中间件），`/h/index.json` 等其它文件 404。
+- 登录后启动在未安装到 /Applications 的构建里会返回 `Operation not permitted`，设置页会如实展示；安装后行为待人工确认。
+- 导出保存对话框是模态框，selftest 未自动点击；导出/格式转换逻辑由 internal/app 单测覆盖，需人工点一次确认。
+- Windows：GDI 后端纯 Go、交叉编译通过，未做 Windows 真机验证；Rect 在 Windows 按物理像素解释。
+
+## 5. 本轮非目标
+
+- Windows 真实截屏（后端可写则写，写不动保持 ErrUnsupported，但必须可交叉编译）
+- OCR / 翻译 / 二维码识别 / 滚动截图的真实服务（保留「待接入」占位文案，不要假装能用）
+- 多显示器完整覆盖（overlay 只在鼠标所在显示器工作）、签名/公证/自动更新
+- 不动 `outputs/tupen-design.html` 与 `work/` 下旧脚本
+
+## 6. 验证与交付（各自完成前必须自测）
+
+- go-native：`gofmt -l`、`go vet ./...`、`go test ./...`、`GOOS=windows go build ./...` 全绿；报告新增依赖与测试覆盖点。
+- frontend：`npm run build:web` 通过；页面在浏览器静态预览无 console 报错；报告改了哪些文件、哪些设置接线完成。
+- Lead：`mygo build` 成功；真实运行验收 3.7 的 1/2/3/5/6/8；产出新截图到 `outputs/`；更新 README。
+
+调试自检（Lead 实现，环境变量 `TUPEN_SELFTEST`，仅开发用）：`capture`（真实截区域+写剪贴板+存历史，输出尺寸/裁剪文件）、`overlay`（显示 overlay 后整屏截图，验证遮罩渲染）、`deliver`（真实截图走 capture:completed 交付给编辑器后整屏截图）、`pin`（创建贴图窗口后整屏截图）、`history`/`hotkeys`/`settings`。产出文件在 `/tmp/tupen-selftest-*.png`。
