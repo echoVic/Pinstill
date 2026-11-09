@@ -8,3 +8,5 @@ build/
 .env.*
 *.log
 work/tmp/
+
+__pycache__/
