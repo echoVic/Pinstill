@@ -1,0 +1,20 @@
+{
+  "name": "tupen",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "mygo dev",
+    "build": "mygo build",
+    "generate": "mygo generate",
+    "dev:web": "vite --config vite.config.ts",
+    "build:web": "vite build --config vite.config.ts"
+  },
+  "devDependencies": {
+    "mygo-cli": "0.8.3",
+    "vite": "^8.0.0"
+  },
+  "dependencies": {
+    "lucide": "^1.70.0",
+    "mygo-runtime": "0.8.3"
+  }
+}
