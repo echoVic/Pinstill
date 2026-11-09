@@ -281,3 +281,74 @@ export function onToast(cb: (p: { text: string; kind: string }) => void): () => 
 - Lead：`mygo build` 成功；真实运行验收 3.7 的 1/2/3/5/6/8；产出新截图到 `outputs/`；更新 README。
 
 调试自检（Lead 实现，环境变量 `TUPEN_SELFTEST`，仅开发用）：`capture`（真实截区域+写剪贴板+存历史，输出尺寸/裁剪文件）、`overlay`（显示 overlay 后整屏截图，验证遮罩渲染）、`deliver`（真实截图走 capture:completed 交付给编辑器后整屏截图）、`pin`（创建贴图窗口后整屏截图）、`history`/`hotkeys`/`settings`。产出文件在 `/tmp/tupen-selftest-*.png`。
+
+---
+
+# Round 2：桌面优先的截图与贴图（2026-11-09 晚）
+
+用户反馈与拍板（已确认）：
+- **移除「截图架」**：主流截图工具没有这个概念；主窗口不再展示截图架，导航第一项改为「截图」（编辑器入口不变）。
+- **截图时就地操作**：拖选区域后不跳主窗口，选区旁出现操作条：标注 / 复制 / 贴图 / 保存 / 取消（Esc）。「标注」才进主窗口编辑器。
+- **「挂在桌面」是核心**：贴图窗口始终浮在所有窗口之上（Snipaste 贴图式）。
+- **贴图持久化**：重启应用后恢复上次的贴图（图片、位置、大小、透明度）。
+
+## R2.1 新增/变更的绑定（Capture 服务，名字冻结）
+
+| 方法 | 参数 | 返回 | 语义 |
+|---|---|---|---|
+| `CompleteSelection` | `rect {x,y,width,height}`（overlay 本地 CSS px）, `action` ∈ `annotate\|copy\|pin\|save` | `void` | overlay 操作条按钮调用：Go 隐藏 overlay → 截该区域 → 执行 action；`annotate` 走原编辑器流程（存 session+历史、显示主窗口、发 capture:completed）；`copy` 写剪贴板 + toast；`pin` 创建持久贴图窗口 + toast；`save` 打开保存对话框写文件 + toast。四种 action 都会存历史（受 keepHistory 控制） |
+| `ResizePin` | `id string`, `width int`, `height int` | `error` | 按 DIP 设置贴图窗口尺寸（页面负责保持宽高比） |
+| `SetPinOpacity` | `id string`, `opacity float64`（10..100） | `error` | 设置贴图窗口不透明度并持久化 |
+| `CopyPin` | `id string` | `error` | 复制贴图原图到剪贴板 |
+| `SavePin` | `id string` | `string` | 保存贴图原图（保存对话框），返回路径 |
+| `UpdatePinState` | `id string`, `state {width,height,opacity}` | `error` | 页面侧变更后同步状态并持久化（位置由 Go 在 OnMove/OnResize 持久化） |
+| `Settings` | — | `Settings` | 返回当前设置，overlay 页面用于判断 `afterCapture` 默认行为 |
+
+事件不变（`pin:init` 继续用于新窗口初始化，payload 不变）。`afterCapture` 取值扩展为 `toolbar|clipboard|pin|editor`，默认 `toolbar`：
+- `toolbar`：拖选后显示操作条（默认）
+- 其它：拖选松手后直接执行对应动作（等价于点操作条对应按钮）
+
+## R2.2 贴图行为（Go + 页面）
+
+- 窗口：Panel + Frameless + 始终置顶；页面内 `--app-region: drag` 拖动整个贴图（按钮/操作区 no-drag）。
+- 交互：悬停右上角关闭按钮；右键菜单：复制 / 保存 / 关闭 / 透明度 +10% / 透明度 −10%；双击复制；滚轮缩放窗口（保持宽高比，10% 步进）；⌘/Ctrl + 滚轮调透明度；右下角拖拽手柄缩放（保持宽高比）；Esc 关闭。
+- 多张贴图：新建时级联错位摆放；各自独立位置/大小/透明度。
+- 持久化：图片存 `<userData>/pins/<id>.png`，状态存 `<userData>/pins/pins.json`（原子写）；Go 在创建/移动/缩放/透明度变化/关闭时更新；应用启动时恢复（越界坐标夹回可见屏幕）。
+- 协议：`shot://localhost/p/<file>` 提供贴图图片（沿用 imagesOnly 限制）。
+- 贴图「原始大小」：右键菜单提供，恢复为图片像素 / display scale 的 DIP 尺寸。
+
+## R2.3 前端改动
+
+1. overlay.html/overlay.ts：拖选后进入「操作条状态」——选区保留、遮罩保留、选区旁浮出操作条（标注/复制/贴图/保存/取消）与尺寸角标；未出操作条时拖拽=重新选区；Enter=复制、Esc=取消；按钮 pending 时禁用；调用 CompleteSelection。overlay:shown 时重置。
+2. pin.html/pin.ts：实现 R2.2 页面侧全部交互（拖动由 CSS，右键菜单/双击/滚轮/手柄/Esc/关闭按钮），监听 pin:init，调用 ResizePin/SetPinOpacity/CopyPin/SavePin/UpdatePinState/ClosePin。
+3. index.html/main.ts：删除截图架 DOM/逻辑/占位 pin/计数与 CSS；导航首项显示「截图」；右栏文案去掉截图架与「设计预览」的不实描述；设置「贴图与截图架」分类改名「贴图与桌面」，删除 rackPosition/rackHide/pinTop 三个无效控件；「截图后」选项改为 就地操作条/复制到剪贴板/固定到屏幕/进入标注；设置对象里删除 rack* 字段（保留兼容忽略）。
+4. 导出/复制/标注等既有能力保持不变。
+
+## R2.4 Go 改动（Lead）
+
+- `internal/app`：CompleteSelection 与 action 执行、贴图管理器（创建/恢复/移动与缩放持久化/关闭）、`/p/` 协议路由、Settings() 绑定、afterCapture=toolbar 兼容。
+- 新增 `internal/pin` 包（go-native）：贴图状态持久化。
+- selftest 新增：`flow`（Eval 驱动 overlay 选区+操作条，验证 copy/pin/annotate）、`pinpersist`（两次启动验证恢复）。
+- work/e2e.sh 增加上述步骤；README 更新截图与说明。
+
+## R2.5 非目标（本轮）
+
+- 多显示器分别贴图跨屏联动、贴图旋转/翻转、贴图内二次标注、贴图分组、OCR/翻译/二维码/滚动截图、Windows 真机验证。
+
+## R2.6 实测结论（Lead，2026-11-09 晚）
+
+构建产物：build/darwin-arm64/Tupen.app（0.1.0）。work/e2e.sh 14 步全部通过（可重复运行）：
+
+- **桌面操作条全流程**（`TUPEN_SELFTEST=flow`，用 `Page().Eval` 在 overlay 页面合成 pointer 拖选再点操作条）：
+  - copy → 系统剪贴板出现 480×320 PNG；
+  - pin → 新建桌面贴图（pins=1）；
+  - annotate → 主窗口显示、编辑器 canvas=480×320；
+  - cancel → 不产生新截图（历史条数不变）；
+  - afterCapture=clipboard 时拖选后自动复制（400×280），不点操作条。
+- **桌面贴图交互**（`pinui`）：双击复制（1280×800 PNG 进剪贴板）且窗口 bounds 不变；右键菜单复制/透明度生效（100→90）；滚轮缩放 640×400→704×440（保比）；关闭按钮 → pins=0、持久化 stored=0。
+- **贴图持久化**（`pinpersist-setup` + `pinpersist-check`）：创建贴图后走真实 `App.Quit()` 退出，重启后 restored=1/stored=1 且几何一致；关闭后 stored=0。
+- 旧链路回归：真实截图/历史/剪贴板、选区映射（与直接截屏 mean abs diff 0.00）、Esc 取消（对 System Events 偶发丢键做了 3 次重试）、编辑器交付、工具栏动作、托盘、快捷键注册、设置应用均通过。
+- 主窗口已无截图架；`uicapture` 的 rack 视图为空编辑器，history 卡片为真实历史；`showcase` 用合成图生成 README 截图（不含用户桌面内容）。
+- 已知测试脆弱点：连续快速启动多个 selftest 实例时（<0.6s），偶发一个 pin 窗口在创建后即被关闭；e2e.sh 已加入 1.0s 间隔规避；真实使用（单实例常驻）不复现。System Events 合成的 Escape 偶发不达，已加重试。
+- 隐私修复（QA round 2 发现）：showcase 生成的 README 截图曾读到真实历史（history 截图泄露用户桌面）。现在 `TUPEN_DATA_DIR` 可把 captures/pins/session 全部隔离到指定目录（默认行为不变，目录自动创建）；`TUPEN_SELFTEST=showcase` 未设置该变量时在 main() 阶段直接失败退出；outputs 五张截图均已在隔离数据目录重生成并逐张确认不含真实内容。
+- QA 修复（round 2 复验）：恢复贴图取**最新** 60 张（此前误取最旧）；`shotBase` 在存储初始化前赋值，历史/贴图存储打开失败只降级对应功能而不再中断启动；非法 CompleteSelection action 会复位 capturing。

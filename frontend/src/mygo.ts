@@ -80,6 +80,13 @@ export interface PinInitPayload {
   border: boolean;
 }
 
+/** PinWindowState is the size and opacity the page reports for a pin. */
+export interface PinWindowState {
+  width: number;
+  height: number;
+  opacity: number;
+}
+
 /**
  * Rect is a rectangle sent from a page: overlay-local CSS pixels for
  * FinishRegion, screen coordinates elsewhere.
@@ -157,9 +164,21 @@ export const Capture = {
   closePin(id: string): Promise<void> {
     return call("Capture.ClosePin", id);
   },
+  /**
+   * CompleteSelection runs one action on the region the user selected in the
+   * overlay: annotate, copy, pin or save. The work happens on the desktop;
+   * only annotate brings the main window back.
+   */
+  completeSelection(rect: Rect, action: string): Promise<void> {
+    return call("Capture.CompleteSelection", rect, action);
+  },
   /** CopyImage puts a PNG on the system clipboard. */
   copyImage(dataBase64: string): Promise<void> {
     return call("Capture.CopyImage", dataBase64);
+  },
+  /** CopyPin puts a pin's image on the clipboard. */
+  copyPin(id: string): Promise<void> {
+    return call("Capture.CopyPin", id);
   },
   /**
    * ExportImage asks where to save the annotated image, converts it to the
@@ -171,9 +190,9 @@ export const Capture = {
   },
   /**
    * FinishRegion completes the region capture with the selection the user
-   * dragged on the overlay, in overlay-local CSS pixels. The capture happens
-   * asynchronously: the finished capture arrives with the capture:completed
-   * event, so the returned ID is empty.
+   * dragged on the overlay, in overlay-local CSS pixels. It is kept for
+   * compatibility and opens the editor; the overlay's action bar uses
+   * CompleteSelection instead.
    */
   finishRegion(rect: Rect): Promise<CaptureResult> {
     return call("Capture.FinishRegion", rect);
@@ -198,6 +217,10 @@ export const Capture = {
   pinImage(dataBase64: string): Promise<string> {
     return call("Capture.PinImage", dataBase64);
   },
+  /** ResizePin sets a desktop pin's size in DIPs. */
+  resizePin(id: string, width: number, height: number): Promise<void> {
+    return call("Capture.ResizePin", id, width, height);
+  },
   /**
    * SaveImageToFolder writes the annotated image into the configured folder
    * without asking. It returns the written path.
@@ -205,9 +228,28 @@ export const Capture = {
   saveImageToFolder(dataBase64: string): Promise<string> {
     return call("Capture.SaveImageToFolder", dataBase64);
   },
+  /** SavePin saves a pin's image through the save dialog. */
+  savePin(id: string): Promise<string> {
+    return call("Capture.SavePin", id);
+  },
+  /** SetPinOpacity sets a desktop pin's opacity (10..100). */
+  setPinOpacity(id: string, opacity: number): Promise<void> {
+    return call("Capture.SetPinOpacity", id, opacity);
+  },
+  /**
+   * Settings returns the settings currently applied, so pages (the overlay)
+   * can honor the user's default action.
+   */
+  settings(): Promise<Settings> {
+    return call("Capture.Settings");
+  },
   /** ShowMainWindow reveals and focuses the main window. */
   showMainWindow(): Promise<void> {
     return call("Capture.ShowMainWindow");
+  },
+  /** UpdatePinState persists the size and opacity the page reports. */
+  updatePinState(id: string, state: PinWindowState): Promise<void> {
+    return call("Capture.UpdatePinState", id, state);
   },
 } as const;
 

@@ -87,6 +87,13 @@ type HistoryEntry struct {
 	ThumbURL  string `json:"thumbUrl"`
 }
 
+// PinWindowState is the size and opacity the page reports for a pin.
+type PinWindowState struct {
+	Width   int     `json:"width"`
+	Height  int     `json:"height"`
+	Opacity float64 `json:"opacity"`
+}
+
 // HistoryCapture is a persisted capture loaded into the editor.
 type HistoryCapture struct {
 	ID     string `json:"id"`
@@ -125,7 +132,7 @@ func DefaultSettings() Settings {
 		CaptureKey:     "CmdOrCtrl+Shift+1",
 		PinKey:         "CmdOrCtrl+Shift+2",
 		OcrKey:         "CmdOrCtrl+Shift+O",
-		AfterCapture:   "editor",
+		AfterCapture:   "toolbar",
 		Format:         "PNG",
 		Quality:        90,
 		FilenamePrefix: "Tupen",

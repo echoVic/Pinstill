@@ -52,8 +52,18 @@ func (a *App) runSelfTest(mode string) {
 		a.selftestHotkeyPress()
 	case "demo":
 		a.selftestDemo()
+	case "showcase":
+		a.selftestShowcase()
 	case "quit":
 		a.selftestQuit()
+	case "flow":
+		a.selftestFlow()
+	case "pinpersist-setup":
+		a.selftestPinPersistSetup()
+	case "pinpersist-check":
+		a.selftestPinPersistCheck()
+	case "pinui":
+		a.selftestPinUI()
 	case "hold":
 		a.selftestHold()
 	default:
@@ -220,7 +230,6 @@ func (a *App) selftestPin() {
 func (a *App) selftestDeliver() {
 	disp := mygo.Screen.PrimaryDisplay()
 	b := disp.Bounds
-	_ = b
 	region := capture.Rect{X: float64(b.X) + 140, Y: float64(b.Y) + 140, Width: 640, Height: 420}
 	if a.main != nil {
 		a.main.Hide()
@@ -344,10 +353,17 @@ func (a *App) selftestEscape() {
 		return
 	}
 	time.Sleep(900 * time.Millisecond)
-	cmd := exec.Command("/usr/bin/osascript", "-e", "tell application \"System Events\" to key code 53")
-	out, err := cmd.CombinedOutput()
-	fmt.Printf("SELFTEST esc: osascript err=%v out=%s\n", err, strings.TrimSpace(string(out)))
-	time.Sleep(900 * time.Millisecond)
+	// System Events occasionally misses a synthesized key while the system
+	// is busy; press Escape a few times before calling it a failure.
+	for attempt := 1; attempt <= 3; attempt++ {
+		cmd := exec.Command("/usr/bin/osascript", "-e", "tell application \"System Events\" to key code 53")
+		out, err := cmd.CombinedOutput()
+		fmt.Printf("SELFTEST esc: attempt=%d osascript err=%v out=%s\n", attempt, err, strings.TrimSpace(string(out)))
+		time.Sleep(900 * time.Millisecond)
+		if a.overlay == nil || !a.overlay.IsVisible() {
+			break
+		}
+	}
 	if a.overlay != nil {
 		fmt.Printf("SELFTEST esc: overlay visible=%v\n", a.overlay.IsVisible())
 	}
@@ -499,6 +515,382 @@ func (a *App) selftestDemo() {
 	mygo.App.Exit(0)
 }
 
+// dragOverlaySelection drives a pointer drag on the overlay page, so the
+// selftests exercise the real selection UI instead of calling the binding.
+func (a *App) dragOverlaySelection(x1, y1, x2, y2 float64) error {
+	a.mu.Lock()
+	overlay := a.overlay
+	a.mu.Unlock()
+	if overlay == nil {
+		return errors.New("overlay window is not available")
+	}
+	js := fmt.Sprintf(`(() => {
+		const dispatch = (type, x, y) => {
+			const target = document.getElementById('overlay') || document.body;
+			target.dispatchEvent(new PointerEvent(type, {
+				clientX: x, clientY: y, bubbles: true, cancelable: true,
+				pointerId: 1, pointerType: 'mouse', button: 0,
+				buttons: type === 'pointerup' ? 0 : 1,
+			}));
+		};
+		dispatch('pointerdown', %g, %g);
+		dispatch('pointermove', %g, %g);
+		dispatch('pointerup', %g, %g);
+		return 'dragged';
+	})()`, x1, y1, x2, y2, x2, y2)
+	_, err := overlay.Page().Eval(js)
+	return err
+}
+
+// clickOverlayAction clicks one button of the overlay's action bar.
+func (a *App) clickOverlayAction(action string) error {
+	a.mu.Lock()
+	overlay := a.overlay
+	a.mu.Unlock()
+	if overlay == nil {
+		return errors.New("overlay window is not available")
+	}
+	js := fmt.Sprintf(`(() => {
+		const button = document.querySelector('[data-action="%s"]');
+		if (!button) return 'missing';
+		button.click();
+		return 'clicked';
+	})()`, action)
+	value, err := overlay.Page().Eval(js)
+	if err != nil {
+		return err
+	}
+	if value != "clicked" {
+		return fmt.Errorf("overlay action %q not found (%v)", action, value)
+	}
+	return nil
+}
+
+// selftestFlow exercises the round-2 flow end to end: drag a selection on
+// the overlay, then run each action of its toolbar.
+func (a *App) selftestFlow() {
+	if a.main != nil {
+		a.main.Show()
+	}
+	time.Sleep(1200 * time.Millisecond)
+	run := func(name, action string) {
+		if err := a.beginRegion(); err != nil {
+			fmt.Printf("SELFTEST flow: %s begin error %v\n", name, err)
+			return
+		}
+		time.Sleep(900 * time.Millisecond)
+		if err := a.dragOverlaySelection(80, 90, 320, 250); err != nil {
+			fmt.Printf("SELFTEST flow: %s drag error %v\n", name, err)
+			return
+		}
+		time.Sleep(500 * time.Millisecond)
+		if err := a.clickOverlayAction(action); err != nil {
+			fmt.Printf("SELFTEST flow: %s click error %v\n", name, err)
+			return
+		}
+		time.Sleep(1800 * time.Millisecond)
+		fmt.Printf("SELFTEST flow: %s clicked %s\n", name, action)
+	}
+	// copy
+	run("copy", "copy")
+	if img := mygo.Clipboard.ReadImage(); len(img) > 0 {
+		w, h := imageDimensions(img)
+		fmt.Printf("SELFTEST flow: copy clipboard %dx%d bytes=%d\n", w, h, len(img))
+	} else {
+		fmt.Printf("SELFTEST flow: copy clipboard EMPTY\n")
+	}
+	// pin
+	run("pin", "pin")
+	a.mu.Lock()
+	pins := len(a.pins)
+	a.mu.Unlock()
+	fmt.Printf("SELFTEST flow: pin pins=%d\n", pins)
+	// annotate
+	run("annotate", "annotate")
+	if a.main != nil {
+		if v, err := a.main.Page().Eval("document.getElementById('shotCanvas').width + 'x' + document.getElementById('shotCanvas').height"); err == nil {
+			fmt.Printf("SELFTEST flow: annotate editor canvas=%v\n", v)
+		}
+	}
+	// afterCapture=clipboard must run the action without clicking.
+	mygo.Clipboard.Clear()
+	auto := DefaultSettings()
+	auto.AfterCapture = "clipboard"
+	a.applySettings(auto)
+	if err := a.beginRegion(); err == nil {
+		time.Sleep(900 * time.Millisecond)
+		if err := a.dragOverlaySelection(60, 60, 260, 200); err != nil {
+			fmt.Printf("SELFTEST flow: auto drag error %v\n", err)
+		}
+		time.Sleep(2600 * time.Millisecond)
+		if img := mygo.Clipboard.ReadImage(); len(img) > 0 {
+			w, h := imageDimensions(img)
+			fmt.Printf("SELFTEST flow: auto clipboard %dx%d\n", w, h)
+		} else {
+			fmt.Printf("SELFTEST flow: auto clipboard EMPTY\n")
+		}
+		a.cancelRegion()
+	}
+	a.applySettings(DefaultSettings())
+	time.Sleep(300 * time.Millisecond)
+	// cancel: no capture should be delivered
+	before := len(a.historyEntries())
+	run("cancel", "cancel")
+	time.Sleep(600 * time.Millisecond)
+	after := len(a.historyEntries())
+	fmt.Printf("SELFTEST flow: cancel history before=%d after=%d\n", before, after)
+	for id := range a.pins {
+		_ = a.closePin(id)
+	}
+	mygo.App.Exit(0)
+}
+
+// selftestPinUI drives the real pin page: its context menu, wheel scaling and
+// close button, through the same bindings a user's clicks reach.
+func (a *App) selftestPinUI() {
+	time.Sleep(1200 * time.Millisecond)
+	pngBytes := syntheticScreenshot()
+	if len(pngBytes) == 0 {
+		fmt.Printf("SELFTEST pinui: no image\n")
+		mygo.App.Exit(1)
+		return
+	}
+	mygo.Clipboard.Clear()
+	id, err := a.pinPNG(pngBytes, 1280, 800)
+	if err != nil {
+		fmt.Printf("SELFTEST pinui: pin error %v\n", err)
+		mygo.App.Exit(1)
+		return
+	}
+	time.Sleep(1000 * time.Millisecond)
+	pageOf := func() *mygo.Page {
+		a.mu.Lock()
+		win := a.pins[id]
+		a.mu.Unlock()
+		if win == nil {
+			return nil
+		}
+		return win.Page()
+	}
+	eval := func(js string) any {
+		page := pageOf()
+		if page == nil {
+			return nil
+		}
+		v, err := page.Eval(js)
+		if err != nil {
+			fmt.Printf("SELFTEST pinui: eval %q error %v\n", js, err)
+			return nil
+		}
+		return v
+	}
+	var before mygo.Rectangle
+	a.mu.Lock()
+	if win := a.pins[id]; win != nil {
+		before = win.Bounds()
+	}
+	a.mu.Unlock()
+	// double-click copies and must not move/resize the window
+	fmt.Printf("SELFTEST pinui: dblclick=%v\n", eval(`(() => { const img = document.getElementById('pinImage'); if (!img) return 'missing'; img.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true })); return 'sent'; })()`))
+	time.Sleep(900 * time.Millisecond)
+	if img := mygo.Clipboard.ReadImage(); len(img) > 0 {
+		w, h := imageDimensions(img)
+		fmt.Printf("SELFTEST pinui: dblclick clipboard %dx%d\n", w, h)
+	} else {
+		fmt.Printf("SELFTEST pinui: dblclick clipboard EMPTY\n")
+	}
+	a.mu.Lock()
+	after := mygo.Rectangle{}
+	if win := a.pins[id]; win != nil {
+		after = win.Bounds()
+	}
+	a.mu.Unlock()
+	fmt.Printf("SELFTEST pinui: bounds unchanged=%v before=%+v after=%+v\n", before == after, before, after)
+	// context menu: copy and opacity
+	fmt.Printf("SELFTEST pinui: menu copy=%v\n", eval(`(() => { const b = document.querySelector('[data-menu-action="copy"]'); if (!b) return 'missing'; b.click(); return 'clicked'; })()`))
+	time.Sleep(700 * time.Millisecond)
+	a.mu.Lock()
+	winAfterCopy := a.pins[id]
+	mapAfterCopy := winAfterCopy != nil
+	pinsAfterCopy := len(a.pins)
+	a.mu.Unlock()
+	destroyed := winAfterCopy == nil || winAfterCopy.IsDestroyed()
+	visible := winAfterCopy != nil && winAfterCopy.IsVisible()
+	storedAfterCopy := 0
+	if a.pinStore != nil {
+		storedAfterCopy = len(a.pinStore.List())
+	}
+	fmt.Printf("SELFTEST pinui: after copy map=%v pins=%d destroyed=%v visible=%v stored=%d\n", mapAfterCopy, pinsAfterCopy, destroyed, visible, storedAfterCopy)
+	opacityBefore := 100.0
+	a.mu.Lock()
+	if win := a.pins[id]; win != nil {
+		opacityBefore = win.Opacity() * 100
+	}
+	a.mu.Unlock()
+	fmt.Printf("SELFTEST pinui: menu opacity=%v\n", eval(`(() => { const b = document.querySelector('[data-menu-action="opacity-down"]'); if (!b) return 'missing'; b.click(); return 'clicked'; })()`))
+	time.Sleep(700 * time.Millisecond)
+	a.mu.Lock()
+	opacityAfter := 0.0
+	if win := a.pins[id]; win != nil {
+		opacityAfter = win.Opacity() * 100
+	}
+	a.mu.Unlock()
+	fmt.Printf("SELFTEST pinui: opacity before=%.0f after=%.0f\n", opacityBefore, opacityAfter)
+	// wheel scales the pin window
+	fmt.Printf("SELFTEST pinui: wheel=%v\n", eval(`(() => { window.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true })); return 'sent'; })()`))
+	time.Sleep(800 * time.Millisecond)
+	a.mu.Lock()
+	afterWheel := mygo.Rectangle{}
+	if win := a.pins[id]; win != nil {
+		afterWheel = win.Bounds()
+	}
+	a.mu.Unlock()
+	fmt.Printf("SELFTEST pinui: wheel bounds=%+v scaled=%v\n", afterWheel, afterWheel.Width > after.Width)
+	// close through the page's close button: state must disappear
+	fmt.Printf("SELFTEST pinui: close=%v\n", eval(`(() => { const b = document.getElementById('pinClose'); if (!b) return 'missing'; b.click(); return 'clicked'; })()`))
+	time.Sleep(900 * time.Millisecond)
+	a.mu.Lock()
+	remaining := len(a.pins)
+	a.mu.Unlock()
+	stored := 0
+	if a.pinStore != nil {
+		stored = len(a.pinStore.List())
+	}
+	fmt.Printf("SELFTEST pinui: after close pins=%d stored=%d\n", remaining, stored)
+	mygo.App.Exit(0)
+}
+
+// selftestPinPersistSetup creates one desktop pin and quits through the real
+// quit path, so the next launch must restore it.
+func (a *App) selftestPinPersistSetup() {
+	time.Sleep(1200 * time.Millisecond)
+	pngBytes := syntheticScreenshot()
+	if len(pngBytes) == 0 {
+		fmt.Printf("SELFTEST pinpersist: setup could not render image\n")
+		mygo.App.Exit(1)
+		return
+	}
+	id, err := a.pinPNG(pngBytes, 640, 400)
+	if err != nil {
+		fmt.Printf("SELFTEST pinpersist: setup pin error %v\n", err)
+		mygo.App.Exit(1)
+		return
+	}
+	time.Sleep(900 * time.Millisecond)
+	a.mu.Lock()
+	win := a.pins[id]
+	st := a.pinStates[id]
+	a.mu.Unlock()
+	if win != nil {
+		b := win.Bounds()
+		fmt.Printf("SELFTEST pinpersist: setup created id=%s bounds=%+v stored=%+v\n", id, b, st)
+	} else {
+		fmt.Printf("SELFTEST pinpersist: setup created id=%s but window is missing\n", id)
+	}
+	fmt.Printf("SELFTEST pinpersist: setup quitting\n")
+	mygo.App.Quit()
+	time.Sleep(2 * time.Second)
+}
+
+// selftestPinPersistCheck reports the pins restored from the previous run.
+func (a *App) selftestPinPersistCheck() {
+	time.Sleep(1500 * time.Millisecond)
+	a.mu.Lock()
+	count := len(a.pins)
+	ids := make([]string, 0, count)
+	for id := range a.pins {
+		ids = append(ids, id)
+	}
+	a.mu.Unlock()
+	stored := 0
+	if a.pinStore != nil {
+		stored = len(a.pinStore.List())
+	}
+	fmt.Printf("SELFTEST pinpersist: check restored=%d stored=%d ids=%v\n", count, stored, ids)
+	for _, id := range ids {
+		if err := a.closePin(id); err != nil {
+			fmt.Printf("SELFTEST pinpersist: close %s error %v\n", id, err)
+		}
+	}
+	time.Sleep(400 * time.Millisecond)
+	if a.pinStore != nil {
+		fmt.Printf("SELFTEST pinpersist: check after close stored=%d\n", len(a.pinStore.List()))
+	}
+	mygo.App.Exit(0)
+}
+
+// selftestShowcase produces the UI screenshots used by the README. Every
+// image it shows is generated, so no content from the user's desktop lands
+// in the repository.
+func (a *App) selftestShowcase() {
+	if strings.TrimSpace(os.Getenv("TUPEN_DATA_DIR")) == "" {
+		fmt.Printf("SELFTEST showcase: TUPEN_DATA_DIR must point at an isolated data directory\n")
+		mygo.App.Exit(1)
+		return
+	}
+	pngBytes := syntheticScreenshot()
+	if len(pngBytes) == 0 {
+		fmt.Printf("SELFTEST showcase: no synthetic image\n")
+		mygo.App.Exit(1)
+		return
+	}
+	if a.main != nil {
+		a.main.Hide()
+	}
+	a.deliverPNG(pngBytes, "demo")
+	time.Sleep(2200 * time.Millisecond)
+	savePage := func(win *mygo.Window, name string) {
+		if win == nil {
+			return
+		}
+		pagePNG, err := win.CapturePage()
+		if err != nil {
+			fmt.Printf("SELFTEST showcase: %s capture error %v\n", name, err)
+			return
+		}
+		path := "/tmp/tupen-showcase-" + name + ".png"
+		_ = os.WriteFile(path, pagePNG, 0o644)
+		w, h := imageDimensions(pagePNG)
+		fmt.Printf("SELFTEST showcase: %s %dx%d -> %s\n", name, w, h, path)
+	}
+	savePage(a.main, "editor")
+	for _, view := range []string{"history", "settings"} {
+		if a.main != nil {
+			_, _ = a.main.Page().Eval(`document.querySelector('[data-view="` + view + `"]').click()`)
+			time.Sleep(700 * time.Millisecond)
+			savePage(a.main, view)
+		}
+	}
+	if a.main != nil {
+		_, _ = a.main.Page().Eval(`document.querySelector('[data-view="rack"]').click()`)
+	}
+	// Overlay with a live selection and its action bar, captured from the
+	// overlay's own page so the desktop behind it stays out of the image.
+	if err := a.beginRegion(); err == nil {
+		time.Sleep(800 * time.Millisecond)
+		if err := a.dragOverlaySelection(120, 140, 620, 420); err != nil {
+			fmt.Printf("SELFTEST showcase: overlay drag error %v\n", err)
+		}
+		time.Sleep(600 * time.Millisecond)
+		savePage(a.overlay, "overlay")
+		a.cancelRegion()
+		time.Sleep(600 * time.Millisecond)
+	}
+	// A desktop pin showing the generated image.
+	if id, err := a.pinPNG(pngBytes, 1280, 800); err == nil {
+		time.Sleep(900 * time.Millisecond)
+		a.mu.Lock()
+		win := a.pins[id]
+		a.mu.Unlock()
+		savePage(win, "pin")
+		_ = a.closePin(id)
+	} else {
+		fmt.Printf("SELFTEST showcase: pin error %v\n", err)
+	}
+	time.Sleep(400 * time.Millisecond)
+	mygo.App.Exit(0)
+}
+
 // selftestQuit exercises the real quit sequence (Cmd+Q, menu Quit, tray
 // Quit) rather than the force exit the other selftests use. A window that
 // refuses to close aborts the quit, so a blocked quit reports itself.
@@ -645,6 +1037,10 @@ func virtualDesktopRect() capture.Rect {
 }
 
 func (a *App) selftestHotkeys() {
+	// The page applies settings as it loads; apply them here too so the
+	// report describes the settled state rather than a mid-load moment.
+	a.applySettings(a.settingsSnapshot())
+	time.Sleep(150 * time.Millisecond)
 	for _, key := range []string{"captureKey", "pinKey", "ocrKey"} {
 		a.mu.Lock()
 		acc := a.shortcutKeys[key]

@@ -28,11 +28,43 @@ func (s *CaptureService) BeginRegion() error { return s.app.beginRegion() }
 func (s *CaptureService) CancelRegion() { s.app.cancelRegion() }
 
 // FinishRegion completes the region capture with the selection the user
-// dragged on the overlay, in overlay-local CSS pixels. The capture happens
-// asynchronously: the finished capture arrives with the capture:completed
-// event, so the returned ID is empty.
+// dragged on the overlay, in overlay-local CSS pixels. It is kept for
+// compatibility and opens the editor; the overlay's action bar uses
+// CompleteSelection instead.
 func (s *CaptureService) FinishRegion(rect Rect) (CaptureResult, error) {
-	return CaptureResult{}, s.app.finishRegion(rect)
+	return CaptureResult{}, s.app.completeSelection(rect, "annotate")
+}
+
+// CompleteSelection runs one action on the region the user selected in the
+// overlay: annotate, copy, pin or save. The work happens on the desktop;
+// only annotate brings the main window back.
+func (s *CaptureService) CompleteSelection(rect Rect, action string) error {
+	return s.app.completeSelection(rect, action)
+}
+
+// Settings returns the settings currently applied, so pages (the overlay)
+// can honor the user's default action.
+func (s *CaptureService) Settings() Settings { return s.app.settingsSnapshot() }
+
+// ResizePin sets a desktop pin's size in DIPs.
+func (s *CaptureService) ResizePin(id string, width int, height int) error {
+	return s.app.resizePin(id, width, height)
+}
+
+// SetPinOpacity sets a desktop pin's opacity (10..100).
+func (s *CaptureService) SetPinOpacity(id string, opacity float64) error {
+	return s.app.setPinOpacity(id, opacity)
+}
+
+// CopyPin puts a pin's image on the clipboard.
+func (s *CaptureService) CopyPin(id string) error { return s.app.copyPinImage(id) }
+
+// SavePin saves a pin's image through the save dialog.
+func (s *CaptureService) SavePin(id string) (string, error) { return s.app.savePinImage(id) }
+
+// UpdatePinState persists the size and opacity the page reports.
+func (s *CaptureService) UpdatePinState(id string, state PinWindowState) error {
+	return s.app.updatePinState(id, state)
 }
 
 // CaptureFullScreen captures the whole display under the pointer. Like
@@ -167,9 +199,9 @@ func normalizeSettings(s Settings) Settings {
 	s.PinKey = strings.TrimSpace(s.PinKey)
 	s.OcrKey = strings.TrimSpace(s.OcrKey)
 	switch s.AfterCapture {
-	case "clipboard", "pin", "editor":
+	case "toolbar", "clipboard", "pin", "editor":
 	default:
-		s.AfterCapture = "editor"
+		s.AfterCapture = "toolbar"
 	}
 	if s.Format != "JPEG" {
 		s.Format = "PNG"
@@ -285,6 +317,33 @@ func replaceExtension(path, ext string) string {
 		base = path
 	}
 	return base + "." + ext
+}
+
+// savePNGBytes converts and writes one PNG through the native save dialog,
+// starting in the user's default save folder. It returns the path, or ""
+// when the user canceled.
+func (a *App) savePNGBytes(pngBytes []byte) (string, error) {
+	settings := a.settingsSnapshot()
+	data, ext, err := normalizeExport(pngBytes, settings)
+	if err != nil {
+		return "", err
+	}
+	name := replaceExtension(sanitizeExportName("", settings), ext)
+	defaultPath := name
+	if folder, folderErr := expandHome(settings.Folder); folderErr == nil {
+		if info, statErr := os.Stat(folder); statErr == nil && info.IsDir() {
+			defaultPath = filepath.Join(folder, name)
+		}
+	}
+	path, err := saveDialog(a, defaultPath, ext)
+	if err != nil || path == "" {
+		return "", err
+	}
+	path = replaceExtension(path, ext)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return "", fmt.Errorf("写入文件失败: %w", err)
+	}
+	return path, nil
 }
 
 // saveDialog opens the native save dialog and returns the chosen path, or

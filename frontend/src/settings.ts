@@ -1,7 +1,7 @@
 // Preferences: the UI schema of the six settings categories, localStorage
 // persistence, and the mapping to the native `Settings` object of plan §3.4.
 //
-// The UI stores more preferences than Go needs (tooltips, rack position, …);
+// The UI stores more preferences than Go needs (tooltips, editor keys, …);
 // only the contract fields are pushed to `Capture.ApplySettings`.
 
 import type { Settings } from "./bridge";
@@ -15,7 +15,7 @@ export interface Preferences {
   launch: boolean;
   cursor: boolean;
   sound: boolean;
-  afterCapture: "editor" | "clipboard" | "pin";
+  afterCapture: "toolbar" | "editor" | "clipboard" | "pin";
   tooltip: boolean;
   tooltipDelay: number;
   // 快捷键
@@ -37,12 +37,9 @@ export interface Preferences {
   defaultWidth: number;
   watermarkText: string;
   watermarkOpacity: number;
-  // 贴图与截图架
-  pinTop: boolean;
+  // 贴图与桌面
   pinOpacity: number;
   pinBorder: boolean;
-  rackPosition: string;
-  rackHide: boolean;
   // 识别与翻译
   ocrLanguage: string;
   ocrCopy: boolean;
@@ -121,9 +118,10 @@ export const SETTINGS_SCHEMA: SettingsCategory[] = [
             description: "选择截取完成后的默认动作。",
             type: "select",
             options: [
-              { value: "editor", label: "进入标注" },
+              { value: "toolbar", label: "就地操作条" },
               { value: "clipboard", label: "复制到剪贴板" },
               { value: "pin", label: "固定到屏幕" },
+              { value: "editor", label: "进入标注" },
             ],
           },
         ],
@@ -340,23 +338,17 @@ export const SETTINGS_SCHEMA: SettingsCategory[] = [
   },
   {
     id: "pinning",
-    name: "贴图与截图架",
+    name: "贴图与桌面",
     icon: "pin",
-    description: "把参考图留在眼前，继续手边的工作。",
+    description: "把截图钉在桌面最上层，随时对照手边的工作。",
     groups: [
       {
-        title: "固定到屏幕",
+        title: "桌面贴图",
         rows: [
-          {
-            key: "pinTop",
-            name: "始终置顶",
-            description: "切换窗口时，让贴图保持在最上方。",
-            type: "toggle",
-          },
           {
             key: "pinOpacity",
             name: "贴图透明度",
-            description: "同时查看截图与下方窗口的内容。",
+            description: "新建贴图的默认不透明度；贴图窗口内也可以随时调整。",
             type: "range",
             min: 30,
             max: 100,
@@ -367,28 +359,6 @@ export const SETTINGS_SCHEMA: SettingsCategory[] = [
             key: "pinBorder",
             name: "显示贴图边框",
             description: "清晰区分贴图与桌面内容。",
-            type: "toggle",
-          },
-        ],
-      },
-      {
-        title: "截图架",
-        rows: [
-          {
-            key: "rackPosition",
-            name: "截图架位置",
-            description: "新截图进入截图架，随用随取。",
-            type: "select",
-            options: [
-              { value: "屏幕顶部", label: "屏幕顶部" },
-              { value: "屏幕右侧", label: "屏幕右侧" },
-              { value: "屏幕底部", label: "屏幕底部" },
-            ],
-          },
-          {
-            key: "rackHide",
-            name: "自动收起截图架",
-            description: "鼠标离开后收起，靠近边缘时再次展开。",
             type: "toggle",
           },
         ],
@@ -471,7 +441,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   launch: false,
   cursor: false,
   sound: true,
-  afterCapture: "editor",
+  afterCapture: "toolbar",
   tooltip: true,
   tooltipDelay: 120,
   captureKey: "CmdOrCtrl+Shift+1",
@@ -490,11 +460,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
   defaultWidth: 4,
   watermarkText: "Tupen",
   watermarkOpacity: 35,
-  pinTop: true,
   pinOpacity: 100,
   pinBorder: true,
-  rackPosition: "屏幕顶部",
-  rackHide: true,
   ocrLanguage: "中英文混合",
   ocrCopy: true,
   qrConfirm: true,
@@ -608,9 +575,11 @@ function numberIn(value: unknown, fallback: number, min: number, max: number): n
 /** Maps the UI preferences to the frozen `Settings` object of plan §3.4. */
 export function toNativeSettings(preferences: Preferences): Settings {
   const afterCapture: Settings["afterCapture"] =
-    preferences.afterCapture === "clipboard" || preferences.afterCapture === "pin"
+    preferences.afterCapture === "clipboard" ||
+    preferences.afterCapture === "pin" ||
+    preferences.afterCapture === "editor"
       ? preferences.afterCapture
-      : "editor";
+      : "toolbar";
   const format: Settings["format"] = preferences.format === "JPEG" ? "JPEG" : "PNG";
   return {
     captureKey: preferences.captureKey,

@@ -1,6 +1,6 @@
 # Tupen
 
-Tupen 是一个面向 macOS 和 Windows 的桌面截图与标注工具。它把「截取屏幕 → 就地标注 → 复制 / 导出 / 固定到屏幕 → 回到历史」放进同一条工作流，截图默认只保存在本机。
+Tupen 是一个面向 macOS 和 Windows 的桌面截图与标注工具。它把「截取屏幕 → 在选区旁就地操作（标注 / 复制 / 贴图 / 保存）→ 把截图挂在桌面上 → 回到历史」放进同一条工作流，截图默认只保存在本机。
 
 桌面外壳使用 [MyGo](https://mygo.egoist.dev/)（Go + 系统 WebView，纯 Go、无 cgo），界面是设计稿演化而来的 Vite 前端。
 
@@ -8,15 +8,14 @@ Tupen 是一个面向 macOS 和 Windows 的桌面截图与标注工具。它把�
 
 真实可用（macOS 已在本机端到端验证）：
 
-- **区域截图**：全局快捷键或托盘菜单唤起全屏选区，遮罩 + 十字线 + 尺寸角标，Esc / 右键取消；Retina 截图保持 2x 像素
-- **标注**：矩形、圆形、直线、箭头、画笔、文字、标签、马赛克、高亮、水印，颜色 / 粗细可调，支持撤销与拖动移动
-- **保存到剪贴板**：把带标注的 PNG 写入系统剪贴板
-- **下载 / 导出**：按设置里的 PNG / JPEG、质量、文件名前缀走系统保存对话框，并默认定位到设置里的「默认保存文件夹」
-- **固定到屏幕**：无边框置顶贴图窗口，可关闭；支持固定剪贴板图片
-- **历史与截图架**：截图自动落盘、真实缩略图、点击载入编辑器、单条删除 / 清空；保留天数与容量上限生效
+- **区域截图 + 就地操作条**：全局快捷键或托盘唤起全屏选区，遮罩 + 十字线 + 尺寸角标；松手后选区旁直接出现操作条「标注 / 复制 / 贴图 / 保存 / 取消」（Enter 复制、Esc 取消），操作发生在桌面上，不跳窗口
+- **标注**：需要时点「标注」进入主窗口编辑器；矩形、圆形、直线、箭头、画笔、文字、标签、马赛克、高亮、水印，颜色 / 粗细可调，支持撤销与拖动移动
+- **复制 / 导出**：一键写入剪贴板；按设置里的 PNG / JPEG、质量、文件名前缀走系统保存对话框，并默认定位到设置里的「默认保存文件夹」
+- **挂在桌面（贴图）**：始终置顶的无边框贴图窗口；拖动摆放、滚轮缩放、右下角手柄按比例缩放、⌘/Ctrl+滚轮调透明度、右键菜单（复制 / 保存 / 关闭 / 透明度 / 原始大小）、双击复制、Esc 关闭；多张各自独立摆放，**重启应用后自动恢复**（图片、位置、大小、透明度）
+- **历史**：截图自动落盘、真实缩略图、点击载入编辑器、单条删除 / 清空；保留天数与容量上限生效
 - **托盘**：菜单栏常驻图标：截取区域 / 截取整个屏幕 / 固定剪贴板图片 / 显示主窗口 / 退出
 - **全局快捷键**：默认 ⌘⇧1（截取区域）、⌘⇧2（固定剪贴板图片）、⌘⇧O（提取文字，能力待接入）；可在设置里重新录制，注册失败会提示
-- **设置**：6 个分类、localStorage 持久化，并实时推给 Go 侧生效（截图后动作、光标、提示音、格式、默认保存文件夹、登录启动、历史保留策略、贴图透明度/边框等）
+- **设置**：6 个分类、localStorage 持久化，并实时推给 Go 侧生效（截图后默认动作、光标、提示音、格式、默认保存文件夹、登录启动、历史保留策略、贴图透明度/边框等）
 
 仍是「待接入」占位（点开有明确说明，不会假装可用）：OCR 文字识别、翻译、二维码识别、滚动截图。
 
@@ -24,9 +23,19 @@ Tupen 是一个面向 macOS 和 Windows 的桌面截图与标注工具。它把�
 
 ## 截图
 
-编辑器（截图后真实载入画布；截图为演示用合成图，不含用户桌面内容）：
+以下截图均使用合成图/自绘遮罩，不含用户桌面内容。
+
+拖选区域后，选区旁直接出现操作条（截图为合成演示内容）：
+
+![选区操作条](outputs/tupen-overlay.jpg)
+
+点「标注」进入编辑器：
 
 ![编辑器](outputs/tupen-editor.jpg)
+
+把截图挂在桌面（贴图，始终置顶）：
+
+![桌面贴图](outputs/tupen-pin.jpg)
 
 历史：
 
@@ -35,10 +44,6 @@ Tupen 是一个面向 macOS 和 Windows 的桌面截图与标注工具。它把�
 偏好设置：
 
 ![偏好设置](outputs/tupen-settings.jpg)
-
-截图架：
-
-![截图架](outputs/tupen-rack.jpg)
 
 设计稿快照（交互原型，作为视觉基准保留）：[outputs/tupen-design.html](outputs/tupen-design.html)。可以在仓库根目录运行任意静态文件服务器查看：
 
@@ -75,13 +80,14 @@ cmd/tupen/main.go            桌面入口：单实例、绑定服务、窗口与
 internal/app/                编排层：截图流程、绑定服务、事件、托盘、快捷键、设置、自检
 internal/capture/            平台截图后端（macOS screencapture / Windows GDI）+ 权限 + 选择框几何
 internal/store/              历史持久化：PNG + 缩略图 + index.json + 保留策略
-frontend/index.html          主窗口（截图架 / 历史 / 设置）
+internal/pin/                桌面贴图持久化：图片 + pins.json（位置/大小/透明度）
+frontend/index.html          主窗口（截图 / 历史 / 设置）
 frontend/overlay.html        全屏选区覆盖层
 frontend/pin.html            置顶贴图窗口
 frontend/src/                TypeScript 模块（bridge 是唯一的原生调用入口）
 vite.config.ts               三页多入口构建
 work/plan.md                 本轮开发的冻结接口契约与实测结论
-work/e2e.sh                  端到端验收脚本（构建 + 12 项 selftest）
+work/e2e.sh                  端到端验收脚本（构建 + 14 项 selftest）
 ```
 
 ### 端到端验收
@@ -91,14 +97,16 @@ bash work/e2e.sh            # 完整构建 + 全部自检
 bash work/e2e.sh --skip-build   # 用现有构建产物只跑自检
 ```
 
-脚本会依次跑 Go 测试 / vet / Windows 交叉编译、前端与桌面构建，以及 12 项应用级自检（真实退出、真实截图、历史、剪贴板、选区映射像素级对比、Esc 取消、编辑器交付、工具栏动作、主窗口视图、贴图、全局快捷键注册、设置应用）。自检通过环境变量驱动（`TUPEN_SELFTEST=quit|capture|overlay|drag|esc|deliver|uiactions|uicapture|pin|history|hotkeys|settings|demo|hold`），产物与日志在 `/tmp/tupen-selftest-*`。
+脚本会依次跑 Go 测试 / vet / Windows 交叉编译、前端与桌面构建，以及 14 项应用级自检（真实退出、真实截图+历史+剪贴板、overlay 渲染、选区映射像素级对比、Esc 取消、**桌面操作条全流程 copy/pin/annotate/cancel + afterCapture 自动动作**、**桌面贴图交互（双击/菜单/滚轮/关闭）**、**贴图重启恢复**、编辑器交付、编辑器内动作、主窗口视图、贴图窗口、全局快捷键注册、设置应用）。自检通过环境变量驱动（`TUPEN_SELFTEST=quit|capture|overlay|drag|esc|flow|pinpersist-setup|pinpersist-check|deliver|uiactions|uicapture|pin|history|hotkeys|settings|showcase|demo|hold`），产物与日志在 `/tmp/tupen-selftest-*`。
 
 ### 数据与权限
 
 - 历史目录：`~/Library/Application Support/Tupen/captures/`（PNG + `*.thumb.jpg` + `index.json`）
+- 桌面贴图：`~/Library/Application Support/Tupen/pins/`（`<id>.png` + `pins.json`，重启后按此恢复）
 - 当前会话缓存：`~/Library/Caches/Tupen/session/`（应用启动时清空）
 - 页面通过内部自定义协议 `shot://localhost/...` 读取这些图片，不经过网络
 - 首次截图需要「屏幕录制」权限：系统设置 → 隐私与安全性 → 屏幕录制；权限缺失时应用会提示并可直接跳转设置页
+- 开发/自检可用 `TUPEN_DATA_DIR=/tmp/tupen-data` 把 captures、pins、session 全部隔离到指定目录（默认行为不变；生成 README 截图的 `TUPEN_SELFTEST=showcase` 强制要求设置该变量，避免读到真实历史）
 
 ## 已知限制
 
@@ -106,7 +114,9 @@ bash work/e2e.sh --skip-build   # 用现有构建产物只跑自检
 - **OCR / 翻译 / 二维码 / 滚动截图** 尚未接入服务，UI 明确标注「待接入」
 - **overlay 覆盖的是屏幕可见工作区**（macOS 的 Panel 会被 AppKit 约束在菜单栏与 Dock 之外），无法直接框选菜单栏 / Dock 区域；选区坐标按窗口实际 frame 换算，截图内容不受影响
 - **登录启动** 在未安装到 `/Applications` 的构建里会返回 `Operation not permitted`，设置页会如实展示；安装后的行为待人工确认
-- **导出保存对话框**未纳入自动化自检（模态框），导出与格式转换逻辑由单元测试覆盖，建议人工点一次确认
+- **导出 / 保存对话框**未纳入自动化自检（模态框），导出、格式转换与保存路径逻辑由单元测试覆盖，建议人工点一次确认
+- 贴图恢复依赖保存时导出的几何信息：显示器拔插后越界的贴图会被夹回可见屏幕，但不会自动按比例重新排版
+- 贴图数量上限 60 张（防止异常状态把桌面塞满），超过时旧贴图不恢复
 - 全局快捷键通过 Carbon `RegisterEventHotKey` 注册（注册成功）；合成按键无法触发 Carbon 热键，自动化只能验证注册状态，**真实按键建议人工确认一次**
 - 多显示器：overlay 只出现在鼠标所在显示器；DPI/缩放不同的混合显示器组合未充分测试
 
@@ -115,4 +125,4 @@ bash work/e2e.sh --skip-build   # 用现有构建产物只跑自检
 - 桌面框架：MyGo（https://mygo.egoist.dev/）
 - 图标：Lucide（ISC，社区开源图标库）
 - 目标平台：macOS、Windows
-- 当前阶段：核心截图链路已打通，继续补齐识别类能力与 Windows 验证
+- 当前阶段：核心截图链路与桌面贴图已打通，继续补齐识别类能力与 Windows 验证

@@ -3,12 +3,19 @@ package main
 
 import (
 	"log"
+	"os"
+	"strings"
 
 	"github.com/echoVic/Tupen/internal/app"
 	"github.com/egoist/mygo"
 )
 
 func main() {
+	// The README screenshots must never read the user's captures: the
+	// showcase selftest refuses to run outside an isolated data directory.
+	if os.Getenv("TUPEN_SELFTEST") == "showcase" && strings.TrimSpace(os.Getenv("TUPEN_DATA_DIR")) == "" {
+		log.Fatal("TUPEN_SELFTEST=showcase needs TUPEN_DATA_DIR set to an isolated directory")
+	}
 	// A screenshot utility must have one instance: hotkeys, the tray icon
 	// and the pin windows all belong to it.
 	if !mygo.App.RequestSingleInstanceLock() {

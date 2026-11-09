@@ -44,6 +44,16 @@ export interface HistoryEntry {
   thumbUrl: string;
 }
 
+/** What the in-place selection action bar asks Go to do with the selection. */
+export type SelectionAction = "annotate" | "copy" | "pin" | "save";
+
+/** Size and opacity of a pin window, persisted by Go. */
+export interface PinState {
+  width: number;
+  height: number;
+  opacity: number;
+}
+
 /** Payload of the `capture:completed` event. */
 export interface CaptureCompleted {
   id: string;
@@ -61,7 +71,8 @@ export interface Settings {
   captureKey: string;
   pinKey: string;
   ocrKey: string;
-  afterCapture: "editor" | "clipboard" | "pin";
+  /** "toolbar" is the desktop-first default: the selection keeps an action bar. */
+  afterCapture: "toolbar" | "editor" | "clipboard" | "pin";
   format: "PNG" | "JPEG";
   /** 50..100, used for JPEG exports. */
   quality: number;
@@ -135,6 +146,41 @@ export function pinClipboard(): Promise<string> {
 export function closePin(id: string): Promise<void> {
   if (!hasNative) return Promise.resolve();
   return call("Capture.ClosePin", id);
+}
+
+export function completeSelection(rect: Rect, action: SelectionAction): Promise<void> {
+  if (!hasNative) return Promise.resolve();
+  return call("Capture.CompleteSelection", rect, action);
+}
+
+export function resizePin(id: string, width: number, height: number): Promise<void> {
+  if (!hasNative) return Promise.resolve();
+  return call("Capture.ResizePin", id, width, height);
+}
+
+export function setPinOpacity(id: string, opacity: number): Promise<void> {
+  if (!hasNative) return Promise.resolve();
+  return call("Capture.SetPinOpacity", id, opacity);
+}
+
+export function copyPin(id: string): Promise<void> {
+  if (!hasNative) return Promise.resolve();
+  return call("Capture.CopyPin", id);
+}
+
+export function savePin(id: string): Promise<string> {
+  if (!hasNative) return Promise.resolve("");
+  return call<string>("Capture.SavePin", id);
+}
+
+export function updatePinState(id: string, state: PinState): Promise<void> {
+  if (!hasNative) return Promise.resolve();
+  return call("Capture.UpdatePinState", id, state);
+}
+
+export function settings(): Promise<Settings> {
+  if (!hasNative) return Promise.resolve({ ...BROWSER_DEFAULT_SETTINGS });
+  return call<Settings>("Capture.Settings");
 }
 
 export function applySettings(settings: Settings): Promise<Record<string, string>> {
@@ -268,6 +314,26 @@ async function browserDownload(base64: string, suggestedName: string): Promise<s
   downloadBlob(new Blob([base64ToBytes(base64)], { type: "image/png" }), filename);
   return filename;
 }
+
+const BROWSER_DEFAULT_SETTINGS: Settings = {
+  captureKey: "CmdOrCtrl+Shift+1",
+  pinKey: "CmdOrCtrl+Shift+2",
+  ocrKey: "CmdOrCtrl+Shift+O",
+  afterCapture: "toolbar",
+  format: "PNG",
+  quality: 90,
+  filenamePrefix: "Tupen",
+  folder: "~/Pictures/Tupen",
+  includeCursor: false,
+  sound: true,
+  launchAtLogin: false,
+  keepHistory: true,
+  retentionDays: 30,
+  historyLimitMB: 2048,
+  tooltip: true,
+  pinOpacity: 100,
+  pinBorder: true,
+};
 
 let mockEntries: HistoryEntry[] | null = null;
 

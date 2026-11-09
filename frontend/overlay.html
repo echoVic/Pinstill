@@ -8,6 +8,7 @@
   :root {
     --amber: #f3a24e;
     --paper: #f2eee4;
+    --ink: #1a1915;
     --mask: rgba(12, 12, 11, 0.45);
     --font: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   }
@@ -55,7 +56,7 @@
 
   .size-badge {
     position: fixed;
-    padding: 5px 9px;
+    padding: 4px 8px;
     border-radius: 6px;
     background: var(--amber);
     color: #21170d;
@@ -94,6 +95,64 @@
     font-size: 11px;
   }
   .hint-sep { color: #8e8a7e; }
+
+  /* The in-place action bar next to the finished selection. */
+  .action-bar {
+    position: fixed;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 5px;
+    border-radius: 11px;
+    background: #faf7f0;
+    color: #36332c;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(26, 25, 21, 0.08);
+    z-index: 6;
+    cursor: default;
+  }
+  .action-bar button {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 10px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: inherit;
+    font: 500 12px/1.2 var(--font);
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background 0.12s ease;
+  }
+  .action-bar button svg { width: 16px; height: 16px; flex-shrink: 0; }
+  .action-bar button:hover { background: #eae4d8; }
+  .action-bar button:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+  .action-bar button[data-action="annotate"] { background: var(--amber); color: #21170d; font-weight: 700; }
+  .action-bar button[data-action="annotate"]:hover { background: #ffb765; }
+  .action-bar button[data-action="cancel"] { color: #a64136; }
+  .action-bar button[data-action="cancel"]:hover { background: #f3e2dc; }
+  .action-bar button:disabled { opacity: 0.4; cursor: default; background: transparent; color: #6f6a5e; }
+  .action-sep { width: 1px; height: 20px; margin: 0 3px; background: rgba(26, 25, 21, 0.14); }
+  .action-status { padding: 0 8px; font-size: 11px; color: #7a7264; max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .action-status:empty { display: none; }
+  .action-status[data-kind="error"] { color: #a64136; }
+
+  /* Browser-preview feedback: native actions are simulated here. */
+  .demo-toast {
+    position: fixed;
+    left: 50%;
+    bottom: 34px;
+    transform: translateX(-50%);
+    padding: 10px 16px;
+    border-radius: 9px;
+    background: rgba(20, 20, 18, 0.88);
+    color: var(--paper);
+    font-size: 12px;
+    line-height: 1.5;
+    pointer-events: none;
+    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
+    z-index: 8;
+  }
 </style>
 </head>
 <body>
@@ -102,11 +161,38 @@
   <div class="crosshair v" id="crosshairV" hidden></div>
   <div class="crosshair h" id="crosshairH" hidden></div>
   <div class="size-badge" id="sizeBadge" hidden></div>
+
+  <div class="action-bar" id="actionBar" role="toolbar" aria-label="截图操作" hidden>
+    <button type="button" data-action="annotate" title="进入主窗口标注">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+      <span>标注</span>
+    </button>
+    <button type="button" data-action="copy" title="复制到剪贴板（Enter）">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+      <span>复制</span>
+    </button>
+    <button type="button" data-action="pin" title="固定到桌面">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>
+      <span>贴图</span>
+    </button>
+    <button type="button" data-action="save" title="保存到文件">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+      <span>保存</span>
+    </button>
+    <span class="action-sep" aria-hidden="true"></span>
+    <button type="button" data-action="cancel" title="取消截图（Esc）">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      <span>取消</span>
+    </button>
+    <span class="action-status" id="actionStatus" role="status" aria-live="polite"></span>
+  </div>
+
   <div class="hint" id="hint">
     <span class="hint-key">拖动</span> 选择截图区域
     <span class="hint-sep">·</span>
     <span class="hint-key">Esc</span> 取消
   </div>
+  <div class="demo-toast" id="demoToast" role="status" hidden></div>
   <script type="module" src="/src/overlay.ts"></script>
 </body>
 </html>

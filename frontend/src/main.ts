@@ -1,7 +1,7 @@
 // The main Tupen window: the design prototype's single-page UI, wired to the
 // native capture/history/settings bindings through bridge.ts.
 //
-// Views: 截图架 (editor) · 历史 (stored captures) · 偏好设置 (six categories).
+// Views: 截图 (editor) · 历史 (stored captures) · 偏好设置 (six categories).
 // When the page runs in a plain browser the bridge degrades to the prototype
 // simulation and the design still demos without errors.
 
@@ -262,7 +262,7 @@ async function handleCaptureCompleted(payload: CaptureCompleted): Promise<void> 
     const image = await loadCanvasImage(payload.url);
     editor.setBase(image);
     showView("rack");
-    showToast("已截取一张截图，放进顶部截图架", "success");
+    showToast("已截取一张截图", "success");
     scheduleHistoryRefresh();
   } catch (error) {
     showToast(`截图已保存，但载入画布失败：${errorMessage(error)}`, "error");
@@ -270,7 +270,7 @@ async function handleCaptureCompleted(payload: CaptureCompleted): Promise<void> 
 }
 
 // ---------------------------------------------------------------------------
-// History & rack
+// History
 // ---------------------------------------------------------------------------
 
 function scheduleHistoryRefresh(): void {
@@ -285,49 +285,15 @@ async function refreshHistory(): Promise<void> {
     // The native bindings may not be implemented yet; an empty history is fine.
     historyEntries = [];
   }
-  renderRack();
   renderHistory();
   updateCounts();
 }
 
 function updateCounts(): void {
-  const rackCount = document.getElementById("rackCount");
-  if (rackCount) rackCount.textContent = String(Math.min(historyEntries.length, 6)).padStart(2, "0");
   const historyCount = document.getElementById("historyCount");
   if (historyCount) historyCount.textContent = String(historyEntries.length);
   const historyTotal = document.getElementById("historyTotal");
   if (historyTotal) historyTotal.textContent = `· ${historyEntries.length} 张`;
-}
-
-function renderRack(): void {
-  const rack = el("rack");
-  rack.replaceChildren();
-  const label = document.createElement("div");
-  label.className = "rack-label";
-  label.textContent = "截图架 · 暂存待用";
-  rack.append(label);
-  const recent = historyEntries.slice(0, 6);
-  for (const entry of recent) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "pin has-thumb";
-    button.title = `打开 ${formatHistoryTime(entry.createdAt)} 的截图`;
-    button.setAttribute("aria-label", `打开 ${formatHistoryTime(entry.createdAt)} 的截图`);
-    const image = document.createElement("img");
-    image.src = entry.thumbUrl;
-    image.alt = "";
-    image.loading = "lazy";
-    image.decoding = "async";
-    button.append(image);
-    button.addEventListener("click", () => void openHistoryEntry(entry.id));
-    rack.append(button);
-  }
-  for (let index = recent.length; index < 3; index += 1) {
-    const placeholder = document.createElement("div");
-    placeholder.className = "pin";
-    placeholder.setAttribute("aria-hidden", "true");
-    rack.append(placeholder);
-  }
 }
 
 const HISTORY_RENDER_LIMIT = 60;
@@ -781,16 +747,10 @@ async function refreshPermissionStatus(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 function applyModeTexts(): void {
-  const previewNote = document.getElementById("settingsPreviewNote");
-  const desktopNote = document.getElementById("desktopNote");
   if (!hasNative) return;
+  const previewNote = document.getElementById("settingsPreviewNote");
   if (previewNote) {
     previewNote.textContent = "设置保存在本机，并即时同步到 Tupen。识别与翻译功能将在后续版本接入。";
-  }
-  if (desktopNote) {
-    desktopNote.querySelector<HTMLElement>(".side-title")!.textContent = "桌面应用";
-    desktopNote.querySelector<HTMLElement>(".toolbar-note")!.textContent =
-      "截图保存在本机。翻译、文字及二维码识别、滚动截图将在后续版本接入。";
   }
 }
 

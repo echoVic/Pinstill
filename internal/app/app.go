@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/echoVic/Tupen/internal/capture"
+	"github.com/echoVic/Tupen/internal/pin"
 	"github.com/echoVic/Tupen/internal/store"
 	"github.com/egoist/mygo"
 )
@@ -27,14 +28,17 @@ type App struct {
 	sessionDir string
 	shotBase   string
 	store      *store.Store
+	pinStore   *pin.Store
 
 	main           *mygo.Window
 	overlay        *mygo.Window
 	overlayDisplay mygo.Display
 	overlayRect    mygo.Rectangle
 
-	pins   map[string]*mygo.Window
-	pinSeq int
+	pins      map[string]*mygo.Window
+	pinStates map[string]pin.State
+	pinTimers map[string]*time.Timer
+	pinSeq    int
 
 	tray         *mygo.Tray
 	hotkeysFired int
@@ -50,6 +54,8 @@ func New() *App {
 	return &App{
 		settings:     DefaultSettings(),
 		pins:         map[string]*mygo.Window{},
+		pinStates:    map[string]pin.State{},
+		pinTimers:    map[string]*time.Timer{},
 		shortcutKeys: map[string]string{},
 	}
 }
@@ -74,6 +80,7 @@ func (a *App) Start() {
 	if errs := a.registerShortcuts(DefaultSettings()); len(errs) > 0 {
 		log.Printf("tupen: default shortcuts: %v", errs)
 	}
+	a.restorePins()
 	// History pruning waits for ApplySettings: the page owns the user's
 	// retention settings, and pruning with the defaults first could delete
 	// captures the user asked to keep.
@@ -81,6 +88,7 @@ func (a *App) Start() {
 		a.mu.Lock()
 		a.quitting = true
 		a.mu.Unlock()
+		a.snapshotAllPins()
 	})
 	mygo.App.OnActivate(func(hasVisibleWindows bool) {
 		if !hasVisibleWindows {
@@ -104,6 +112,17 @@ func (a *App) initStorage() error {
 	if err != nil {
 		return err
 	}
+	// Development and the screenshot selftests can point every store at an
+	// isolated directory, so they never read or write the user's captures.
+	if dir := strings.TrimSpace(os.Getenv("TUPEN_DATA_DIR")); dir != "" {
+		userData = dir
+		cacheDir = dir
+	}
+	a.shotBase = "shot://localhost"
+	if runtime.GOOS == "windows" {
+		// WebView2 serves custom schemes from http://<scheme>.localhost/.
+		a.shotBase = "http://shot.localhost"
+	}
 	a.historyDir = filepath.Join(userData, "captures")
 	a.sessionDir = filepath.Join(cacheDir, "session")
 	if err := os.RemoveAll(a.sessionDir); err != nil {
@@ -115,15 +134,16 @@ func (a *App) initStorage() error {
 	if err := os.MkdirAll(a.historyDir, 0o755); err != nil {
 		return err
 	}
-	st, err := store.Open(a.historyDir)
-	if err != nil {
-		return err
+	// A failed store only disables its feature: the app keeps capturing.
+	if st, err := store.Open(a.historyDir); err != nil {
+		log.Printf("tupen: history store: %v", err)
+	} else {
+		a.store = st
 	}
-	a.store = st
-	a.shotBase = "shot://localhost"
-	if runtime.GOOS == "windows" {
-		// WebView2 serves custom schemes from http://<scheme>.localhost/.
-		a.shotBase = "http://shot.localhost"
+	if pinStore, err := pin.Open(filepath.Join(userData, "pins")); err != nil {
+		log.Printf("tupen: pin store: %v", err)
+	} else {
+		a.pinStore = pinStore
 	}
 	return nil
 }
@@ -142,6 +162,9 @@ func (a *App) registerProtocol() {
 		mux.Handle("/h/", http.StripPrefix("/h/", imagesOnly(mygo.FileServer(os.DirFS(a.store.Dir())))))
 	}
 	mux.Handle("/s/", http.StripPrefix("/s/", imagesOnly(mygo.FileServer(os.DirFS(a.sessionDir)))))
+	if a.pinStore != nil {
+		mux.Handle("/p/", http.StripPrefix("/p/", imagesOnly(mygo.FileServer(os.DirFS(a.pinStore.Dir())))))
+	}
 	if err := mygo.Protocol.Handle("shot", mux); err != nil {
 		log.Printf("tupen: protocol: %v", err)
 	}
@@ -497,6 +520,98 @@ func (a *App) finishRegion(rect Rect) error {
 	return nil
 }
 
+// completeSelection is what the overlay's action bar calls: it hides the
+// overlay, grabs the selected region and runs one action on it. Actions
+// happen on the desktop; only "annotate" opens the main window.
+func (a *App) completeSelection(rect Rect, action string) error {
+	switch action {
+	case "annotate", "copy", "pin", "save":
+	default:
+		a.mu.Lock()
+		a.capturing = false
+		a.mu.Unlock()
+		return fmt.Errorf("未知的截图动作 %q", action)
+	}
+	a.mu.Lock()
+	disp := a.overlayDisplay
+	overlay := a.overlay
+	origin := a.overlayRect
+	a.mu.Unlock()
+	if overlay != nil {
+		if live := overlay.ContentBounds(); live.Width > 0 && live.Height > 0 {
+			origin = live
+		}
+	}
+	region := capture.Rect{
+		X:      float64(origin.X) + rect.X,
+		Y:      float64(origin.Y) + rect.Y,
+		Width:  rect.Width,
+		Height: rect.Height,
+	}
+	region = clampToDisplay(region, disp.Bounds)
+	if overlay != nil {
+		overlay.Hide()
+	}
+	if region.Empty() || region.Width < 2 || region.Height < 2 {
+		a.mu.Lock()
+		a.capturing = false
+		a.mu.Unlock()
+		a.showMain()
+		return nil
+	}
+	go a.captureAction(region, action)
+	return nil
+}
+
+// captureAction grabs the region and runs the action the user picked in the
+// overlay's toolbar. It runs on its own goroutine.
+func (a *App) captureAction(region capture.Rect, action string) {
+	// Let the overlay leave the compositor before the screen is grabbed.
+	time.Sleep(250 * time.Millisecond)
+	s := a.settingsSnapshot()
+	pngBytes, err := capture.CaptureRegion(region, capture.CaptureOptions{IncludeCursor: s.IncludeCursor})
+	if err != nil {
+		a.failCapture(err, false)
+		return
+	}
+	if blankPNG(pngBytes) {
+		a.failCapture(errors.New("截图内容为空，可能缺少屏幕录制权限"), true)
+		return
+	}
+	payload, err := a.storeCapture(pngBytes, "region")
+	if err != nil {
+		a.failCapture(err, false)
+		return
+	}
+	a.playSoundIfEnabled(s)
+	switch action {
+	case "annotate":
+		a.showMain()
+		emitToMain(a, EventCaptureCompleted, payload)
+	case "copy":
+		if err := mygo.Clipboard.WriteImage(pngBytes); err != nil {
+			a.toast("写入剪贴板失败: "+err.Error(), "error")
+		} else {
+			a.toast("截图已复制到剪贴板", "success")
+		}
+	case "pin":
+		if _, err := a.pinPNG(pngBytes, payload.Width, payload.Height); err != nil {
+			a.toast("固定到屏幕失败: "+err.Error(), "error")
+		} else {
+			a.toast("已固定到屏幕", "success")
+		}
+	case "save":
+		if path, err := a.savePNGBytes(pngBytes); err != nil {
+			a.toast("保存失败: "+err.Error(), "error")
+		} else if path != "" {
+			a.toast("已保存到 "+path, "success")
+		}
+	}
+	a.mu.Lock()
+	a.capturing = false
+	a.mu.Unlock()
+}
+
 // captureFullScreen captures the whole display under the pointer.
 func (a *App) captureFullScreen() {
 	a.mu.Lock()
@@ -542,17 +657,33 @@ func (a *App) captureDeliver(region capture.Rect, source string) {
 // deliverPNG stores an image and hands it to the editor. It runs after the
 // capture itself, and selftests reuse it to deliver generated images.
 func (a *App) deliverPNG(pngBytes []byte, source string) {
+	payload, err := a.storeCapture(pngBytes, source)
+	if err != nil {
+		a.failCapture(err, false)
+		return
+	}
+	s := a.settingsSnapshot()
+	a.playSoundIfEnabled(s)
+	a.showMain()
+	emitToMain(a, EventCaptureCompleted, payload)
+	a.mu.Lock()
+	a.capturing = false
+	a.mu.Unlock()
+}
+
+// storeCapture writes a capture to the session cache and, when the user
+// keeps history, to the persistent history. It is shared by the editor
+// flow, the overlay actions and the selftests.
+func (a *App) storeCapture(pngBytes []byte, source string) (CaptureCompletedPayload, error) {
 	s := a.settingsSnapshot()
 	width, height := imageDimensions(pngBytes)
 	if width == 0 || height == 0 {
-		a.failCapture(errors.New("截图数据无效"), false)
-		return
+		return CaptureCompletedPayload{}, errors.New("截图数据无效")
 	}
 	id := captureID(time.Now())
 	sessionFile := id + ".png"
 	if err := os.WriteFile(filepath.Join(a.sessionDir, sessionFile), pngBytes, 0o644); err != nil {
-		a.failCapture(fmt.Errorf("截图写入失败: %w", err), false)
-		return
+		return CaptureCompletedPayload{}, fmt.Errorf("截图写入失败: %w", err)
 	}
 	payload := CaptureCompletedPayload{
 		ID:     id,
@@ -570,24 +701,7 @@ func (a *App) deliverPNG(pngBytes []byte, source string) {
 			a.emitHistoryChanged()
 		}
 	}
-	a.playSoundIfEnabled(s)
-	a.showMain()
-	emitToMain(a, EventCaptureCompleted, payload)
-	switch s.AfterCapture {
-	case "clipboard":
-		if err := mygo.Clipboard.WriteImage(pngBytes); err != nil {
-			a.toast("写入剪贴板失败: "+err.Error(), "error")
-		} else {
-			a.toast("截图已复制到剪贴板", "success")
-		}
-	case "pin":
-		if _, err := a.pinPNG(pngBytes, width, height); err != nil {
-			a.toast("固定到屏幕失败: "+err.Error(), "error")
-		}
-	}
-	a.mu.Lock()
-	a.capturing = false
-	a.mu.Unlock()
+	return payload, nil
 }
 
 func (a *App) playSoundIfEnabled(s Settings) {
@@ -658,107 +772,6 @@ func clampToDisplay(r capture.Rect, b mygo.Rectangle) capture.Rect {
 		return capture.Rect{}
 	}
 	return capture.Rect{X: x0, Y: y0, Width: x1 - x0, Height: y1 - y0}
-}
-
-// pinPNG writes the PNG for a pin window and opens the always-on-top pin.
-func (a *App) pinPNG(pngBytes []byte, width, height int) (string, error) {
-	if width == 0 || height == 0 {
-		width, height = imageDimensions(pngBytes)
-	}
-	if width == 0 || height == 0 {
-		return "", errors.New("贴图数据无效")
-	}
-	s := a.settingsSnapshot()
-	a.mu.Lock()
-	a.pinSeq++
-	id := fmt.Sprintf("pin-%d", a.pinSeq)
-	a.mu.Unlock()
-	file := id + ".png"
-	if err := os.WriteFile(filepath.Join(a.sessionDir, file), pngBytes, 0o644); err != nil {
-		return "", fmt.Errorf("贴图文件写入失败: %w", err)
-	}
-	disp := mygo.Screen.DisplayNearestPoint(mygo.Screen.CursorScreenPoint())
-	scale := disp.ScaleFactor
-	if scale <= 0 {
-		scale = 1
-	}
-	maxW, maxH := 640.0, 720.0
-	widthDip := float64(width) / scale
-	heightDip := float64(height) / scale
-	if widthDip > maxW {
-		ratio := maxW / widthDip
-		widthDip = maxW
-		heightDip *= ratio
-	}
-	if heightDip > maxH {
-		ratio := maxH / heightDip
-		heightDip = maxH
-		widthDip *= ratio
-	}
-	x := disp.WorkArea.X + disp.WorkArea.Width/2 - int(widthDip)/2
-	y := disp.WorkArea.Y + disp.WorkArea.Height/2 - int(heightDip)/2
-	offset := ((a.pinSeq - 1) % 6) * 24
-	x += offset
-	y += offset
-	opacity := s.PinOpacity
-	if opacity <= 0 {
-		opacity = 100
-	}
-	win := mygo.NewWindow(mygo.WindowOptions{
-		Title:             "Tupen 贴图",
-		Width:             int(widthDip),
-		Height:            int(heightDip),
-		X:                 x,
-		Y:                 y,
-		Panel:             true,
-		Frameless:         true,
-		Hidden:            true,
-		DisableResize:     true,
-		DisableMinimize:   true,
-		DisableMaximize:   true,
-		DisableFullScreen: true,
-		BackgroundColor:   "#f2eee4",
-		URL:               "/pin.html",
-	})
-	win.SetOpacity(float64(opacity) / 100)
-	win.OnClosed(func() {
-		a.mu.Lock()
-		delete(a.pins, id)
-		a.mu.Unlock()
-	})
-	win.OnReadyToShow(func() { win.Show() })
-	a.mu.Lock()
-	a.pins[id] = win
-	a.mu.Unlock()
-	_ = EventPinInit.Emit(win, PinInitPayload{
-		ID:      id,
-		URL:     a.shotURL("/s/" + file),
-		Width:   widthDip,
-		Height:  heightDip,
-		Opacity: float64(opacity),
-		Border:  s.PinBorder,
-	})
-	return id, nil
-}
-
-func (a *App) closePin(id string) error {
-	a.mu.Lock()
-	win := a.pins[id]
-	a.mu.Unlock()
-	if win == nil {
-		return fmt.Errorf("贴图 %s 不存在", id)
-	}
-	win.Close()
-	return nil
-}
-
-// pinClipboard pins the image currently on the clipboard.
-func (a *App) pinClipboard() (string, error) {
-	pngBytes := mygo.Clipboard.ReadImage()
-	if len(pngBytes) == 0 {
-		return "", errors.New("剪贴板中没有图片")
-	}
-	return a.pinPNG(pngBytes, 0, 0)
 }
 
 // copyImagePNG writes a PNG to the system clipboard.

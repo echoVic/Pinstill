@@ -21,7 +21,7 @@ func gnSettings(mutate func(*Settings)) Settings {
 func TestNormalizeSettingsDefaults(t *testing.T) {
 	got := normalizeSettings(Settings{})
 	want := Settings{
-		AfterCapture:   "editor",
+		AfterCapture:   "toolbar",
 		Format:         "PNG",
 		Quality:        10,
 		FilenamePrefix: "Tupen",
@@ -66,24 +66,24 @@ func TestNormalizeSettingsKeysAndEnums(t *testing.T) {
 			want: gnSettings(func(s *Settings) { s.AfterCapture = "pin" }),
 		},
 		{
-			name: "afterCapture wrong case falls back to editor",
+			name: "afterCapture wrong case falls back to toolbar",
 			in:   gnSettings(func(s *Settings) { s.AfterCapture = "Clipboard" }),
-			want: gnSettings(func(s *Settings) { s.AfterCapture = "editor" }),
+			want: gnSettings(func(s *Settings) { s.AfterCapture = "toolbar" }),
 		},
 		{
-			name: "afterCapture unknown falls back to editor",
+			name: "afterCapture unknown falls back to toolbar",
 			in:   gnSettings(func(s *Settings) { s.AfterCapture = "bogus" }),
-			want: gnSettings(func(s *Settings) { s.AfterCapture = "editor" }),
+			want: gnSettings(func(s *Settings) { s.AfterCapture = "toolbar" }),
 		},
 		{
-			name: "afterCapture empty falls back to editor",
+			name: "afterCapture empty falls back to toolbar",
 			in:   gnSettings(func(s *Settings) { s.AfterCapture = "" }),
-			want: gnSettings(func(s *Settings) { s.AfterCapture = "editor" }),
+			want: gnSettings(func(s *Settings) { s.AfterCapture = "toolbar" }),
 		},
 		{
 			name: "afterCapture padded value is not trimmed",
 			in:   gnSettings(func(s *Settings) { s.AfterCapture = " clipboard" }),
-			want: gnSettings(func(s *Settings) { s.AfterCapture = "editor" }),
+			want: gnSettings(func(s *Settings) { s.AfterCapture = "toolbar" }),
 		},
 		{
 			name: "format JPEG is kept",
