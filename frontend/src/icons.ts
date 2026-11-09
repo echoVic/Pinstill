@@ -28,6 +28,7 @@ const iconSet = {
   Copy,
   Download,
   Grid2X2,
+  Grid2x2: Grid2X2,
   Highlighter,
   Languages,
   Minus,
