@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/echoVic/Tupen/internal/pin"
+	"github.com/echoVic/Pinstill/internal/pin"
 	"github.com/egoist/mygo"
 )
 
@@ -48,7 +48,7 @@ func (a *App) restorePins() {
 	for _, st := range states[start:] {
 		st = clampPinToDisplays(st, displays)
 		if err := a.createPinWindow(st); err != nil {
-			log.Printf("tupen: restore pin %s: %v", st.ID, err)
+			log.Printf("pinstill: restore pin %s: %v", st.ID, err)
 		}
 	}
 }
@@ -100,7 +100,7 @@ func (a *App) createPinWindow(st pin.State) error {
 	opacity := st.Opacity
 	border := a.settingsSnapshot().PinBorder
 	win := mygo.NewWindow(mygo.WindowOptions{
-		Title:             "Tupen 贴图",
+		Title:             "Pinstill 贴图",
 		Width:             st.Width,
 		Height:            st.Height,
 		X:                 st.X,
@@ -193,7 +193,7 @@ func (a *App) storePinState(st pin.State) {
 	a.pinStates[st.ID] = st
 	a.mu.Unlock()
 	if _, err := a.pinStore.Upsert(st); err != nil {
-		log.Printf("tupen: save pin state: %v", err)
+		log.Printf("pinstill: save pin state: %v", err)
 	}
 }
 
@@ -279,7 +279,7 @@ func (a *App) removePinState(id string) {
 	a.mu.Unlock()
 	if a.pinStore != nil {
 		if err := a.pinStore.Remove(id); err != nil {
-			log.Printf("tupen: remove pin %s: %v", id, err)
+			log.Printf("pinstill: remove pin %s: %v", id, err)
 		}
 	}
 	a.mu.Lock()

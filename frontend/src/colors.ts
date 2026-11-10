@@ -15,7 +15,7 @@ export const PRESET_COLORS: ReadonlyArray<string> = [
   "#ffffff",
 ];
 
-export const RECENT_COLORS_KEY = "tupen.recentColors";
+export const RECENT_COLORS_KEY = "pinstill.recentColors";
 export const MAX_RECENT_COLORS = 4;
 
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;

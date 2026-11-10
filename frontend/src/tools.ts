@@ -48,7 +48,7 @@ export const TOOLS: ReadonlyArray<readonly [ToolId, string]> = [
   ["clipboard", "保存到剪贴板"],
 ];
 
-/** Lucide icon names used by `refreshTupenIcons`. */
+/** Lucide icon names used by `refreshPinstillIcons`. */
 export const TOOL_ICONS: Record<string, string> = {
   drag: "move",
   rect: "square",

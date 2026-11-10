@@ -46,13 +46,13 @@ const iconSet = {
   X,
 };
 
-export function refreshTupenIcons() {
+export function refreshPinstillIcons() {
   createIcons({ icons: iconSet });
 }
 
 const root = globalThis as typeof globalThis & {
-  refreshTupenIcons?: () => void;
+  refreshPinstillIcons?: () => void;
 };
-root.refreshTupenIcons = refreshTupenIcons;
+root.refreshPinstillIcons = refreshPinstillIcons;
 
-refreshTupenIcons();
+refreshPinstillIcons();

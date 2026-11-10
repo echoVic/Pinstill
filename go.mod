@@ -1,4 +1,4 @@
-module github.com/echoVic/Tupen
+module github.com/echoVic/Pinstill
 
 go 1.27.3
 

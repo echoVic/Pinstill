@@ -1,5 +1,5 @@
 from pathlib import Path
-p=Path('outputs/tupen-design.html')
+p=Path('outputs/pinstill-design.html')
 s=p.read_text()
 css='''
 /* Capture editor: full, grouped toolbar. */

@@ -510,7 +510,7 @@ function applyPin(init: PinInit): void {
     currentWidth = initialWidth;
     currentHeight = initialHeight;
     aspect = initialWidth / initialHeight;
-    document.title = `Tupen — 贴图 ${initialWidth} × ${initialHeight}`;
+    document.title = `Pinstill — 贴图 ${initialWidth} × ${initialHeight}`;
   }
   updateMenuState();
   if (!init.url) {

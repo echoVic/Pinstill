@@ -83,7 +83,7 @@ const ACTION_DEFS: Array<{
   { action: "cancel", label: "取消", icon: "x", className: "cancel" },
 ];
 
-/** Editor actions Tupen does not implement yet: honest "待接入" placeholders. */
+/** Editor actions Pinstill does not implement yet: honest "待接入" placeholders. */
 const EXTRA_TOOL_DEFS: Array<{
   tool: string;
   label: string;
@@ -178,7 +178,7 @@ interface StoredPreferences {
 
 function readStoredPreferences(): StoredPreferences {
   try {
-    return JSON.parse(localStorage.getItem("tupen.preferences") ?? "{}") as StoredPreferences;
+    return JSON.parse(localStorage.getItem("pinstill.preferences") ?? "{}") as StoredPreferences;
   } catch {
     return {};
   }
@@ -194,7 +194,7 @@ let penWidth =
 const watermarkText =
   typeof storedPreferences.watermarkText === "string" && storedPreferences.watermarkText
     ? storedPreferences.watermarkText
-    : "Tupen";
+    : "Pinstill";
 const watermarkOpacity =
   typeof storedPreferences.watermarkOpacity === "number"
     ? clamp(storedPreferences.watermarkOpacity, 10, 90)
@@ -460,7 +460,7 @@ async function startScrollFromToolbar(): Promise<void> {
   }
 }
 
-/** Honest "待接入" feedback for editor capabilities Tupen does not implement
+/** Honest "待接入" feedback for editor capabilities Pinstill does not implement
  * yet (translate/OCR/QR/scroll capture). Never calls FinishAnnotated and never
  * touches the annotations. */
 function showRecognitionPlaceholder(tool: string): void {
@@ -835,7 +835,7 @@ function showCaptureFailure(rawMessage: string, permission: boolean): void {
   captureErrorTitle.textContent = permission ? "需要屏幕录制权限" : "截图失败";
   const message = rawMessage || (permission ? "无法读取屏幕内容。" : "截图失败，请重试。");
   captureErrorText.textContent = permission
-    ? `${message}\n请在「系统设置 › 隐私与安全性 › 屏幕录制」中允许 Tupen，然后重试。`
+    ? `${message}\n请在「系统设置 › 隐私与安全性 › 屏幕录制」中允许 Pinstill，然后重试。`
     : message;
   captureErrorSettings.hidden = !permission;
 }
@@ -917,8 +917,8 @@ async function runAction(action: ToolbarAction): Promise<void> {
 // README screenshots can show the annotation toolbar without the user's
 // desktop. It is only called by the app's own screenshot selftest.
 type DemoCaptureHook = (dataUrl: string) => Promise<void>;
-const hookHost = globalThis as typeof globalThis & { __tupenDemoCapture?: DemoCaptureHook };
-hookHost.__tupenDemoCapture = async (dataUrl: string): Promise<void> => {
+const hookHost = globalThis as typeof globalThis & { __pinstillDemoCapture?: DemoCaptureHook };
+hookHost.__pinstillDemoCapture = async (dataUrl: string): Promise<void> => {
   const image = new Image();
   image.src = dataUrl;
   await image.decode();

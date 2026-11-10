@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/echoVic/Tupen/internal/capture"
-	"github.com/echoVic/Tupen/internal/store"
+	"github.com/echoVic/Pinstill/internal/capture"
+	"github.com/echoVic/Pinstill/internal/store"
 	"github.com/egoist/mygo"
 )
 

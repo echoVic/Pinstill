@@ -49,40 +49,40 @@
     ]
   },
   {
-    "name": "Tupen",
-    "query": "https://api.github.com/search/repositories?q=Tupen%20in%3Aname&per_page=30",
+    "name": "Pinstill",
+    "query": "https://api.github.com/search/repositories?q=Pinstill%20in%3Aname&per_page=30",
     "total_name_matches": 49,
     "exact_matches": [
       {
-        "repo": "pantypint6/tupen",
+        "repo": "pantypint6/pinstill",
         "description": "content",
-        "url": "https://github.com/pantypint6/tupen"
+        "url": "https://github.com/pantypint6/pinstill"
       },
       {
-        "repo": "SobkoSofiya/Tupen",
+        "repo": "SobkoSofiya/Pinstill",
         "description": null,
-        "url": "https://github.com/SobkoSofiya/Tupen"
+        "url": "https://github.com/SobkoSofiya/Pinstill"
       }
     ],
     "similar_matches": [
       {
-        "repo": "tupeng13600/tupeng13600",
+        "repo": "pinstillg13600/pinstillg13600",
         "description": "Config files for my GitHub profile."
       },
       {
-        "repo": "pineapplecz/tupen1",
+        "repo": "pineapplecz/pinstill1",
         "description": null
       },
       {
-        "repo": "TechsoftDevLtd/Tupenekene112",
+        "repo": "TechsoftDevLtd/Pinstillekene112",
         "description": "Config files for my GitHub profile."
       },
       {
-        "repo": "tupen45/tupen45",
+        "repo": "pinstill45/pinstill45",
         "description": null
       },
       {
-        "repo": "yeolliessiee/old-tupenvisci2025",
+        "repo": "yeolliessiee/old-pinstillvisci2025",
         "description": "old web dashboard for the smartair tup "
       }
     ]

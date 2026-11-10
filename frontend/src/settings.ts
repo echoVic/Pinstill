@@ -7,7 +7,7 @@
 import type { Settings } from "./bridge";
 import { DEFAULT_TOOL_CHOICES, toolName } from "./tools";
 
-export const STORAGE_KEY = "tupen.preferences";
+export const STORAGE_KEY = "pinstill.preferences";
 
 /** Everything the design's settings UI persists locally. */
 export interface Preferences {
@@ -96,7 +96,7 @@ export const SETTINGS_SCHEMA: SettingsCategory[] = [
         rows: [
           {
             key: "launch",
-            name: "登录后启动 Tupen",
+            name: "登录后启动 Pinstill",
             description: "下次打开电脑时，自动在后台待命。",
             type: "toggle",
           },
@@ -448,17 +448,17 @@ export const DEFAULT_PREFERENCES: Preferences = {
   pinKey: "CmdOrCtrl+Shift+2",
   ocrKey: "CmdOrCtrl+Shift+O",
   enterCopy: true,
-  folder: "~/Pictures/Tupen",
+  folder: "~/Pictures/Pinstill",
   format: "PNG",
   quality: 90,
-  filenamePrefix: "Tupen",
+  filenamePrefix: "Pinstill",
   keepHistory: true,
   retentionDays: 30,
   historyLimitMB: 2048,
   defaultTool: "arrow",
   defaultColor: "#e56e48",
   defaultWidth: 4,
-  watermarkText: "Tupen",
+  watermarkText: "Pinstill",
   watermarkOpacity: 35,
   pinOpacity: 100,
   pinBorder: true,

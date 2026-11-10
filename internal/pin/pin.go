@@ -1,4 +1,4 @@
-// Package pin persists the state of Tupen's desktop pins: the image files
+// Package pin persists the state of Pinstill's desktop pins: the image files
 // ("<id>.png") and the window geometry/opacity of every pin ("pins.json") live
 // in one directory under the application's user data. Pins are restored on the
 // next launch from that state.

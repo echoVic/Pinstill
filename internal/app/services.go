@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/echoVic/Tupen/internal/capture"
+	"github.com/echoVic/Pinstill/internal/capture"
 	"github.com/egoist/mygo"
 )
 
@@ -246,10 +246,10 @@ func normalizeSettings(s Settings) Settings {
 	}
 	s.Quality = min(max(s.Quality, 10), 100)
 	if strings.TrimSpace(s.FilenamePrefix) == "" {
-		s.FilenamePrefix = "Tupen"
+		s.FilenamePrefix = "Pinstill"
 	}
 	if strings.TrimSpace(s.Folder) == "" {
-		s.Folder = "~/Pictures/Tupen"
+		s.Folder = "~/Pictures/Pinstill"
 	}
 	s.RetentionDays = max(s.RetentionDays, 0)
 	s.HistoryLimitMB = max(s.HistoryLimitMB, 0)
@@ -338,7 +338,7 @@ func sanitizeExportName(suggested string, settings Settings) string {
 	}
 	prefix := strings.TrimSpace(settings.FilenamePrefix)
 	if prefix == "" {
-		prefix = "Tupen"
+		prefix = "Pinstill"
 	}
 	prefix = strings.Map(func(r rune) rune {
 		if strings.ContainsRune(`/\:*?"<>|`, r) {

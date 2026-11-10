@@ -22,7 +22,7 @@ import {
   rememberColor,
 } from "./colors";
 import { drawDemoScene } from "./demo";
-import { refreshTupenIcons } from "./icons";
+import { refreshPinstillIcons } from "./icons";
 import type { Preferences } from "./settings";
 import { formatAccelerator } from "./settings";
 import { isDrawTool, TOOLS, TOOL_ICONS, type ToolId } from "./tools";
@@ -568,7 +568,7 @@ export class Editor {
       });
       this.toolbar.append(row);
     });
-    refreshTupenIcons();
+    refreshPinstillIcons();
     const undoButton = this.toolbar.querySelector<HTMLButtonElement>('[data-tool="undo"]');
     if (undoButton) undoButton.disabled = true;
   }

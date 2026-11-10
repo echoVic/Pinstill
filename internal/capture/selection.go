@@ -1,4 +1,4 @@
-// Package capture contains platform-neutral pieces of Tupen's capture flow.
+// Package capture contains platform-neutral pieces of Pinstill's capture flow.
 package capture
 
 // Point is a point in the coordinate space of a display or capture surface.

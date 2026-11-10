@@ -1,4 +1,4 @@
-// The main Tupen window: the design prototype's single-page UI, wired to the
+// The main Pinstill window: the design prototype's single-page UI, wired to the
 // native capture/history/settings bindings through bridge.ts.
 //
 // Views: 截图 (editor) · 历史 (stored captures) · 偏好设置 (six categories).
@@ -20,6 +20,7 @@ import {
   onToast,
   openPermissionSettings,
   permissionGranted,
+  requestScreenPermission,
   pinImage,
   beginRegion,
   applySettings,
@@ -28,7 +29,7 @@ import {
   type HistoryEntry,
 } from "./bridge";
 import { Editor } from "./editor";
-import { refreshTupenIcons } from "./icons";
+import { refreshPinstillIcons } from "./icons";
 import {
   DEFAULT_PREFERENCES,
   SETTINGS_KEY_LABELS,
@@ -140,7 +141,7 @@ function safeFilenamePrefix(value: string): string {
     .trim()
     .replace(/[\\/:*?"<>|\s]+/g, "-")
     .replace(/^-+|-+$/g, "");
-  return cleaned || "Tupen";
+  return cleaned || "Pinstill";
 }
 
 function formatHistoryTime(iso: string): string {
@@ -410,7 +411,7 @@ function showView(view: View): void {
   el("workspaceView").hidden = settings;
   const title = document.querySelector<HTMLElement>(".title");
   const subtitle = document.querySelector<HTMLElement>(".sub");
-  if (title) title.textContent = settings ? "让 Tupen 更顺手。" : "截取、标注，再带走。";
+  if (title) title.textContent = settings ? "让 Pinstill 更顺手。" : "截取、标注，再带走。";
   if (subtitle) {
     subtitle.textContent = settings
       ? "把常用习惯设好，剩下的交给每一次截图。"
@@ -447,7 +448,7 @@ function renderSettings(): void {
     });
     nav.append(button);
   }
-  refreshTupenIcons();
+  refreshPinstillIcons();
 
   const category = SETTINGS_SCHEMA.find((entry) => entry.id === settingsCategory) ?? SETTINGS_SCHEMA[0]!;
   const body = el("settingsBody");
@@ -727,11 +728,25 @@ async function refreshPermissionStatus(): Promise<void> {
     if (!granted && !permissionClickBound) {
       permissionClickBound = true;
       const status = document.getElementById("permissionStatus");
-      status?.addEventListener("click", () => void openPermissionSettings().catch(() => {}));
+      const requestAccess = () => {
+        void (async () => {
+          try {
+            const granted = await requestScreenPermission();
+            if (granted) {
+              setPermissionLabel("已准备好截取");
+              return;
+            }
+            await openPermissionSettings();
+          } catch {
+            await openPermissionSettings().catch(() => {});
+          }
+        })();
+      };
+      status?.addEventListener("click", requestAccess);
       status?.addEventListener("keydown", (event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          void openPermissionSettings().catch(() => {});
+          requestAccess();
         }
       });
       status?.setAttribute("tabindex", "0");
@@ -750,7 +765,7 @@ function applyModeTexts(): void {
   if (!hasNative) return;
   const previewNote = document.getElementById("settingsPreviewNote");
   if (previewNote) {
-    previewNote.textContent = "设置保存在本机，并即时同步到 Tupen。识别与翻译功能将在后续版本接入。";
+    previewNote.textContent = "设置保存在本机，并即时同步到 Pinstill。识别与翻译功能将在后续版本接入。";
   }
 }
 
@@ -825,8 +840,24 @@ onCaptureFailed((payload) => {
     setPermissionLabel("需要屏幕录制权限", true);
     editor.showResult(
       "需要屏幕录制权限",
-      "Tupen 需要系统的「屏幕录制」权限才能截图。请在系统设置中授权后重试。",
-      { label: "打开系统设置", onClick: () => void openPermissionSettings().catch(() => {}) },
+      "Pinstill 需要系统的「屏幕录制」权限才能截图。点击下方按钮授权，或到系统设置中开启。",
+      {
+        label: "请求屏幕录制权限",
+        onClick: () => {
+          void (async () => {
+            try {
+              if (await requestScreenPermission()) {
+                setPermissionLabel("已准备好截取");
+                showToast("已获得屏幕录制权限，可以再截一次", "success");
+                return;
+              }
+            } catch {
+              // fall through to settings
+            }
+            await openPermissionSettings().catch(() => {});
+          })();
+        },
+      },
     );
   }
   void showMainWindow().catch(() => {});

@@ -17,12 +17,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/echoVic/Tupen/internal/capture"
+	"github.com/echoVic/Pinstill/internal/capture"
 	"github.com/egoist/mygo"
 )
 
 // runSelfTest exercises the native pieces without a user driving the app.
-// Set TUPEN_SELFTEST to one of capture, overlay, history, pin, hotkeys or
+// Set PINSTILL_SELFTEST to one of capture, overlay, history, pin, hotkeys or
 // settings; it is a development aid, not part of the product.
 func (a *App) runSelfTest(mode string) {
 	time.Sleep(800 * time.Millisecond)
@@ -74,7 +74,7 @@ func (a *App) runSelfTest(mode string) {
 	case "hold":
 		a.selftestHold()
 	default:
-		log.Printf("tupen: unknown TUPEN_SELFTEST mode %q", mode)
+		log.Printf("pinstill: unknown PINSTILL_SELFTEST mode %q", mode)
 	}
 }
 
@@ -99,10 +99,10 @@ func (a *App) selftestCapture() {
 		return
 	}
 	width, height := imageDimensions(pngBytes)
-	if err := os.WriteFile("/tmp/tupen-selftest-capture.png", pngBytes, 0o644); err != nil {
+	if err := os.WriteFile("/tmp/pinstill-selftest-capture.png", pngBytes, 0o644); err != nil {
 		fmt.Printf("SELFTEST capture: write error %v\n", err)
 	}
-	fmt.Printf("SELFTEST capture: ok %dx%d bytes=%d scale=%.1f file=/tmp/tupen-selftest-capture.png\n",
+	fmt.Printf("SELFTEST capture: ok %dx%d bytes=%d scale=%.1f file=/tmp/pinstill-selftest-capture.png\n",
 		width, height, len(pngBytes), disp.ScaleFactor)
 	if a.store != nil {
 		entry, err := a.store.Save(pngBytes, time.Now())
@@ -117,7 +117,7 @@ func (a *App) selftestCapture() {
 		fmt.Printf("SELFTEST capture: clipboard error %v\n", err)
 	} else {
 		fmt.Printf("SELFTEST capture: clipboard ok\n")
-		if os.Getenv("TUPEN_SELFTEST_HOLD") != "" {
+		if os.Getenv("PINSTILL_SELFTEST_HOLD") != "" {
 			fmt.Printf("SELFTEST clipboard: READY holding for external pbpaste\n")
 			time.Sleep(20 * time.Second)
 		}
@@ -148,8 +148,8 @@ func (a *App) selftestOverlay() {
 		fmt.Printf("SELFTEST overlay: window visible=%v bounds=%+v displayScale=%.1f\n",
 			a.overlay.IsVisible(), a.overlay.Bounds(), a.overlayDisplay.ScaleFactor)
 		if pagePNG, err := a.overlay.CapturePage(); err == nil {
-			_ = os.WriteFile("/tmp/tupen-selftest-overlay-page.png", pagePNG, 0o644)
-			fmt.Printf("SELFTEST overlay: page capture %d bytes -> /tmp/tupen-selftest-overlay-page.png\n", len(pagePNG))
+			_ = os.WriteFile("/tmp/pinstill-selftest-overlay-page.png", pagePNG, 0o644)
+			fmt.Printf("SELFTEST overlay: page capture %d bytes -> /tmp/pinstill-selftest-overlay-page.png\n", len(pagePNG))
 		} else {
 			fmt.Printf("SELFTEST overlay: page capture error %v\n", err)
 		}
@@ -159,9 +159,9 @@ func (a *App) selftestOverlay() {
 	if err != nil {
 		fmt.Printf("SELFTEST overlay: capture error %v\n", err)
 	} else {
-		_ = os.WriteFile("/tmp/tupen-selftest-overlay.png", pngBytes, 0o644)
+		_ = os.WriteFile("/tmp/pinstill-selftest-overlay.png", pngBytes, 0o644)
 		width, height := imageDimensions(pngBytes)
-		fmt.Printf("SELFTEST overlay: ok overlay shown, desktop %dx%d rect=%+v file=/tmp/tupen-selftest-overlay.png\n", width, height, region)
+		fmt.Printf("SELFTEST overlay: ok overlay shown, desktop %dx%d rect=%+v file=/tmp/pinstill-selftest-overlay.png\n", width, height, region)
 	}
 	a.cancelRegion()
 	time.Sleep(300 * time.Millisecond)
@@ -222,8 +222,8 @@ func (a *App) selftestPin() {
 	if err != nil {
 		fmt.Printf("SELFTEST pin: verify capture error %v\n", err)
 	} else {
-		_ = os.WriteFile("/tmp/tupen-selftest-pin.png", snap, 0o644)
-		fmt.Printf("SELFTEST pin: screenshot /tmp/tupen-selftest-pin.png\n")
+		_ = os.WriteFile("/tmp/pinstill-selftest-pin.png", snap, 0o644)
+		fmt.Printf("SELFTEST pin: screenshot /tmp/pinstill-selftest-pin.png\n")
 	}
 	if err := a.closePin(id); err != nil {
 		fmt.Printf("SELFTEST pin: close error %v\n", err)
@@ -248,13 +248,13 @@ func (a *App) selftestDeliver() {
 	if err != nil {
 		fmt.Printf("SELFTEST deliver: verify capture error %v\n", err)
 	} else {
-		_ = os.WriteFile("/tmp/tupen-selftest-deliver.png", snap, 0o644)
-		fmt.Printf("SELFTEST deliver: screenshot /tmp/tupen-selftest-deliver.png\n")
+		_ = os.WriteFile("/tmp/pinstill-selftest-deliver.png", snap, 0o644)
+		fmt.Printf("SELFTEST deliver: screenshot /tmp/pinstill-selftest-deliver.png\n")
 	}
 	if a.main != nil {
 		if pagePNG, err := a.main.CapturePage(); err == nil {
-			_ = os.WriteFile("/tmp/tupen-selftest-editor-page.png", pagePNG, 0o644)
-			fmt.Printf("SELFTEST deliver: editor page capture %d bytes -> /tmp/tupen-selftest-editor-page.png\n", len(pagePNG))
+			_ = os.WriteFile("/tmp/pinstill-selftest-editor-page.png", pagePNG, 0o644)
+			fmt.Printf("SELFTEST deliver: editor page capture %d bytes -> /tmp/pinstill-selftest-editor-page.png\n", len(pagePNG))
 		} else {
 			fmt.Printf("SELFTEST deliver: editor page capture error %v\n", err)
 		}
@@ -289,9 +289,9 @@ func (a *App) selftestUICapture() {
 			fmt.Printf("SELFTEST uicapture: %s error %v\n", name, err)
 			return
 		}
-		_ = os.WriteFile("/tmp/tupen-ui-"+name+".png", png, 0o644)
+		_ = os.WriteFile("/tmp/pinstill-ui-"+name+".png", png, 0o644)
 		width, height := imageDimensions(png)
-		fmt.Printf("SELFTEST uicapture: %s %dx%d -> /tmp/tupen-ui-%s.png\n", name, width, height, name)
+		fmt.Printf("SELFTEST uicapture: %s %dx%d -> /tmp/pinstill-ui-%s.png\n", name, width, height, name)
 	}
 	save("rack")
 	for _, view := range []string{"history", "settings"} {
@@ -331,13 +331,13 @@ func (a *App) selftestDrag() {
 		fmt.Printf("SELFTEST drag: delivered image error %v\n", err)
 	} else {
 		dw, dh := imageDimensions(delivered)
-		_ = os.WriteFile("/tmp/tupen-selftest-drag-delivered.png", delivered, 0o644)
-		fmt.Printf("SELFTEST drag: delivered %dx%d px -> /tmp/tupen-selftest-drag-delivered.png\n", dw, dh)
+		_ = os.WriteFile("/tmp/pinstill-selftest-drag-delivered.png", delivered, 0o644)
+		fmt.Printf("SELFTEST drag: delivered %dx%d px -> /tmp/pinstill-selftest-drag-delivered.png\n", dw, dh)
 		direct, derr := capture.CaptureRegion(expected, capture.CaptureOptions{})
 		if derr != nil {
 			fmt.Printf("SELFTEST drag: direct capture error %v\n", derr)
 		} else {
-			_ = os.WriteFile("/tmp/tupen-selftest-drag-direct.png", direct, 0o644)
+			_ = os.WriteFile("/tmp/pinstill-selftest-drag-direct.png", direct, 0o644)
 			diff, same := imageDiff(delivered, direct)
 			dw2, dh2 := imageDimensions(direct)
 			fmt.Printf("SELFTEST drag: direct %dx%d px, mean abs diff=%.2f same=%v\n", dw2, dh2, diff, same)
@@ -513,8 +513,8 @@ func (a *App) selftestDemo() {
 	time.Sleep(2500 * time.Millisecond)
 	if a.main != nil {
 		if pagePNG, err := a.main.CapturePage(); err == nil {
-			_ = os.WriteFile("/tmp/tupen-selftest-demo-editor.png", pagePNG, 0o644)
-			fmt.Printf("SELFTEST demo: editor page capture %d bytes -> /tmp/tupen-selftest-demo-editor.png\n", len(pagePNG))
+			_ = os.WriteFile("/tmp/pinstill-selftest-demo-editor.png", pagePNG, 0o644)
+			fmt.Printf("SELFTEST demo: editor page capture %d bytes -> /tmp/pinstill-selftest-demo-editor.png\n", len(pagePNG))
 		} else {
 			fmt.Printf("SELFTEST demo: editor page capture error %v\n", err)
 		}
@@ -1053,9 +1053,9 @@ func (a *App) selftestScrollShot() {
 	a.mu.Unlock()
 	if control != nil {
 		if pagePNG, err := control.CapturePage(); err == nil {
-			_ = os.WriteFile("/tmp/tupen-showcase-scroll.png", pagePNG, 0o644)
+			_ = os.WriteFile("/tmp/pinstill-showcase-scroll.png", pagePNG, 0o644)
 			w, h := imageDimensions(pagePNG)
-			fmt.Printf("SELFTEST scrollshot: control %dx%d -> /tmp/tupen-showcase-scroll.png\n", w, h)
+			fmt.Printf("SELFTEST scrollshot: control %dx%d -> /tmp/pinstill-showcase-scroll.png\n", w, h)
 		} else {
 			fmt.Printf("SELFTEST scrollshot: capture error %v\n", err)
 		}
@@ -1214,8 +1214,8 @@ func (a *App) selftestScroll() {
 // image it shows is generated, so no content from the user's desktop lands
 // in the repository.
 func (a *App) selftestShowcase() {
-	if strings.TrimSpace(os.Getenv("TUPEN_DATA_DIR")) == "" {
-		fmt.Printf("SELFTEST showcase: TUPEN_DATA_DIR must point at an isolated data directory\n")
+	if strings.TrimSpace(os.Getenv("PINSTILL_DATA_DIR")) == "" {
+		fmt.Printf("SELFTEST showcase: PINSTILL_DATA_DIR must point at an isolated data directory\n")
 		mygo.App.Exit(1)
 		return
 	}
@@ -1239,7 +1239,7 @@ func (a *App) selftestShowcase() {
 			fmt.Printf("SELFTEST showcase: %s capture error %v\n", name, err)
 			return
 		}
-		path := "/tmp/tupen-showcase-" + name + ".png"
+		path := "/tmp/pinstill-showcase-" + name + ".png"
 		_ = os.WriteFile(path, pagePNG, 0o644)
 		w, h := imageDimensions(pagePNG)
 		fmt.Printf("SELFTEST showcase: %s %dx%d -> %s\n", name, w, h, path)
@@ -1270,7 +1270,7 @@ func (a *App) selftestShowcase() {
 			// contain the user's desktop.
 			if png := syntheticScreenshot(); len(png) > 0 {
 				dataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
-				js := fmt.Sprintf("window.__tupenDemoCapture && window.__tupenDemoCapture(%q)", dataURL)
+				js := fmt.Sprintf("window.__pinstillDemoCapture && window.__pinstillDemoCapture(%q)", dataURL)
 				if _, err := a.overlay.Page().Eval(js); err != nil {
 					fmt.Printf("SELFTEST showcase: synthetic base error %v\n", err)
 				}
@@ -1377,8 +1377,8 @@ func (a *App) selftestUIActions() {
 	fmt.Printf("SELFTEST uiactions: pins=%d\n", pinCount)
 	snap, err := capture.CaptureRegion(virtualDesktopRect(), capture.CaptureOptions{})
 	if err == nil {
-		_ = os.WriteFile("/tmp/tupen-selftest-uiactions.png", snap, 0o644)
-		fmt.Printf("SELFTEST uiactions: screenshot /tmp/tupen-selftest-uiactions.png\n")
+		_ = os.WriteFile("/tmp/pinstill-selftest-uiactions.png", snap, 0o644)
+		fmt.Printf("SELFTEST uiactions: screenshot /tmp/pinstill-selftest-uiactions.png\n")
 	}
 
 	// History view: switch, then load the first card into the editor.

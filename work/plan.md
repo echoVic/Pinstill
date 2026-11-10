@@ -1,8 +1,8 @@
-# Tupen 真实功能开发计划（Round 1，Lead 维护）
+# Pinstill 真实功能开发计划（Round 1，Lead 维护）
 
 > 状态：进行中。本文件是 **接口契约的唯一来源**。任何一方需要改动契约，先给 Lead 发消息，不要自行改接口。
 > 背景：仓库当前是「设计原型 + MyGo 桌面壳」。本轮把核心链路做真：真实区域截图 → 标注 → 复制/导出/固定 → 历史/截图架 → 全局快捷键/托盘/设置接线。
-> 视觉与交互的基准是 `outputs/tupen-design.html`（保持现有 UI 语言与布局，不要重新设计）。
+> 视觉与交互的基准是 `outputs/pinstill-design.html`（保持现有 UI 语言与布局，不要重新设计）。
 
 ## 0. 环境与命令
 
@@ -12,7 +12,7 @@
 - 常用命令：
   - Go 测试：`GOTOOLCHAIN=auto go test ./...`
   - 前端构建：`npm run build:web`
-  - 完整桌面包：`mygo build`（通过 `node_modules/.bin/mygo`；产出 `build/darwin-arm64/Tupen.app`）
+  - 完整桌面包：`mygo build`（通过 `node_modules/.bin/mygo`；产出 `build/darwin-arm64/Pinstill.app`）
   - 开发运行：`npm run dev`（**只有 Lead 可以运行**；会占用 5173 并重新生成 `frontend/src/mygo.ts`）
 - 进程卫生：不要留后台进程。前端成员自测可以短暂 `npx vite --config vite.config.ts`，结束前必须 kill；端口 5173 只允许一个占用。
 
@@ -20,17 +20,17 @@
 
 | 成员 | 写作用域 | 内容 |
 |---|---|---|
-| Lead | `cmd/tupen/main.go`、`internal/app/`、`work/plan.md`、`README.md`、`.gitignore`、`outputs/` | 应用编排（窗口/托盘/协议/快捷键/截图流程）、绑定服务、事件、主入口、集成与验收 |
+| Lead | `cmd/pinstill/main.go`、`internal/app/`、`work/plan.md`、`README.md`、`.gitignore`、`outputs/` | 应用编排（窗口/托盘/协议/快捷键/截图流程）、绑定服务、事件、主入口、集成与验收 |
 | go-native | `internal/capture/`、`internal/store/`、`go.mod`、`go.sum` | 原生截图后端（macOS 实装 / Windows 可编译后端）、历史存储与缩略图、单元测试 |
 | frontend | `frontend/`、`vite.config.ts` | 主页面真实化（截图结果、标注、导出/复制/固定、历史/截图架、设置接线）、`overlay.html`、`pin.html`、bridge 封装 |
 | verifier（后续） | 只读 + 报告 | 独立验收，不改产品代码 |
 
-不要修改不属于自己的文件；不要 git commit / push（Lead 统一处理）。不要改 `outputs/tupen-design.html`。
+不要修改不属于自己的文件；不要 git commit / push（Lead 统一处理）。不要改 `outputs/pinstill-design.html`。
 
 ## 2. 架构
 
 ```
-cmd/tupen/main.go            入口：单实例、protocol 注册、绑定、托盘、窗口、WhenReady、自检模式
+cmd/pinstill/main.go            入口：单实例、protocol 注册、绑定、托盘、窗口、WhenReady、自检模式
 internal/app/                编排层：App + 绑定服务 Capture/History + 事件 + 截图流程 + 设置
 internal/capture/            纯截屏：几何 + 平台后端（darwin/windows/other）+ 权限 + 测试
 internal/store/              历史持久化：PNG 原图 + 缩略图 + index.json + 清理 + 测试
@@ -42,7 +42,7 @@ frontend/src/*.ts            从 index.html 内联脚本拆出的模块
 vite.config.ts               多页构建（index/overlay/pin）
 ```
 
-数据目录：`mygo.App.Path(mygo.PathUserData)`（macOS: `~/Library/Application Support/Tupen`），截图与 index.json 存在其下 `captures/` 子目录。缩略图同目录 `<id>.thumb.jpg`。
+数据目录：`mygo.App.Path(mygo.PathUserData)`（macOS: `~/Library/Application Support/Pinstill`），截图与 index.json 存在其下 `captures/` 子目录。缩略图同目录 `<id>.thumb.jpg`。
 
 自定义协议 `shot://`：`mygo.Protocol.Handle("shot", mygo.FileServer(os.DirFS(capturesDir)))`，页面用 `shot://localhost/<文件>` 取图（Windows 用 `http://shot.localhost/<文件>`，由 Go 拼好 URL 返回给前端，前端不自己拼）。
 
@@ -160,7 +160,7 @@ interface Settings {
   format: "PNG" | "JPEG"
   quality: number         // 50..100
   filenamePrefix: string
-  folder: string          // 如 "~/Pictures/Tupen"（Go 展开 ~）
+  folder: string          // 如 "~/Pictures/Pinstill"（Go 展开 ~）
   includeCursor: boolean
   sound: boolean
   launchAtLogin: boolean
@@ -243,15 +243,15 @@ export function onToast(cb: (p: { text: string; kind: string }) => void): () => 
 
 ## 4. 现有设计稿要点（勿丢）
 
-- 单页应用三段视图：截图架 / 历史 / 偏好设置；暗色暖调（`--bg:#141412`、amber `#f3a24e`）；品牌 `tupen`/`Tupen`。
+- 单页应用三段视图：截图架 / 历史 / 偏好设置；暗色暖调（`--bg:#141412`、amber `#f3a24e`）；品牌 `pinstill`/`Pinstill`。
 - 编辑器：960×480 逻辑画布、20 个工具两组（拖拽/矩形/圆/线/箭头/画笔/文字/标签/马赛克/高亮/水印 | 固定/翻译/OCR/二维码/滚动/撤销/下载/取消/剪贴板）、属性条（颜色/粗细/文本）、结果面板、状态行。
 - 设置 6 分类（通用与截图/快捷键/保存与历史/标注与水印/贴图与截图架/识别与翻译）+ localStorage 持久化 + 分类重置。
 - 标注渲染逻辑（`drawShape`/`redraw`）是可用资产，保留；把 `background()` 的假截图替换为真实截图的底座图。
-- `outputs/tupen-toolbar-compact.png`、`outputs/tupen-settings.png` 是旧版截图（还是 shotline 品牌），仅参考，不复用。
+- `outputs/pinstill-toolbar-compact.png`、`outputs/pinstill-settings.png` 是旧版截图（还是 shotline 品牌），仅参考，不复用。
 
 ## 4.5 E2E 实测结论与已知限制（Lead，2026-11-09）
 
-已验证（构建产物 build/darwin-arm64/Tupen.app，selftest 模式见下）：
+已验证（构建产物 build/darwin-arm64/Pinstill.app，selftest 模式见下）：
 - 真实区域截图 600×400pt → 1200×800px（Retina 2x）；光标/延时/临时文件清理单测+实测通过。
 - overlay 在鼠标所在显示器的可见工作区显示（Panel）；拖动选区 → FinishRegion 映射与直接截同一屏幕矩形逐像素一致（mean abs diff 0.00）；编辑器 canvas 载入真实尺寸。
 - Esc 取消（System Events 合成按键实测 overlay 隐藏、主窗口恢复）；点击遮罩/右键取消同样走 CancelRegion。
@@ -261,7 +261,7 @@ export function onToast(cb: (p: { text: string; kind: string }) => void): () => 
 - 全局快捷键：Carbon 注册成功（三个快捷键均 registered=true）；**合成按键无法验证触发**（System Events 合成的键盘事件不会触发 Carbon 热键），需真实按键人工确认。
 - macOS 限制：Panel 是带 title 样式的窗口，AppKit 会把它的 frame 约束在屏幕可见工作区（built-in 屏 workArea={44,33,1684,1084}），因此 overlay 不覆盖菜单栏和 Dock 区域；代码按「实际窗口 frame」做坐标映射，不受影响。
 - 默认快捷键从 ⌘⇧4 改为 ⌘⇧1（⌘⇧4 被 macOS 截图占用）。
-- 真实退出路径（Cmd+Q / 菜单退出 / 托盘退出）已修复并纳入 E2E：`TUPEN_SELFTEST=quit` 调 `App.Quit()` 验证 5s 内走完且退出码 0（此前 overlay 的 OnClose 无条件 PreventDefault 会阻断退出）。
+- 真实退出路径（Cmd+Q / 菜单退出 / 托盘退出）已修复并纳入 E2E：`PINSTILL_SELFTEST=quit` 调 `App.Quit()` 验证 5s 内走完且退出码 0（此前 overlay 的 OnClose 无条件 PreventDefault 会阻断退出）。
 - `shot://` 协议只放行 .png/.jpg/.jpeg（`imagesOnly` 中间件），`/h/index.json` 等其它文件 404。
 - 登录后启动在未安装到 /Applications 的构建里会返回 `Operation not permitted`，设置页会如实展示；安装后行为待人工确认。
 - 导出保存对话框是模态框，selftest 未自动点击；导出/格式转换逻辑由 internal/app 单测覆盖，需人工点一次确认。
@@ -272,7 +272,7 @@ export function onToast(cb: (p: { text: string; kind: string }) => void): () => 
 - Windows 真实截屏（后端可写则写，写不动保持 ErrUnsupported，但必须可交叉编译）
 - OCR / 翻译 / 二维码识别 / 滚动截图的真实服务（保留「待接入」占位文案，不要假装能用）
 - 多显示器完整覆盖（overlay 只在鼠标所在显示器工作）、签名/公证/自动更新
-- 不动 `outputs/tupen-design.html` 与 `work/` 下旧脚本
+- 不动 `outputs/pinstill-design.html` 与 `work/` 下旧脚本
 
 ## 6. 验证与交付（各自完成前必须自测）
 
@@ -280,7 +280,7 @@ export function onToast(cb: (p: { text: string; kind: string }) => void): () => 
 - frontend：`npm run build:web` 通过；页面在浏览器静态预览无 console 报错；报告改了哪些文件、哪些设置接线完成。
 - Lead：`mygo build` 成功；真实运行验收 3.7 的 1/2/3/5/6/8；产出新截图到 `outputs/`；更新 README。
 
-调试自检（Lead 实现，环境变量 `TUPEN_SELFTEST`，仅开发用）：`capture`（真实截区域+写剪贴板+存历史，输出尺寸/裁剪文件）、`overlay`（显示 overlay 后整屏截图，验证遮罩渲染）、`deliver`（真实截图走 capture:completed 交付给编辑器后整屏截图）、`pin`（创建贴图窗口后整屏截图）、`history`/`hotkeys`/`settings`。产出文件在 `/tmp/tupen-selftest-*.png`。
+调试自检（Lead 实现，环境变量 `PINSTILL_SELFTEST`，仅开发用）：`capture`（真实截区域+写剪贴板+存历史，输出尺寸/裁剪文件）、`overlay`（显示 overlay 后整屏截图，验证遮罩渲染）、`deliver`（真实截图走 capture:completed 交付给编辑器后整屏截图）、`pin`（创建贴图窗口后整屏截图）、`history`/`hotkeys`/`settings`。产出文件在 `/tmp/pinstill-selftest-*.png`。
 
 ---
 
@@ -337,9 +337,9 @@ export function onToast(cb: (p: { text: string; kind: string }) => void): () => 
 
 ## R2.6 实测结论（Lead，2026-11-09 晚）
 
-构建产物：build/darwin-arm64/Tupen.app（0.1.0）。work/e2e.sh 14 步全部通过（可重复运行）：
+构建产物：build/darwin-arm64/Pinstill.app（0.1.0）。work/e2e.sh 14 步全部通过（可重复运行）：
 
-- **桌面操作条全流程**（`TUPEN_SELFTEST=flow`，用 `Page().Eval` 在 overlay 页面合成 pointer 拖选再点操作条）：
+- **桌面操作条全流程**（`PINSTILL_SELFTEST=flow`，用 `Page().Eval` 在 overlay 页面合成 pointer 拖选再点操作条）：
   - copy → 系统剪贴板出现 480×320 PNG；
   - pin → 新建桌面贴图（pins=1）；
   - annotate → 主窗口显示、编辑器 canvas=480×320；
@@ -350,7 +350,7 @@ export function onToast(cb: (p: { text: string; kind: string }) => void): () => 
 - 旧链路回归：真实截图/历史/剪贴板、选区映射（与直接截屏 mean abs diff 0.00）、Esc 取消（对 System Events 偶发丢键做了 3 次重试）、编辑器交付、工具栏动作、托盘、快捷键注册、设置应用均通过。
 - 主窗口已无截图架；`uicapture` 的 rack 视图为空编辑器，history 卡片为真实历史；`showcase` 用合成图生成 README 截图（不含用户桌面内容）。
 - 已知测试脆弱点：连续快速启动多个 selftest 实例时（<0.6s），偶发一个 pin 窗口在创建后即被关闭；e2e.sh 已加入 1.0s 间隔规避；真实使用（单实例常驻）不复现。System Events 合成的 Escape 偶发不达，已加重试。
-- 隐私修复（QA round 2 发现）：showcase 生成的 README 截图曾读到真实历史（history 截图泄露用户桌面）。现在 `TUPEN_DATA_DIR` 可把 captures/pins/session 全部隔离到指定目录（默认行为不变，目录自动创建）；`TUPEN_SELFTEST=showcase` 未设置该变量时在 main() 阶段直接失败退出；outputs 五张截图均已在隔离数据目录重生成并逐张确认不含真实内容。
+- 隐私修复（QA round 2 发现）：showcase 生成的 README 截图曾读到真实历史（history 截图泄露用户桌面）。现在 `PINSTILL_DATA_DIR` 可把 captures/pins/session 全部隔离到指定目录（默认行为不变，目录自动创建）；`PINSTILL_SELFTEST=showcase` 未设置该变量时在 main() 阶段直接失败退出；outputs 五张截图均已在隔离数据目录重生成并逐张确认不含真实内容。
 - QA 修复（round 2 复验）：恢复贴图取**最新** 60 张（此前误取最旧）；`shotBase` 在存储初始化前赋值，历史/贴图存储打开失败只降级对应功能而不再中断启动；非法 CompleteSelection action 会复位 capturing。
 
 ---
@@ -406,15 +406,15 @@ Capture 服务：
 
 ## R3.6 实测结论（Lead，2026-11-09 深夜）
 
-- 构建 + 完整 `work/e2e.sh`（隔离数据目录）通过；`TUPEN_SELFTEST=flow` 覆盖：
+- 构建 + 完整 `work/e2e.sh`（隔离数据目录）通过；`PINSTILL_SELFTEST=flow` 覆盖：
   - 拖选 → PrepareSelection → 选区内显示真实截图（#overlayCanvas）→ 点工具画红色矩形 → 复制：剪贴板 640×420 PNG 且检测到标注颜色（annotated=true）；
   - 贴图：pins=1；进入编辑器：主窗口 editor canvas=640×420（合成图）；
   - afterCapture=clipboard 自动完成复制（400×280，不显示工具栏）；
   - cancel：历史条数不变。
 - 「完整工具栏」按用户提供的主编辑器工具栏补齐：11 绘制工具 + undo + 翻译/OCR/二维码/滚动截图（待接入，不调用 FinishAnnotated）+ 颜色/粗细/文本 + 复制/贴图/保存/进入编辑器/取消；editor UI 动作在调用 Go 前映射为 annotate。
-- 隐私：overlay 就地图必须显示真实截图，showcase 生成 README 图时通过页面内的 `window.__tupenDemoCapture` 测试钩子把画布底图替换为合成图，仓库的 tuen-overlay.jpg 已确认只有合成内容；showcase 仍强制 TUPEN_DATA_DIR 隔离。
+- 隐私：overlay 就地图必须显示真实截图，showcase 生成 README 图时通过页面内的 `window.__pinstillDemoCapture` 测试钩子把画布底图替换为合成图，仓库的 tuen-overlay.jpg 已确认只有合成内容；showcase 仍强制 PINSTILL_DATA_DIR 隔离。
 - 已知测试抖动：首次 PrepareSelection 偶发未进入标注态（overlay 首次显隐时序），flow selftest 已加重试；真实手工操作未复现。
-- 真实截图回归（权限恢复后）：`bash work/e2e.sh` 真实截屏路径连续两轮 ALL CHECKS PASSED；flow 中 copy 为 640×420 且 annotated=true、pin/editor/auto clipboard/cancel 全部符合预期；`TUPEN_DATA_DIR` 隔离下默认用户目录零写入。
+- 真实截图回归（权限恢复后）：`bash work/e2e.sh` 真实截屏路径连续两轮 ALL CHECKS PASSED；flow 中 copy 为 640×420 且 annotated=true、pin/editor/auto clipboard/cancel 全部符合预期；`PINSTILL_DATA_DIR` 隔离下默认用户目录零写入。
 
 ---
 
@@ -469,10 +469,10 @@ Windows 真机滚动、横向滚动、视频/动画内容、自动识别页内�
 ## R4.6 实测结论（Lead，2026-11-10）
 
 - Go 侧新增：`internal/stitch`（重叠匹配拼接，反向搜索最大重叠 + 早停加速，单测覆盖拼接重建/无重叠/停止检测/最大高度）、`internal/capture` 滚动事件与辅助功能检测（purego CoreGraphics/ApplicationServices）、`internal/app` 滚动会话（独立控制条窗口，隐藏 overlay，手动/自动两种节奏）。
-- `TUPEN_SELFTEST=scroll`（模拟帧）：accessibility 检测、自动模式会话切换、手动会话拼接出 6 帧 2300px 长图并交付编辑器 1280×2300。
-- `TUPEN_SELFTEST=scrollflow`（真实页面驱动）：选区标注态点「滚动截图」→ Go 隐藏 overlay、显示控制条 → 页面收到 scroll:init/progress → 点「进编辑器」→ 编辑器载入 1280×1700 长图。
+- `PINSTILL_SELFTEST=scroll`（模拟帧）：accessibility 检测、自动模式会话切换、手动会话拼接出 6 帧 2300px 长图并交付编辑器 1280×2300。
+- `PINSTILL_SELFTEST=scrollflow`（真实页面驱动）：选区标注态点「滚动截图」→ Go 隐藏 overlay、显示控制条 → 页面收到 scroll:init/progress → 点「进编辑器」→ 编辑器载入 1280×1700 长图。
 - 自动滚动真实滚轮事件需要「辅助功能」权限（本机已具备），selftest 用模拟帧时不会真的发送滚轮事件（环境变量 guard），避免影响桌面；**真实自动滚动效果仍建议人工确认一次**。
-- 控制条截图（outputs/tupen-scroll.jpg）：正在拼接 · 4 帧 · 1700 px / 自动滚动开关 / 复制保存贴图进编辑器取消。
+- 控制条截图（outputs/pinstill-scroll.jpg）：正在拼接 · 4 帧 · 1700 px / 自动滚动开关 / 复制保存贴图进编辑器取消。
 
 ## R4.7 QA round 4 修复（Lead）
 
@@ -482,7 +482,7 @@ Windows 真机滚动、横向滚动、视频/动画内容、自动识别页内�
 - `FinishScroll` 先校验/收尾成功后才隐藏控制条；失败路径隐藏控制条 + 显示主窗口 + capture:failed/toast，用户不再「窗口突然消失」。
 - `StartScroll/FinishScroll/SetScrollAuto` 加 `scrollMu` 串行化，避免并发会话泄漏/重复收尾。
 - plan 契约数字对齐实现（120 帧 / 340ms / 420ms / 470×84）；删除未用的 stitch `ReachedEnd`；bridge 的 source 联合类型补 "scroll"。
-- 修复后：`go test ./...` 全绿；`TUPEN_SELFTEST=scroll/scrollflow` 结果不变（1280×2300 / 1280×1700）；完整 e2e 19 段 ALL CHECKS PASSED。
+- 修复后：`go test ./...` 全绿；`PINSTILL_SELFTEST=scroll/scrollflow` 结果不变（1280×2300 / 1280×1700）；完整 e2e 19 段 ALL CHECKS PASSED。
 
 ---
 
@@ -530,3 +530,25 @@ Windows 真机滚动、横向滚动、视频/动画内容、自动识别页内�
 - 文字/标签：点击画布内联输入框（定位/聚焦/Enter/Shift+Enter/Esc/失焦/IME/空内容丢弃），overlay 与主编辑器一致；已移除工具栏先打字的旧方式（水印保留工具条文本）。
 - 调色板：8 预设 + 自定义取色器 + 最近 4 色（localStorage，两页共享），预设/自定义选色均可用于绘制并持久化。
 - 回归：完整 e2e 19 段 ALL CHECKS PASSED；build:web 四页、go test/vet 全绿；README 截图已用新工具栏/调色板重新生成（合成内容，无用户桌面）。
+
+---
+
+# Round 6：更名 Pinstill（钉图）（2026-11-10）
+
+用户决定把项目从 Tupen 更名为 **Pinstill**（中文「钉图」），完整替换，包括 GitHub 仓库。
+
+## R6.1 替换范围（已完成）
+
+- 应用标识：name `Pinstill`、slug `pinstill`、bundle id `dev.echovic.pinstill`；窗口标题/托盘/前端文案全部替换
+- Go module：`github.com/echoVic/Pinstill`，入口 `cmd/pinstill`；环境变量 `PINSTILL_*`；自检产物 `/tmp/pinstill-selftest-*`
+- GitHub 仓库：`echoVic/Tupen` → `echoVic/Pinstill`（remote 同步更新）
+- 图标：新增 `resources/icon.png`（1024²，暗色圆角 + 截图卡片 + 琥珀色图钉），mygo 构建时生成 .icns
+- 数据迁移：`internal/app/migrate_darwin.go` 首次启动时把旧 `Tupen` 数据目录/WebKit 目录移动到 `Pinstill` 下（不覆盖已存在目录）
+- 文档/截图：README、plan、outputs 全部换新名并重新生成合成截图
+- 注意：bundle id 变更后 macOS 屏幕录制权限需重新授权一次；签名仍为 Developer ID（Developer ID）
+
+## R6.2 验证
+
+- `npm run build:web`、`mygo build`（Developer ID 签名）通过；产物 `Pinstill.app` / `pinstill-0.1.0-arm64.dmg`
+- 完整 e2e（隔离 `PINSTILL_DATA_DIR`）19 段 ALL CHECKS PASSED
+- 之后按用户优先级继续：交互/观感打磨 + 稳定性与权限体验

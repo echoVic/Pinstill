@@ -14,8 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/echoVic/Tupen/internal/capture"
-	"github.com/echoVic/Tupen/internal/stitch"
+	"github.com/echoVic/Pinstill/internal/capture"
+	"github.com/echoVic/Pinstill/internal/stitch"
 	"github.com/egoist/mygo"
 )
 
@@ -65,7 +65,7 @@ func (s *scrollSession) isAuto() bool {
 // actions while the overlay is hidden.
 func (a *App) createScrollControl() {
 	win := mygo.NewWindow(mygo.WindowOptions{
-		Title:             "Tupen 滚动截图",
+		Title:             "Pinstill 滚动截图",
 		Width:             470,
 		Height:            84,
 		Hidden:            true,
@@ -89,7 +89,7 @@ func (a *App) createScrollControl() {
 		e.PreventDefault()
 		go func() {
 			if err := a.finishScroll("cancel"); err != nil {
-				log.Printf("tupen: cancel scroll: %v", err)
+				log.Printf("pinstill: cancel scroll: %v", err)
 			}
 		}()
 	})
@@ -170,7 +170,7 @@ func (a *App) startScroll(rect Rect, autoScroll bool) error {
 		return errors.New("当前平台暂不支持自动滚动，请使用手动滚动拼接")
 	}
 	if autoScroll && !capture.AccessibilityGranted() {
-		return errors.New("自动滚动需要「辅助功能」权限：请到系统设置 → 隐私与安全性 → 辅助功能中允许 Tupen")
+		return errors.New("自动滚动需要「辅助功能」权限：请到系统设置 → 隐私与安全性 → 辅助功能中允许 Pinstill")
 	}
 	if overlay != nil {
 		if live := overlay.ContentBounds(); live.Width > 0 && live.Height > 0 {
@@ -190,7 +190,7 @@ func (a *App) startScroll(rect Rect, autoScroll bool) error {
 	if control == nil || control.IsDestroyed() {
 		return errors.New("滚动控制窗口不可用")
 	}
-	if os.Getenv("TUPEN_SELFTEST_SCROLL_SIM") != "" {
+	if os.Getenv("PINSTILL_SELFTEST_SCROLL_SIM") != "" {
 		simulatedScrollCounter.Store(0)
 	}
 	if overlay != nil {
@@ -235,14 +235,14 @@ func (a *App) scrollLoop(session *scrollSession) {
 		}
 		frame, err := a.captureRegion(session.region, capture.CaptureOptions{IncludeCursor: false})
 		if err != nil {
-			log.Printf("tupen: scroll capture frame: %v", err)
+			log.Printf("pinstill: scroll capture frame: %v", err)
 			session.setStatus("stopped")
 			a.emitScrollProgress(session)
 			return
 		}
 		img, err := pngToRGBA(frame)
 		if err != nil {
-			log.Printf("tupen: scroll frame decode: %v", err)
+			log.Printf("pinstill: scroll frame decode: %v", err)
 			session.setStatus("stopped")
 			a.emitScrollProgress(session)
 			return
@@ -296,10 +296,10 @@ func (a *App) scrollLoop(session *scrollSession) {
 			a.emitScrollProgress(session)
 			return
 		}
-		if session.isAuto() && capture.ScrollSupported() && os.Getenv("TUPEN_SELFTEST_SCROLL_SIM") == "" {
+		if session.isAuto() && capture.ScrollSupported() && os.Getenv("PINSTILL_SELFTEST_SCROLL_SIM") == "" {
 			center := capture.Point{X: session.region.X + session.region.Width/2, Y: session.region.Y + session.region.Height/2}
 			if err := capture.ScrollWheel(center, scrollDeltaPixels); err != nil {
-				log.Printf("tupen: scroll wheel: %v", err)
+				log.Printf("pinstill: scroll wheel: %v", err)
 				session.setStatus("stopped")
 				a.emitScrollProgress(session)
 				return
@@ -340,7 +340,7 @@ func (a *App) setScrollAuto(enabled bool) error {
 		return errors.New("没有进行中的滚动截图")
 	}
 	if enabled && !capture.AccessibilityGranted() {
-		return errors.New("自动滚动需要「辅助功能」权限：请到系统设置 → 隐私与安全性 → 辅助功能中允许 Tupen")
+		return errors.New("自动滚动需要「辅助功能」权限：请到系统设置 → 隐私与安全性 → 辅助功能中允许 Pinstill")
 	}
 	if enabled && !capture.ScrollSupported() {
 		return errors.New("当前平台暂不支持自动滚动")
@@ -372,7 +372,7 @@ func (a *App) finishScroll(action string) error {
 	select {
 	case <-session.done:
 	case <-time.After(10 * time.Second):
-		log.Printf("tupen: scroll loop did not stop in time")
+		log.Printf("pinstill: scroll loop did not stop in time")
 	}
 	hideControl := func() {
 		if control != nil && !control.IsDestroyed() {

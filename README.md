@@ -1,6 +1,8 @@
-# Tupen
+# Pinstill · 钉图
 
-Tupen 是一个面向 macOS 和 Windows 的桌面截图与标注工具。它把「截取屏幕 → 在选区旁就地操作（标注 / 复制 / 贴图 / 保存）→ 把截图挂在桌面上 → 回到历史」放进同一条工作流，截图默认只保存在本机。
+**Pinstill** (n. pin + still) is a desktop screenshot and annotation tool for macOS and Windows: capture, annotate in place, and pin shots onto your desktop.
+
+Pinstill 是一个面向 macOS 和 Windows 的桌面截图与标注工具。它把「截取屏幕 → 在选区旁就地操作（标注 / 复制 / 贴图 / 保存）→ 把截图挂在桌面上 → 回到历史」放进同一条工作流，截图默认只保存在本机。
 
 桌面外壳使用 [MyGo](https://mygo.egoist.dev/)（Go + 系统 WebView，纯 Go、无 cgo），界面是设计稿演化而来的 Vite 前端。
 
@@ -15,7 +17,7 @@ Tupen 是一个面向 macOS 和 Windows 的桌面截图与标注工具。它把�
 - **主窗口编辑器**：点「进入编辑器」把带标注的合成图交给主窗口继续精修；历史截图也在这里重新编辑
 - **复制 / 导出**：一键写入剪贴板；按设置里的 PNG / JPEG、质量、文件名前缀走系统保存对话框，并默认定位到设置里的「默认保存文件夹」
 - **挂在桌面（贴图）**：始终置顶的无边框贴图窗口；拖动摆放、滚轮缩放、右下角手柄按比例缩放、⌘/Ctrl+滚轮调透明度、右键菜单（复制 / 保存 / 关闭 / 透明度 / 原始大小）、双击复制、Esc 关闭；多张各自独立摆放，**重启应用后自动恢复**（图片、位置、大小、透明度）
-- **滚动截图**：选区里点「滚动截图」后进入独立控制条模式——overlay 隐藏，你直接滚动目标窗口，Tupen 自动抓帧并按重叠拼接成长图（也可开「自动滚动」，需要 macOS「辅助功能」权限）；完成后复制 / 保存 / 贴图 / 进编辑器，长图同样进历史
+- **滚动截图**：选区里点「滚动截图」后进入独立控制条模式——overlay 隐藏，你直接滚动目标窗口，Pinstill 自动抓帧并按重叠拼接成长图（也可开「自动滚动」，需要 macOS「辅助功能」权限）；完成后复制 / 保存 / 贴图 / 进编辑器，长图同样进历史
 - **历史**：截图自动落盘、真实缩略图、点击载入编辑器、单条删除 / 清空；保留天数与容量上限生效
 - **托盘**：菜单栏常驻图标：截取区域 / 截取整个屏幕 / 固定剪贴板图片 / 显示主窗口 / 退出
 - **全局快捷键**：默认 ⌘⇧1（截取区域）、⌘⇧2（固定剪贴板图片）、⌘⇧O（提取文字，能力待接入）；可在设置里重新录制，注册失败会提示
@@ -31,33 +33,33 @@ Tupen 是一个面向 macOS 和 Windows 的桌面截图与标注工具。它把�
 
 拖选区域后，选区里就直接显示截图并浮出完整标注工具栏（截图为合成演示内容，含一枚演示标注）：
 
-![选区就地标注](outputs/tupen-overlay.jpg)
+![选区就地标注](outputs/pinstill-overlay.jpg)
 
 点「标注」进入编辑器：
 
-![编辑器](outputs/tupen-editor.jpg)
+![编辑器](outputs/pinstill-editor.jpg)
 
 把截图挂在桌面（贴图，始终置顶）：
 
-![桌面贴图](outputs/tupen-pin.jpg)
+![桌面贴图](outputs/pinstill-pin.jpg)
 
 滚动截图控制条（手动滚动抓帧拼接，可选自动滚动）：
 
-![滚动截图](outputs/tupen-scroll.jpg)
+![滚动截图](outputs/pinstill-scroll.jpg)
 
 历史：
 
-![历史](outputs/tupen-history.jpg)
+![历史](outputs/pinstill-history.jpg)
 
 偏好设置：
 
-![偏好设置](outputs/tupen-settings.jpg)
+![偏好设置](outputs/pinstill-settings.jpg)
 
-设计稿快照（交互原型，作为视觉基准保留）：[outputs/tupen-design.html](outputs/tupen-design.html)。可以在仓库根目录运行任意静态文件服务器查看：
+设计稿快照（交互原型，作为视觉基准保留）：[outputs/pinstill-design.html](outputs/pinstill-design.html)。可以在仓库根目录运行任意静态文件服务器查看：
 
 ```bash
 python3 -m http.server 8765
-# 打开 http://127.0.0.1:8765/outputs/tupen-design.html
+# 打开 http://127.0.0.1:8765/outputs/pinstill-design.html
 ```
 
 ## 开发
@@ -81,10 +83,12 @@ npm run dev
 npx mygo build
 ```
 
+构建使用 `mygo.config.ts` 里配置的 Developer ID 证书签名（应用与 dmg 都会签名），这样 macOS 的屏幕录制/辅助功能授权在重新构建后仍然有效。**当前没有做公证（notarization）**：从网上下载或在其他 Mac 上首次打开时，可能需要在「系统设置 → 隐私与安全性」里点「仍要打开」，或右键 → 打开。
+
 ### 结构
 
 ```
-cmd/tupen/main.go            桌面入口：单实例、绑定服务、窗口与托盘生命周期
+cmd/pinstill/main.go            桌面入口：单实例、绑定服务、窗口与托盘生命周期
 internal/app/                编排层：截图流程、绑定服务、事件、托盘、快捷键、设置、自检
 internal/capture/            平台截图后端（macOS screencapture / Windows GDI）+ 权限 + 选择框几何
 internal/store/              历史持久化：PNG + 缩略图 + index.json + 保留策略
@@ -105,16 +109,17 @@ bash work/e2e.sh            # 完整构建 + 全部自检
 bash work/e2e.sh --skip-build   # 用现有构建产物只跑自检
 ```
 
-脚本会依次跑 Go 测试 / vet / Windows 交叉编译、前端与桌面构建，以及 16 项应用级自检（真实退出、真实截图+历史+剪贴板、overlay 渲染、选区映射像素级对比、Esc 取消、**就地标注全流程 copy/pin/editor/cancel + afterCapture 自动动作**、**桌面贴图交互（双击/菜单/滚轮/关闭）**、**贴图重启恢复**、**滚动截图拼接与页面全流程**、编辑器交付、编辑器内动作、主窗口视图、贴图窗口、全局快捷键注册、设置应用）。自检通过环境变量驱动（`TUPEN_SELFTEST=quit|capture|overlay|drag|esc|flow|pinpersist-setup|pinpersist-check|scroll|scrollflow|deliver|uiactions|uicapture|pin|history|hotkeys|settings|showcase|scrollshot|demo|hold`），产物与日志在 `/tmp/tupen-selftest-*`。
+脚本会依次跑 Go 测试 / vet / Windows 交叉编译、前端与桌面构建，以及 16 项应用级自检（真实退出、真实截图+历史+剪贴板、overlay 渲染、选区映射像素级对比、Esc 取消、**就地标注全流程 copy/pin/editor/cancel + afterCapture 自动动作**、**桌面贴图交互（双击/菜单/滚轮/关闭）**、**贴图重启恢复**、**滚动截图拼接与页面全流程**、编辑器交付、编辑器内动作、主窗口视图、贴图窗口、全局快捷键注册、设置应用）。自检通过环境变量驱动（`PINSTILL_SELFTEST=quit|capture|overlay|drag|esc|flow|pinpersist-setup|pinpersist-check|scroll|scrollflow|deliver|uiactions|uicapture|pin|history|hotkeys|settings|showcase|scrollshot|demo|hold`），产物与日志在 `/tmp/pinstill-selftest-*`。
 
 ### 数据与权限
 
-- 历史目录：`~/Library/Application Support/Tupen/captures/`（PNG + `*.thumb.jpg` + `index.json`）
-- 桌面贴图：`~/Library/Application Support/Tupen/pins/`（`<id>.png` + `pins.json`，重启后按此恢复）
-- 当前会话缓存：`~/Library/Caches/Tupen/session/`（应用启动时清空）
+- 历史目录：`~/Library/Application Support/Pinstill/captures/`（PNG + `*.thumb.jpg` + `index.json`）
+- 桌面贴图：`~/Library/Application Support/Pinstill/pins/`（`<id>.png` + `pins.json`，重启后按此恢复）
+- 当前会话缓存：`~/Library/Caches/Pinstill/session/`（应用启动时清空）
 - 页面通过内部自定义协议 `shot://localhost/...` 读取这些图片，不经过网络
 - 首次截图需要「屏幕录制」权限：系统设置 → 隐私与安全性 → 屏幕录制；权限缺失时应用会提示并可直接跳转设置页
-- 开发/自检可用 `TUPEN_DATA_DIR=/tmp/tupen-data` 把 captures、pins、session 全部隔离到指定目录（默认行为不变；生成 README 截图的 `TUPEN_SELFTEST=showcase` 强制要求设置该变量，避免读到真实历史）
+- 开发/自检可用 `PINSTILL_DATA_DIR=/tmp/pinstill-data` 把 captures、pins、session 全部隔离到指定目录（默认行为不变；生成 README 截图的 `PINSTILL_SELFTEST=showcase` 强制要求设置该变量，避免读到真实历史）
+- 旧名 **Tupen** 的历史数据会在首次启动新版本时自动迁移：`Application Support/Tupen → Application Support/Pinstill`、`Caches/Tupen → Caches/Pinstill`，以及 WebKit 的 `dev.echovic.tupen → dev.echovic.pinstill`；bundle id 变更后，系统「屏幕录制」权限需要重新授权一次
 
 ## 已知限制
 

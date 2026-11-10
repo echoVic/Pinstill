@@ -24,8 +24,8 @@ func TestNormalizeSettingsDefaults(t *testing.T) {
 		AfterCapture:   "inplace",
 		Format:         "PNG",
 		Quality:        10,
-		FilenamePrefix: "Tupen",
-		Folder:         "~/Pictures/Tupen",
+		FilenamePrefix: "Pinstill",
+		Folder:         "~/Pictures/Pinstill",
 		PinOpacity:     100,
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -232,14 +232,14 @@ func TestNormalizeSettingsFilenamesAndFolders(t *testing.T) {
 		{
 			name:       "empty prefix and folder get defaults",
 			mutate:     func(s *Settings) { s.FilenamePrefix = ""; s.Folder = "" },
-			wantPrefix: "Tupen",
-			wantFolder: "~/Pictures/Tupen",
+			wantPrefix: "Pinstill",
+			wantFolder: "~/Pictures/Pinstill",
 		},
 		{
 			name:       "whitespace prefix and folder get defaults",
 			mutate:     func(s *Settings) { s.FilenamePrefix = "  "; s.Folder = "\t " },
-			wantPrefix: "Tupen",
-			wantFolder: "~/Pictures/Tupen",
+			wantPrefix: "Pinstill",
+			wantFolder: "~/Pictures/Pinstill",
 		},
 		{
 			name:       "custom values are kept",
@@ -571,28 +571,28 @@ func TestSanitizeExportName(t *testing.T) {
 			name:      "extension-only suggested name falls back to prefix",
 			suggested: ".png",
 			settings:  DefaultSettings(),
-			dated:     "Tupen",
+			dated:     "Pinstill",
 		},
 		{
 			name:     "empty suggested name uses default prefix",
 			settings: DefaultSettings(),
-			dated:    "Tupen",
+			dated:    "Pinstill",
 		},
 		{
 			name:      "blank suggested name uses default prefix",
 			suggested: "   ",
 			settings:  DefaultSettings(),
-			dated:     "Tupen",
+			dated:     "Pinstill",
 		},
 		{
-			name:     "empty prefix falls back to Tupen",
+			name:     "empty prefix falls back to Pinstill",
 			settings: gnSettings(func(s *Settings) { s.FilenamePrefix = "" }),
-			dated:    "Tupen",
+			dated:    "Pinstill",
 		},
 		{
-			name:     "whitespace prefix falls back to Tupen",
+			name:     "whitespace prefix falls back to Pinstill",
 			settings: gnSettings(func(s *Settings) { s.FilenamePrefix = "   " }),
-			dated:    "Tupen",
+			dated:    "Pinstill",
 		},
 		{
 			name:     "forbidden prefix characters become dashes",

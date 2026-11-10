@@ -1,4 +1,4 @@
-// Package store persists Tupen screenshots and their thumbnails in a single
+// Package store persists Pinstill screenshots and their thumbnails in a single
 // directory: <id>.png for the original, <id>.thumb.jpg for the thumbnail, and
 // index.json as the history index (newest first).
 package store

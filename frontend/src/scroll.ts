@@ -133,7 +133,7 @@ function renderHint(): void {
   } else if (auto) {
     hint.textContent = "自动滚动中…（可关闭开关或直接完成）";
   } else {
-    hint.textContent = "请滚动目标窗口，Tupen 会自动抓帧";
+    hint.textContent = "请滚动目标窗口，Pinstill 会自动抓帧";
   }
 }
 
@@ -233,7 +233,7 @@ permissionButton.addEventListener("click", async () => {
   } catch {
     // The dialog may still open; keep the guidance visible.
   }
-  showNotice("已打开系统设置，请为 Tupen 勾选「辅助功能」");
+  showNotice("已打开系统设置，请为 Pinstill 勾选「辅助功能」");
   window.setTimeout(async () => {
     const granted = await scrollAccessibilityGranted().catch(() => false);
     accessibilityGranted = granted;

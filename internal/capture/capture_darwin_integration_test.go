@@ -91,7 +91,7 @@ func countCaptureTempFiles(t *testing.T) int {
 	}
 	count := 0
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), "tupen-capture-") {
+		if strings.HasPrefix(entry.Name(), "pinstill-capture-") {
 			count++
 		}
 	}

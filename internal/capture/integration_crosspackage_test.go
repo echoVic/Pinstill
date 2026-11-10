@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/echoVic/Tupen/internal/store"
+	"github.com/echoVic/Pinstill/internal/store"
 )
 
 // TestIntegrationCaptureThenStore captures a real region and persists it in a

@@ -1,4 +1,4 @@
-// Small browser helpers shared by the Tupen pages. Nothing here talks to Go:
+// Small browser helpers shared by the Pinstill pages. Nothing here talks to Go:
 // native calls live in bridge.ts only.
 
 /** Encodes bytes as plain base64, without the `data:` prefix. */

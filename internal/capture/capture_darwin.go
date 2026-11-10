@@ -40,7 +40,7 @@ func CaptureRegion(rect Rect, opts CaptureOptions) ([]byte, error) {
 	}
 	sleepBeforeCapture(opts)
 
-	tmp, err := os.CreateTemp("", "tupen-capture-*.png")
+	tmp, err := os.CreateTemp("", "pinstill-capture-*.png")
 	if err != nil {
 		return nil, fmt.Errorf("capture: create temp file: %w", err)
 	}
@@ -104,6 +104,37 @@ func PermissionGranted() bool {
 		return true
 	}
 	return preflightFn()
+}
+
+var (
+	requestOnce sync.Once
+	requestFn   func() bool
+)
+
+// RequestPermission asks macOS for screen recording access. When the user has
+// not answered before, macOS shows the system prompt for this app. It returns
+// whether access is granted afterwards.
+func RequestPermission() bool {
+	if PermissionGranted() {
+		return true
+	}
+	requestOnce.Do(func() {
+		lib, err := purego.Dlopen(coreGraphicsFrameworkPath, purego.RTLD_LAZY|purego.RTLD_LOCAL)
+		if err != nil {
+			return
+		}
+		symbol, err := purego.Dlsym(lib, "CGRequestScreenCaptureAccess")
+		if err != nil || symbol == 0 {
+			return
+		}
+		var fn func() bool
+		purego.RegisterFunc(&fn, symbol)
+		requestFn = fn
+	})
+	if requestFn == nil {
+		return false
+	}
+	return requestFn()
 }
 
 // OpenPermissionSettings opens System Settings > Privacy & Security > Screen

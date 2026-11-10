@@ -10,7 +10,7 @@ import (
 )
 
 func TestDecodeImageBase64(t *testing.T) {
-	payload := []byte("hello tupen")
+	payload := []byte("hello pinstill")
 	encoded := base64.StdEncoding.EncodeToString(payload)
 	wrapped := encoded[:4] + "\n" + encoded[4:]
 
@@ -84,14 +84,14 @@ func TestExpandHome(t *testing.T) {
 		input string
 		want  string
 	}{
-		{name: "empty falls back to Pictures/Tupen", input: "", want: filepath.Join(home, "Pictures", "Tupen")},
+		{name: "empty falls back to Pictures/Pinstill", input: "", want: filepath.Join(home, "Pictures", "Pinstill")},
 		{name: "tilde", input: "~", want: home},
 		{name: "tilde slash", input: "~/", want: home},
-		{name: "tilde subdirectory", input: "~/Pictures/Tupen", want: filepath.Join(home, "Pictures", "Tupen")},
+		{name: "tilde subdirectory", input: "~/Pictures/Pinstill", want: filepath.Join(home, "Pictures", "Pinstill")},
 		{name: "tilded name is not expanded", input: "~foo", want: "~foo"},
-		{name: "absolute path", input: "/tmp/tupen", want: "/tmp/tupen"},
-		{name: "absolute path is trimmed", input: "  /tmp/tupen  ", want: "/tmp/tupen"},
-		{name: "relative path", input: "Pictures/Tupen", want: "Pictures/Tupen"},
+		{name: "absolute path", input: "/tmp/pinstill", want: "/tmp/pinstill"},
+		{name: "absolute path is trimmed", input: "  /tmp/pinstill  ", want: "/tmp/pinstill"},
+		{name: "relative path", input: "Pictures/Pinstill", want: "Pictures/Pinstill"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -108,7 +108,7 @@ func TestExpandHome(t *testing.T) {
 
 func TestUniquePath(t *testing.T) {
 	dir := t.TempDir()
-	base := filepath.Join(dir, "Tupen-2026-11-09.png")
+	base := filepath.Join(dir, "Pinstill-2026-11-09.png")
 
 	if got := uniquePath(base); got != base {
 		t.Fatalf("uniquePath(unused) = %q, want %q", got, base)
@@ -116,23 +116,23 @@ func TestUniquePath(t *testing.T) {
 	if err := os.WriteFile(base, []byte("x"), 0o644); err != nil {
 		t.Fatalf("os.WriteFile() error = %v", err)
 	}
-	second := filepath.Join(dir, "Tupen-2026-11-09-2.png")
+	second := filepath.Join(dir, "Pinstill-2026-11-09-2.png")
 	if got := uniquePath(base); got != second {
 		t.Fatalf("uniquePath(existing) = %q, want %q", got, second)
 	}
 	if err := os.WriteFile(second, []byte("x"), 0o644); err != nil {
 		t.Fatalf("os.WriteFile() error = %v", err)
 	}
-	third := filepath.Join(dir, "Tupen-2026-11-09-3.png")
+	third := filepath.Join(dir, "Pinstill-2026-11-09-3.png")
 	if got := uniquePath(base); got != third {
 		t.Fatalf("uniquePath(existing twice) = %q, want %q", got, third)
 	}
 
-	noExtension := filepath.Join(dir, "Tupen")
+	noExtension := filepath.Join(dir, "Pinstill")
 	if err := os.WriteFile(noExtension, []byte("x"), 0o644); err != nil {
 		t.Fatalf("os.WriteFile() error = %v", err)
 	}
-	if got, want := uniquePath(noExtension), filepath.Join(dir, "Tupen-2"); got != want {
+	if got, want := uniquePath(noExtension), filepath.Join(dir, "Pinstill-2"); got != want {
 		t.Fatalf("uniquePath(no extension) = %q, want %q", got, want)
 	}
 }

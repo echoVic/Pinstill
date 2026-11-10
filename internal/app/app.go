@@ -14,9 +14,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/echoVic/Tupen/internal/capture"
-	"github.com/echoVic/Tupen/internal/pin"
-	"github.com/echoVic/Tupen/internal/store"
+	"github.com/echoVic/Pinstill/internal/capture"
+	"github.com/echoVic/Pinstill/internal/pin"
+	"github.com/echoVic/Pinstill/internal/store"
 	"github.com/egoist/mygo"
 )
 
@@ -74,7 +74,7 @@ func (a *App) Bind() {
 // App.WhenReady.
 func (a *App) Start() {
 	if err := a.initStorage(); err != nil {
-		log.Printf("tupen: storage: %v", err)
+		log.Printf("pinstill: storage: %v", err)
 	}
 	a.registerProtocol()
 	a.createOverlay()
@@ -83,7 +83,7 @@ func (a *App) Start() {
 	a.setMenu()
 	a.createTray()
 	if errs := a.registerShortcuts(DefaultSettings()); len(errs) > 0 {
-		log.Printf("tupen: default shortcuts: %v", errs)
+		log.Printf("pinstill: default shortcuts: %v", errs)
 	}
 	a.restorePins()
 	// History pruning waits for ApplySettings: the page owns the user's
@@ -109,7 +109,7 @@ func (a *App) Start() {
 			a.showMain()
 		}
 	})
-	if mode := os.Getenv("TUPEN_SELFTEST"); mode != "" {
+	if mode := os.Getenv("PINSTILL_SELFTEST"); mode != "" {
 		go a.runSelfTest(mode)
 	}
 }
@@ -128,7 +128,7 @@ func (a *App) initStorage() error {
 	}
 	// Development and the screenshot selftests can point every store at an
 	// isolated directory, so they never read or write the user's captures.
-	if dir := strings.TrimSpace(os.Getenv("TUPEN_DATA_DIR")); dir != "" {
+	if dir := strings.TrimSpace(os.Getenv("PINSTILL_DATA_DIR")); dir != "" {
 		userData = dir
 		cacheDir = dir
 	}
@@ -150,12 +150,12 @@ func (a *App) initStorage() error {
 	}
 	// A failed store only disables its feature: the app keeps capturing.
 	if st, err := store.Open(a.historyDir); err != nil {
-		log.Printf("tupen: history store: %v", err)
+		log.Printf("pinstill: history store: %v", err)
 	} else {
 		a.store = st
 	}
 	if pinStore, err := pin.Open(filepath.Join(userData, "pins")); err != nil {
-		log.Printf("tupen: pin store: %v", err)
+		log.Printf("pinstill: pin store: %v", err)
 	} else {
 		a.pinStore = pinStore
 	}
@@ -180,7 +180,7 @@ func (a *App) registerProtocol() {
 		mux.Handle("/p/", http.StripPrefix("/p/", imagesOnly(mygo.FileServer(os.DirFS(a.pinStore.Dir())))))
 	}
 	if err := mygo.Protocol.Handle("shot", mux); err != nil {
-		log.Printf("tupen: protocol: %v", err)
+		log.Printf("pinstill: protocol: %v", err)
 	}
 }
 
@@ -200,7 +200,7 @@ func imagesOnly(next http.Handler) http.Handler {
 
 func (a *App) createMainWindow() {
 	win := mygo.NewWindow(mygo.WindowOptions{
-		Title:           "Tupen",
+		Title:           "Pinstill",
 		Width:           1360,
 		Height:          880,
 		MinWidth:        820,
@@ -227,7 +227,7 @@ func (a *App) createMainWindow() {
 
 func (a *App) createOverlay() {
 	win := mygo.NewWindow(mygo.WindowOptions{
-		Title:             "Tupen 选区",
+		Title:             "Pinstill 选区",
 		Width:             960,
 		Height:            600,
 		Hidden:            true,
@@ -273,14 +273,14 @@ func (a *App) createTray() {
 		{Role: mygo.RoleQuit},
 	})
 	tray, err := mygo.NewTray(mygo.TrayOptions{
-		ID:             "tupen",
+		ID:             "pinstill",
 		Icon:           trayIconPNG(),
 		IconIsTemplate: true,
-		ToolTip:        "Tupen 截图与标注",
+		ToolTip:        "Pinstill 截图与标注",
 		Menu:           menu,
 	})
 	if err != nil {
-		log.Printf("tupen: tray: %v", err)
+		log.Printf("pinstill: tray: %v", err)
 		return
 	}
 	a.mu.Lock()
@@ -372,7 +372,7 @@ func (a *App) applySettings(s Settings) map[string]string {
 		if err := mygo.App.SetOpenAtLogin(s.LaunchAtLogin); err != nil && s.LaunchAtLogin {
 			errs["launchAtLogin"] = err.Error()
 		} else if err != nil {
-			log.Printf("tupen: disable login item: %v", err)
+			log.Printf("pinstill: disable login item: %v", err)
 		}
 	}
 	a.mu.Lock()
@@ -382,7 +382,7 @@ func (a *App) applySettings(s Settings) map[string]string {
 		a.pruneHistory()
 	} else if a.store != nil {
 		if err := a.store.Clear(); err != nil {
-			log.Printf("tupen: clear history: %v", err)
+			log.Printf("pinstill: clear history: %v", err)
 		}
 		a.emitHistoryChanged()
 	}
@@ -399,7 +399,7 @@ func (a *App) pruneHistory() {
 	}
 	limit := int64(s.HistoryLimitMB) * 1024 * 1024
 	if _, err := a.store.Prune(s.RetentionDays, limit); err != nil {
-		log.Printf("tupen: prune history: %v", err)
+		log.Printf("pinstill: prune history: %v", err)
 	}
 }
 
@@ -629,12 +629,12 @@ func (a *App) captureAction(region capture.Rect, action string) {
 // captureRegion wraps the native capture. Selftests can run without the
 // screen recording permission by asking for a generated image instead.
 func (a *App) captureRegion(region capture.Rect, opts capture.CaptureOptions) ([]byte, error) {
-	if os.Getenv("TUPEN_SELFTEST_SCROLL_SIM") != "" {
+	if os.Getenv("PINSTILL_SELFTEST_SCROLL_SIM") != "" {
 		if pngBytes := simulatedScrollFrame(); len(pngBytes) > 0 {
 			return pngBytes, nil
 		}
 	}
-	if os.Getenv("TUPEN_SELFTEST_FAKE_CAPTURE") != "" {
+	if os.Getenv("PINSTILL_SELFTEST_FAKE_CAPTURE") != "" {
 		if pngBytes := syntheticScreenshot(); len(pngBytes) > 0 {
 			return pngBytes, nil
 		}
@@ -721,7 +721,7 @@ func (a *App) failSelection(err error, permission bool) {
 		message = err.Error()
 	}
 	if permission {
-		message = "截图内容为空，可能缺少屏幕录制权限。请在系统设置 → 隐私与安全性 → 屏幕录制中允许 Tupen"
+		message = "截图内容为空，可能缺少屏幕录制权限。请在系统设置 → 隐私与安全性 → 屏幕录制中允许 Pinstill"
 	}
 	a.mu.Lock()
 	a.capturing = false
@@ -757,7 +757,7 @@ func (a *App) finishAnnotated(action string, dataBase64 string) error {
 	}
 	raw, err := decodeImageBase64(dataBase64)
 	if err != nil {
-		log.Printf("tupen: finishAnnotated %s: bad base64 (%d chars): %v", action, len(dataBase64), err)
+		log.Printf("pinstill: finishAnnotated %s: bad base64 (%d chars): %v", action, len(dataBase64), err)
 		reset()
 		a.toast("标注数据无法解码: "+err.Error(), "error")
 		return err
@@ -861,7 +861,7 @@ func (a *App) storeCapture(pngBytes []byte, source string) (CaptureCompletedPayl
 	}
 	if s.KeepHistory && a.store != nil {
 		if entry, err := a.store.Save(pngBytes, time.Now()); err != nil {
-			log.Printf("tupen: save history: %v", err)
+			log.Printf("pinstill: save history: %v", err)
 		} else {
 			payload.HistoryID = entry.ID
 			payload.ThumbURL = a.shotURL("/h/" + entry.Thumb)
@@ -884,7 +884,7 @@ func (a *App) failCapture(err error, permission bool) {
 		message = err.Error()
 	}
 	if permission {
-		message += "。请在系统设置中允许 Tupen 录制屏幕"
+		message += "。请在系统设置中允许 Pinstill 录制屏幕"
 	}
 	a.showMain()
 	a.mu.Lock()

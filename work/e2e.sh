@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# End-to-end verification for Tupen (macOS).
+# End-to-end verification for Pinstill (macOS).
 #
 # Usage: bash work/e2e.sh [--skip-build]
-# Produces selftest artifacts in /tmp/tupen-selftest-*.png and logs in
-# /tmp/tupen-selftest-*.log.
+# Produces selftest artifacts in /tmp/pinstill-selftest-*.png and logs in
+# /tmp/pinstill-selftest-*.log.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -51,8 +51,8 @@ if [ "${1:-}" = "--skip-build" ]; then
   skip_build=1
 fi
 
-# One instance only: a running Tupen would swallow the selftest launches.
-pkill -f 'Tupen.app/Contents/MacOS/Tupen' >/dev/null 2>&1 || true
+# One instance only: a running Pinstill would swallow the selftest launches.
+pkill -f 'Pinstill.app/Contents/MacOS/Pinstill' >/dev/null 2>&1 || true
 
 step "Go tests"
 GOTOOLCHAIN=auto go test ./... || fail=1
@@ -71,14 +71,14 @@ if [ "$skip_build" -eq 0 ]; then
   ./node_modules/.bin/mygo build || fail=1
 fi
 
-APP="build/darwin-arm64/Tupen.app/Contents/MacOS/Tupen"
+APP="build/darwin-arm64/Pinstill.app/Contents/MacOS/Pinstill"
 if [ ! -x "$APP" ]; then
   echo "missing build output: $APP"
   exit 1
 fi
 
 step "Selftest: real quit path"
-TUPEN_SELFTEST=quit "$APP" > /tmp/tupen-selftest-quit.log 2>&1 &
+PINSTILL_SELFTEST=quit "$APP" > /tmp/pinstill-selftest-quit.log 2>&1 &
 qpid=$!
 for _ in $(seq 1 30); do
   if ! kill -0 "$qpid" 2>/dev/null; then break; fi
@@ -96,56 +96,56 @@ else
     fail=1
   fi
 fi
-cat /tmp/tupen-selftest-quit.log
-expect 'quit sequence finished' /tmp/tupen-selftest-quit.log
+cat /tmp/pinstill-selftest-quit.log
+expect 'quit sequence finished' /tmp/pinstill-selftest-quit.log
 
 step "Selftest: native capture, history and clipboard"
-TUPEN_SELFTEST=capture "$APP" 2>&1 | tee /tmp/tupen-selftest-capture.log
+PINSTILL_SELFTEST=capture "$APP" 2>&1 | tee /tmp/pinstill-selftest-capture.log
 sleep 1.0
-expect 'SELFTEST capture: ok' /tmp/tupen-selftest-capture.log
-expect 'SELFTEST capture: clipboard ok' /tmp/tupen-selftest-capture.log
-expect 'SELFTEST capture: history entry' /tmp/tupen-selftest-capture.log
+expect 'SELFTEST capture: ok' /tmp/pinstill-selftest-capture.log
+expect 'SELFTEST capture: clipboard ok' /tmp/pinstill-selftest-capture.log
+expect 'SELFTEST capture: history entry' /tmp/pinstill-selftest-capture.log
 
 step "Selftest: overlay rendering"
-TUPEN_SELFTEST=overlay "$APP" 2>&1 | tee /tmp/tupen-selftest-overlay.log
+PINSTILL_SELFTEST=overlay "$APP" 2>&1 | tee /tmp/pinstill-selftest-overlay.log
 sleep 1.0
-expect 'SELFTEST overlay: ok' /tmp/tupen-selftest-overlay.log
+expect 'SELFTEST overlay: ok' /tmp/pinstill-selftest-overlay.log
 
 step "Selftest: overlay selection mapping"
-TUPEN_SELFTEST=drag "$APP" 2>&1 | tee /tmp/tupen-selftest-drag.log
+PINSTILL_SELFTEST=drag "$APP" 2>&1 | tee /tmp/pinstill-selftest-drag.log
 sleep 1.0
-expect 'SELFTEST drag: delivered' /tmp/tupen-selftest-drag.log
-expect 'same=true' /tmp/tupen-selftest-drag.log
-expect 'editor canvas=' /tmp/tupen-selftest-drag.log
+expect 'SELFTEST drag: delivered' /tmp/pinstill-selftest-drag.log
+expect 'same=true' /tmp/pinstill-selftest-drag.log
+expect 'editor canvas=' /tmp/pinstill-selftest-drag.log
 
 step "Selftest: escape cancels the overlay"
-TUPEN_SELFTEST=esc "$APP" 2>&1 | tee /tmp/tupen-selftest-esc.log
+PINSTILL_SELFTEST=esc "$APP" 2>&1 | tee /tmp/pinstill-selftest-esc.log
 sleep 1.0
-expect 'overlay visible=false' /tmp/tupen-selftest-esc.log
-expect 'main visible=true' /tmp/tupen-selftest-esc.log
+expect 'overlay visible=false' /tmp/pinstill-selftest-esc.log
+expect 'main visible=true' /tmp/pinstill-selftest-esc.log
 
 step "Selftest: desktop action flow (drag + toolbar)"
-TUPEN_SELFTEST=flow "$APP" 2>&1 | tee /tmp/tupen-selftest-flow.log
+PINSTILL_SELFTEST=flow "$APP" 2>&1 | tee /tmp/pinstill-selftest-flow.log
 sleep 1.0
-expect 'SELFTEST flow: copy clipboard' /tmp/tupen-selftest-flow.log
-grep -q 'SELFTEST flow: copy clipboard EMPTY' /tmp/tupen-selftest-flow.log && fail=1
-expect 'SELFTEST flow: pin pins=1' /tmp/tupen-selftest-flow.log
-expect 'SELFTEST flow: annotate editor canvas=' /tmp/tupen-selftest-flow.log
-expect 'SELFTEST flow: cancel history before=.* after=' /tmp/tupen-selftest-flow.log
-expect 'SELFTEST flow: auto clipboard ' /tmp/tupen-selftest-flow.log
+expect 'SELFTEST flow: copy clipboard' /tmp/pinstill-selftest-flow.log
+grep -q 'SELFTEST flow: copy clipboard EMPTY' /tmp/pinstill-selftest-flow.log && fail=1
+expect 'SELFTEST flow: pin pins=1' /tmp/pinstill-selftest-flow.log
+expect 'SELFTEST flow: annotate editor canvas=' /tmp/pinstill-selftest-flow.log
+expect 'SELFTEST flow: cancel history before=.* after=' /tmp/pinstill-selftest-flow.log
+expect 'SELFTEST flow: auto clipboard ' /tmp/pinstill-selftest-flow.log
 
 step "Selftest: desktop pin interactions"
-TUPEN_SELFTEST=pinui "$APP" 2>&1 | tee /tmp/tupen-selftest-pinui.log
+PINSTILL_SELFTEST=pinui "$APP" 2>&1 | tee /tmp/pinstill-selftest-pinui.log
 sleep 1.0
-expect 'SELFTEST pinui: dblclick clipboard ' /tmp/tupen-selftest-pinui.log
-expect 'SELFTEST pinui: bounds unchanged=true' /tmp/tupen-selftest-pinui.log
-expect 'SELFTEST pinui: menu copy=clicked' /tmp/tupen-selftest-pinui.log
-expect 'SELFTEST pinui: opacity before=100 after=90' /tmp/tupen-selftest-pinui.log
-expect 'SELFTEST pinui: wheel bounds=.* scaled=true' /tmp/tupen-selftest-pinui.log
-expect 'SELFTEST pinui: after close pins=0 stored=0' /tmp/tupen-selftest-pinui.log
+expect 'SELFTEST pinui: dblclick clipboard ' /tmp/pinstill-selftest-pinui.log
+expect 'SELFTEST pinui: bounds unchanged=true' /tmp/pinstill-selftest-pinui.log
+expect 'SELFTEST pinui: menu copy=clicked' /tmp/pinstill-selftest-pinui.log
+expect 'SELFTEST pinui: opacity before=100 after=90' /tmp/pinstill-selftest-pinui.log
+expect 'SELFTEST pinui: wheel bounds=.* scaled=true' /tmp/pinstill-selftest-pinui.log
+expect 'SELFTEST pinui: after close pins=0 stored=0' /tmp/pinstill-selftest-pinui.log
 
 step "Selftest: desktop pin persistence"
-TUPEN_SELFTEST=pinpersist-setup "$APP" > /tmp/tupen-selftest-pinpersist-setup.log 2>&1 &
+PINSTILL_SELFTEST=pinpersist-setup "$APP" > /tmp/pinstill-selftest-pinpersist-setup.log 2>&1 &
 sleep 0.3
 ppid_setup=$!
 for _ in $(seq 1 30); do
@@ -158,64 +158,64 @@ if kill -0 "$ppid_setup" 2>/dev/null; then
   fail=1
 fi
 wait "$ppid_setup" 2>/dev/null
-cat /tmp/tupen-selftest-pinpersist-setup.log
-expect 'SELFTEST pinpersist: setup created' /tmp/tupen-selftest-pinpersist-setup.log
-TUPEN_SELFTEST=pinpersist-check "$APP" 2>&1 | tee /tmp/tupen-selftest-pinpersist-check.log
+cat /tmp/pinstill-selftest-pinpersist-setup.log
+expect 'SELFTEST pinpersist: setup created' /tmp/pinstill-selftest-pinpersist-setup.log
+PINSTILL_SELFTEST=pinpersist-check "$APP" 2>&1 | tee /tmp/pinstill-selftest-pinpersist-check.log
 sleep 1.0
-expect 'SELFTEST pinpersist: check restored=[1-9]' /tmp/tupen-selftest-pinpersist-check.log
-expect 'SELFTEST pinpersist: check after close stored=0' /tmp/tupen-selftest-pinpersist-check.log
+expect 'SELFTEST pinpersist: check restored=[1-9]' /tmp/pinstill-selftest-pinpersist-check.log
+expect 'SELFTEST pinpersist: check after close stored=0' /tmp/pinstill-selftest-pinpersist-check.log
 
 step "Selftest: scrolling capture"
-TUPEN_SELFTEST=scroll TUPEN_SELFTEST_SCROLL_SIM=1 "$APP" 2>&1 | tee /tmp/tupen-selftest-scroll.log
+PINSTILL_SELFTEST=scroll PINSTILL_SELFTEST_SCROLL_SIM=1 "$APP" 2>&1 | tee /tmp/pinstill-selftest-scroll.log
 sleep 1.0
-expect 'SELFTEST scroll: frames=' /tmp/tupen-selftest-scroll.log
-expect 'SELFTEST scroll: editor=1280x' /tmp/tupen-selftest-scroll.log
-grep -q 'SELFTEST scroll: auto denied ok' /tmp/tupen-selftest-scroll.log || grep -q 'SELFTEST scroll: auto start err=' /tmp/tupen-selftest-scroll.log || { echo "FAIL  scroll accessibility check missing"; fail=1; }
+expect 'SELFTEST scroll: frames=' /tmp/pinstill-selftest-scroll.log
+expect 'SELFTEST scroll: editor=1280x' /tmp/pinstill-selftest-scroll.log
+grep -q 'SELFTEST scroll: auto denied ok' /tmp/pinstill-selftest-scroll.log || grep -q 'SELFTEST scroll: auto start err=' /tmp/pinstill-selftest-scroll.log || { echo "FAIL  scroll accessibility check missing"; fail=1; }
 
 step "Selftest: scrolling capture through the page"
-TUPEN_SELFTEST=scrollflow TUPEN_SELFTEST_SCROLL_SIM=1 "$APP" 2>&1 | tee /tmp/tupen-selftest-scrollflow.log
+PINSTILL_SELFTEST=scrollflow PINSTILL_SELFTEST_SCROLL_SIM=1 "$APP" 2>&1 | tee /tmp/pinstill-selftest-scrollflow.log
 sleep 1.0
-expect 'SELFTEST scrollflow: frames=' /tmp/tupen-selftest-scrollflow.log
-expect 'SELFTEST scrollflow: editor=1280x' /tmp/tupen-selftest-scrollflow.log
+expect 'SELFTEST scrollflow: frames=' /tmp/pinstill-selftest-scrollflow.log
+expect 'SELFTEST scrollflow: editor=1280x' /tmp/pinstill-selftest-scrollflow.log
 
 step "Selftest: editor delivery"
-TUPEN_SELFTEST=deliver "$APP" 2>&1 | tee /tmp/tupen-selftest-deliver.log
+PINSTILL_SELFTEST=deliver "$APP" 2>&1 | tee /tmp/pinstill-selftest-deliver.log
 sleep 1.0
-expect 'SELFTEST deliver: screenshot' /tmp/tupen-selftest-deliver.log
-expect 'editor page capture' /tmp/tupen-selftest-deliver.log
+expect 'SELFTEST deliver: screenshot' /tmp/pinstill-selftest-deliver.log
+expect 'editor page capture' /tmp/pinstill-selftest-deliver.log
 
 step "Selftest: toolbar actions through the page"
-TUPEN_SELFTEST=uiactions "$APP" 2>&1 | tee /tmp/tupen-selftest-uiactions.log
+PINSTILL_SELFTEST=uiactions "$APP" 2>&1 | tee /tmp/pinstill-selftest-uiactions.log
 sleep 1.0
-expect 'clipboard png' /tmp/tupen-selftest-uiactions.log
-expect 'pins=1' /tmp/tupen-selftest-uiactions.log
-expect 'history cards=' /tmp/tupen-selftest-uiactions.log
+expect 'clipboard png' /tmp/pinstill-selftest-uiactions.log
+expect 'pins=1' /tmp/pinstill-selftest-uiactions.log
+expect 'history cards=' /tmp/pinstill-selftest-uiactions.log
 
 step "Selftest: main window views"
-TUPEN_SELFTEST=uicapture "$APP" 2>&1 | tee /tmp/tupen-selftest-uicapture.log
+PINSTILL_SELFTEST=uicapture "$APP" 2>&1 | tee /tmp/pinstill-selftest-uicapture.log
 sleep 1.0
-expect 'rack ' /tmp/tupen-selftest-uicapture.log
-expect 'history ' /tmp/tupen-selftest-uicapture.log
-expect 'settings ' /tmp/tupen-selftest-uicapture.log
+expect 'rack ' /tmp/pinstill-selftest-uicapture.log
+expect 'history ' /tmp/pinstill-selftest-uicapture.log
+expect 'settings ' /tmp/pinstill-selftest-uicapture.log
 
 step "Selftest: pin window"
-TUPEN_SELFTEST=pin "$APP" 2>&1 | tee /tmp/tupen-selftest-pin.log
+PINSTILL_SELFTEST=pin "$APP" 2>&1 | tee /tmp/pinstill-selftest-pin.log
 sleep 1.0
-expect 'SELFTEST pin: window' /tmp/tupen-selftest-pin.log
+expect 'SELFTEST pin: window' /tmp/pinstill-selftest-pin.log
 
 step "Selftest: global shortcuts"
-TUPEN_SELFTEST=hotkeys "$APP" 2>&1 | tee /tmp/tupen-selftest-hotkeys.log
+PINSTILL_SELFTEST=hotkeys "$APP" 2>&1 | tee /tmp/pinstill-selftest-hotkeys.log
 sleep 1.0
-expect 'captureKey .* registered=true' /tmp/tupen-selftest-hotkeys.log
+expect 'captureKey .* registered=true' /tmp/pinstill-selftest-hotkeys.log
 
 step "Selftest: settings"
-TUPEN_SELFTEST=settings "$APP" 2>&1 | tee /tmp/tupen-selftest-settings.log
+PINSTILL_SELFTEST=settings "$APP" 2>&1 | tee /tmp/pinstill-selftest-settings.log
 sleep 1.0
 # apply errors are expected for launchAtLogin when the app is not in /Applications;
 # what matters is that the three shortcuts registered with the new defaults.
-expect 'SELFTEST settings: captureKey=CmdOrCtrl+Shift+1' /tmp/tupen-selftest-settings.log
-expect 'SELFTEST settings: pinKey=CmdOrCtrl+Shift+2' /tmp/tupen-selftest-settings.log
-expect 'SELFTEST settings: ocrKey=CmdOrCtrl+Shift+O' /tmp/tupen-selftest-settings.log
+expect 'SELFTEST settings: captureKey=CmdOrCtrl+Shift+1' /tmp/pinstill-selftest-settings.log
+expect 'SELFTEST settings: pinKey=CmdOrCtrl+Shift+2' /tmp/pinstill-selftest-settings.log
+expect 'SELFTEST settings: ocrKey=CmdOrCtrl+Shift+O' /tmp/pinstill-selftest-settings.log
 
 printf '\n'
 if [ "$fail" -eq 0 ]; then

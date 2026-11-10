@@ -12,6 +12,9 @@ func ScrollWheel(p Point, deltaPixels int32) error {
 	return ErrUnsupported
 }
 
+// RequestPermission is a no-op where screen capture needs no permission.
+func RequestPermission() bool { return true }
+
 // AccessibilityGranted is always true where input events need no permission.
 func AccessibilityGranted() bool { return true }
 

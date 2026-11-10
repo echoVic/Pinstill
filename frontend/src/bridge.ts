@@ -1,4 +1,4 @@
-// The single entry point for talking to the native (Go) side of Tupen.
+// The single entry point for talking to the native (Go) side of Pinstill.
 //
 // Every bound method from work/plan.md §3.3/§3.6 is wrapped here on top of the
 // untyped `mygo-runtime` API, with the exact names, arguments and return values
@@ -112,7 +112,7 @@ export interface Settings {
   /** 50..100, used for JPEG exports. */
   quality: number;
   filenamePrefix: string;
-  /** e.g. "~/Pictures/Tupen"; Go expands `~`. */
+  /** e.g. "~/Pictures/Pinstill"; Go expands `~`. */
   folder: string;
   includeCursor: boolean;
   sound: boolean;
@@ -164,7 +164,7 @@ export function exportImage(base64: string, suggestedName: string): Promise<stri
 }
 
 export function saveImageToFolder(base64: string): Promise<string> {
-  if (!hasNative) return browserDownload(base64, "Tupen.png");
+  if (!hasNative) return browserDownload(base64, "Pinstill.png");
   return call<string>("Capture.SaveImageToFolder", base64);
 }
 
@@ -266,6 +266,11 @@ export function applySettings(settings: Settings): Promise<Record<string, string
 export function permissionGranted(): Promise<boolean> {
   if (!hasNative) return Promise.resolve(true);
   return call<boolean>("Capture.PermissionGranted");
+}
+
+export function requestScreenPermission(): Promise<boolean> {
+  if (!hasNative) return Promise.resolve(true);
+  return call<boolean>("Capture.RequestScreenPermission");
 }
 
 export function openPermissionSettings(): Promise<void> {
@@ -421,8 +426,8 @@ const BROWSER_DEFAULT_SETTINGS: Settings = {
   afterCapture: "inplace",
   format: "PNG",
   quality: 90,
-  filenamePrefix: "Tupen",
-  folder: "~/Pictures/Tupen",
+  filenamePrefix: "Pinstill",
+  folder: "~/Pictures/Pinstill",
   includeCursor: false,
   sound: true,
   launchAtLogin: false,
