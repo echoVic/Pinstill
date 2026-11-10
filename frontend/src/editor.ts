@@ -8,11 +8,19 @@
 
 import {
   drawShape,
+  InlineTextEditor,
   roundRectPath,
   type Point,
   type Shape,
   type ShapeRenderStyle,
 } from "./annotate";
+import {
+  isPresetColor,
+  loadRecentColors,
+  normalizeColor,
+  PRESET_COLORS,
+  rememberColor,
+} from "./colors";
 import { drawDemoScene } from "./demo";
 import { refreshTupenIcons } from "./icons";
 import type { Preferences } from "./settings";
@@ -76,8 +84,10 @@ export class Editor {
   private draft: Shape | null = null;
   private start: Point | null = null;
   private dragged: Shape | null = null;
-  private labelNumber = 1;
   private scale = 1;
+  private inlineEditor: InlineTextEditor | null = null;
+  private recentColors: string[] = loadRecentColors();
+  private readonly customColorInput: HTMLInputElement | null;
 
   constructor(options: EditorOptions) {
     this.canvas = options.canvas;
@@ -92,6 +102,15 @@ export class Editor {
     this.captureHintEl = options.captureHint;
     this.getPreferences = options.getPreferences;
     this.actions = options.actions;
+    this.customColorInput = document.getElementById("customColor") as HTMLInputElement | null;
+    if (this.customColorInput) {
+      this.customColorInput.addEventListener("input", () => {
+        if (this.customColorInput) this.setColor(this.customColorInput.value);
+      });
+      this.customColorInput.addEventListener("change", () => {
+        if (this.customColorInput) this.setColor(this.customColorInput.value, true);
+      });
+    }
 
     this.buildToolbar();
     this.bindCanvasEvents();
@@ -112,7 +131,7 @@ export class Editor {
     this.shapes = [];
     this.draft = null;
     this.dragged = null;
-    this.labelNumber = 1;
+    this.cancelInlineEditor();
     this.applyDefaultStyle();
     this.showToolbar();
     this.hideResult();
@@ -138,7 +157,7 @@ export class Editor {
       : [];
     this.draft = null;
     this.dragged = null;
-    this.labelNumber = 2;
+    this.cancelInlineEditor();
     this.applyDefaultStyle();
     this.showToolbar();
     this.hideResult();
@@ -158,6 +177,7 @@ export class Editor {
     this.shapes = [];
     this.draft = null;
     this.dragged = null;
+    this.cancelInlineEditor();
     this.applyDefaultStyle();
     this.showToolbar();
     this.hideResult();
@@ -192,7 +212,7 @@ export class Editor {
       button.classList.toggle("active", active);
       button.setAttribute("aria-pressed", String(active));
     });
-    this.canvas.style.cursor = id === "drag" ? "move" : "crosshair";
+    this.canvas.style.cursor = id === "drag" ? "move" : id === "text" ? "text" : "crosshair";
     this.renderProperties();
   }
 
@@ -208,6 +228,7 @@ export class Editor {
 
   /** The toolbar's "取消": leave annotation mode without touching the capture. */
   exitCapture(): void {
+    this.cancelInlineEditor();
     this.toolbar.classList.add("hidden");
     this.propertiesRoot.hidden = true;
     this.hideResult();
@@ -305,6 +326,10 @@ export class Editor {
     }
     event.preventDefault();
     const point = this.coords(event);
+    if (this.current === "text" || this.current === "tag") {
+      this.openInlineText(point);
+      return;
+    }
     try {
       this.canvas.setPointerCapture(event.pointerId);
     } catch {
@@ -328,9 +353,9 @@ export class Editor {
       color: this.color,
       width: this.width,
       points: [point],
-      text: this.current === "tag" ? String(this.labelNumber++) : this.entry,
+      text: this.entry,
     };
-    if (this.current === "text" || this.current === "tag" || this.current === "watermark") {
+    if (this.current === "watermark") {
       this.shapes.push(this.draft);
       this.draft = null;
       this.start = null;
@@ -383,18 +408,7 @@ export class Editor {
       root.append(hint);
       return;
     }
-    ["#e56e48", "#efb94c", "#78a576", "#70a8c2", "#f6eee1"].forEach((swatch) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = `color-swatch${this.color === swatch ? " selected" : ""}`;
-      button.style.setProperty("--swatch", swatch);
-      button.setAttribute("aria-label", `颜色 ${swatch}`);
-      button.addEventListener("click", () => {
-        this.color = swatch;
-        this.renderProperties();
-      });
-      root.append(button);
-    });
+    this.renderColorPalette(root);
     const separator = document.createElement("span");
     separator.className = "property-sep";
     root.append(separator);
@@ -414,12 +428,11 @@ export class Editor {
     });
     label.append(range, value);
     root.append(label);
-    if (this.current === "text" || this.current === "watermark" || this.current === "tag") {
+    if (this.current === "watermark") {
       const input = document.createElement("input");
       input.type = "text";
-      input.value =
-        this.current === "tag" ? String(this.labelNumber) : this.entry;
-      input.placeholder = "输入内容";
+      input.value = this.entry;
+      input.placeholder = "输入水印文字";
       input.setAttribute("aria-label", "标注内容");
       input.addEventListener("input", () => {
         this.entry = input.value;
@@ -428,15 +441,107 @@ export class Editor {
     }
     const hint = document.createElement("span");
     hint.className = "tool-hint";
-    hint.textContent =
-      this.current === "text" || this.current === "tag" || this.current === "watermark"
-        ? "点击截图放置"
-        : "在截图上拖动绘制";
+    if (this.current === "text" || this.current === "tag") {
+      hint.textContent = "点击画布输入文字";
+    } else if (this.current === "watermark") {
+      hint.textContent = "点击截图放置";
+    } else {
+      hint.textContent = "在截图上拖动绘制";
+    }
     root.append(hint);
     if (this.current === "watermark") {
       // Keep the persisted watermark text when the tool is (re)selected.
       this.entry = prefs.watermarkText;
     }
+  }
+
+  private renderColorPalette(root: HTMLElement): void {
+    const palette = document.createElement("span");
+    palette.className = "color-palette";
+    const current = this.color.toLowerCase();
+    const custom = !isPresetColor(current) && !this.recentColors.includes(current);
+
+    for (const preset of PRESET_COLORS) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `color-swatch${preset.toLowerCase() === current ? " selected" : ""}`;
+      button.dataset.color = preset;
+      button.style.setProperty("--swatch", preset);
+      button.setAttribute("aria-label", `颜色 ${preset}`);
+      button.addEventListener("click", () => this.setColor(preset));
+      palette.append(button);
+    }
+
+    const customButton = document.createElement("button");
+    customButton.type = "button";
+    customButton.className = `color-swatch custom${custom ? " selected" : ""}`;
+    customButton.dataset.colorCustom = "true";
+    customButton.setAttribute("aria-label", "自定义颜色");
+    customButton.title = "自定义颜色";
+    customButton.addEventListener("click", () => this.customColorInput?.click());
+    palette.append(customButton);
+
+    for (const recent of this.recentColors) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `color-swatch${recent === current ? " selected" : ""}`;
+      button.dataset.colorRecent = recent;
+      button.style.setProperty("--swatch", recent);
+      button.setAttribute("aria-label", `最近使用颜色 ${recent}`);
+      button.addEventListener("click", () => this.setColor(recent));
+      palette.append(button);
+    }
+    root.append(palette);
+  }
+
+  private setColor(next: string, remember = false): void {
+    const normalized = normalizeColor(next);
+    if (!normalized) return;
+    this.color = normalized;
+    if (remember) this.recentColors = rememberColor(normalized);
+    this.renderProperties();
+  }
+
+  private openInlineText(point: Point): void {
+    if (this.inlineEditor) return;
+    const tool = this.current;
+    if (tool !== "text" && tool !== "tag") return;
+    const shapeColor = this.color;
+    const shapeWidth = this.width;
+    const displayFontSize = tool === "tag" ? 20 : shapeWidth * 3 + 16;
+    this.inlineEditor = new InlineTextEditor({
+      canvas: this.canvas,
+      point,
+      color: shapeColor,
+      displayFontSize,
+      placeholder: tool === "tag" ? "输入标签" : "输入文字",
+      singleLine: tool === "tag",
+      onSubmit: (text) => {
+        this.inlineEditor = null;
+        this.shapes.push({
+          kind: tool,
+          x: point.x,
+          y: point.y,
+          x2: point.x,
+          y2: point.y,
+          color: shapeColor,
+          width: shapeWidth,
+          text,
+        });
+        this.redraw();
+        this.notify(tool === "tag" ? "已添加标签标注" : "已添加文字标注");
+      },
+      onCancel: () => {
+        this.inlineEditor = null;
+      },
+    });
+  }
+
+  private cancelInlineEditor(): void {
+    if (!this.inlineEditor) return;
+    const editor = this.inlineEditor;
+    this.inlineEditor = null;
+    editor.cancel();
   }
 
   // ------------------------------------------------------------------ chrome

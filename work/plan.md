@@ -483,3 +483,50 @@ Windows 真机滚动、横向滚动、视频/动画内容、自动识别页内�
 - `StartScroll/FinishScroll/SetScrollAuto` 加 `scrollMu` 串行化，避免并发会话泄漏/重复收尾。
 - plan 契约数字对齐实现（120 帧 / 340ms / 420ms / 470×84）；删除未用的 stitch `ReachedEnd`；bridge 的 source 联合类型补 "scroll"。
 - 修复后：`go test ./...` 全绿；`TUPEN_SELFTEST=scroll/scrollflow` 结果不变（1280×2300 / 1280×1700）；完整 e2e 19 段 ALL CHECKS PASSED。
+
+---
+
+# Round 5：体验打磨（无闪烁截图 / 文字输入 / 调色板）（2026-11-10）
+
+用户反馈三条：
+1. 截图后闪一下不够丝滑；
+2. 文字交互要主流方式：选文字工具 → 在画面上点击定位 → 输入框出现在该位置 → 直接输入；
+3. 颜色不支持调色板。
+
+## R5.1 无闪烁截图（Lead 已实现）
+
+- `PrepareSelection` 不再隐藏/重新显示 overlay（原来 hide→capture→show 造成闪烁）。现在 overlay 保持显示：页面进入 preparing 状态时隐藏选区边框/角标等装饰，选区内部本身透明，screencapture 直接透过选区截到下方真实画面；捕获完成后页面在选区里显示截图 + 工具栏。
+- 权限失败不再弹主窗口：Go 向 overlay 发 `capture:failed`（permission=true），overlay 停留并显示权限引导（打开系统设置/重试/取消）。
+- 实测：flow selftest 通过；捕获的 session 图片为真实屏幕内容（尺寸 640×420、亮度 std≈24），无 overlay 装饰。
+
+## R5.2 文字工具交互（前端）
+
+- 选中「文字」工具后，在选区/画布上点击 → 在该位置出现输入框（textarea，自动聚焦，位置随缩放正确换算）→ 输入内容 → Enter 确认 / Shift+Enter 换行 / Esc 取消 / 失焦确认；空内容不创建。
+- 标签工具同样支持点击位置输入标签文字（默认标签图标样式）。
+- 主窗口编辑器与 overlay 标注引擎行为一致（保持相同手感）。
+- 兼容键盘输入法（composition 事件期间 Enter 不提交）。
+
+## R5.3 调色板（前端）
+
+- overlay 工具栏与主编辑器属性条都支持：
+  - 预设色板（现有 5 色基础上可扩到 8 色）；
+  - 「自定义颜色」按钮打开系统取色器（`<input type="color">`，隐藏触发），选择后加入最近使用颜色（最近 3~5 个，持久化在 localStorage）；
+  - 当前颜色有选中态，自定义颜色也可被画笔/形状/文字复用。
+- 水印透明度等属性不变。
+
+## R5.4 验证
+
+- flow/annotate 的 e2e 仍全绿；新增 selftest 不涉及（前端交互由 fake-native headless 验证）。
+- 视觉/交互证据：overlay 点击文字位置出输入框、取色器选色后绘制颜色生效；build:web 四页通过。
+
+## R5.5 非目标
+
+富文本/字体选择、旋转文字、多文本框同时编辑、贴图内标注。
+
+## R5.6 实测结论（Lead，2026-11-10）
+
+- 无闪烁截图：`PrepareSelection` 改为保持 overlay 显示、透过透明选区直接截屏（90ms 等待页面隐藏装饰），flow selftest 全过；session 截图统计为真实屏幕内容（亮度 std≈24，无 overlay 装饰），不再 hide/show 闪烁。
+- 权限失败不再弹主窗口：Go 向 overlay 发 `capture:failed`，overlay 原地显示权限引导（打开设置/重试/取消）；前端 headless 验证通过。
+- 文字/标签：点击画布内联输入框（定位/聚焦/Enter/Shift+Enter/Esc/失焦/IME/空内容丢弃），overlay 与主编辑器一致；已移除工具栏先打字的旧方式（水印保留工具条文本）。
+- 调色板：8 预设 + 自定义取色器 + 最近 4 色（localStorage，两页共享），预设/自定义选色均可用于绘制并持久化。
+- 回归：完整 e2e 19 段 ALL CHECKS PASSED；build:web 四页、go test/vet 全绿；README 截图已用新工具栏/调色板重新生成（合成内容，无用户桌面）。

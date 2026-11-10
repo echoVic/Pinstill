@@ -14,13 +14,16 @@
 // browser (no MyGo runtime) the flow is simulated with the design's demo image
 // and toasts, so the static preview stays demoable without console errors.
 
-import { AnnotationEngine } from "./annotate";
+import { AnnotationEngine, InlineTextEditor } from "./annotate";
 import {
+  beginRegion,
   cancelRegion,
   finishAnnotated,
   hasNative,
+  onCaptureFailed,
   onOverlayCapture,
   onOverlayShown,
+  openPermissionSettings,
   overlayInfo,
   prepareSelection,
   settings,
@@ -30,14 +33,19 @@ import {
   type OverlayInfo,
   type Rect,
 } from "./bridge";
+import {
+  isPresetColor,
+  loadRecentColors,
+  normalizeColor,
+  PRESET_COLORS,
+  rememberColor,
+} from "./colors";
 import { DRAW_TOOLS, TOOLS, TOOL_ICONS, type ToolId } from "./tools";
 import { blobToBase64, decodeImageBlob } from "./util";
 
 const MIN_SELECTION = 3;
 const TOOLBAR_GAP = 10;
 const EDGE_MARGIN = 8;
-const PALETTE = ["#e56e48", "#efb94c", "#78a576", "#70a8c2", "#f6eee1"];
-const TEXT_INPUT_TOOLS = new Set<ToolId>(["text", "watermark"]);
 
 type Phase = "idle" | "selecting" | "preparing" | "annotating" | "finishing";
 type AfterCapture = "inplace" | "clipboard" | "pin" | "editor";
@@ -152,6 +160,13 @@ const widthLabelText = el("overlayWidthLabelText");
 const textInput = el<HTMLInputElement>("overlayText");
 const toolbarStatus = el("overlayStatus");
 const demoToast = el("demoToast");
+const customColorInput = document.getElementById("customColor") as HTMLInputElement | null;
+const captureError = el("captureError");
+const captureErrorTitle = el("captureErrorTitle");
+const captureErrorText = el("captureErrorText");
+const captureErrorSettings = el<HTMLButtonElement>("captureErrorSettings");
+const captureErrorRetry = el<HTMLButtonElement>("captureErrorRetry");
+const captureErrorCancel = el<HTMLButtonElement>("captureErrorCancel");
 const hintInitialHTML = hint.innerHTML;
 
 interface StoredPreferences {
@@ -171,7 +186,7 @@ function readStoredPreferences(): StoredPreferences {
 
 const storedPreferences = readStoredPreferences();
 let color =
-  typeof storedPreferences.defaultColor === "string" ? storedPreferences.defaultColor : PALETTE[0]!;
+  normalizeColor(storedPreferences.defaultColor) ?? PRESET_COLORS[0]!;
 let penWidth =
   typeof storedPreferences.defaultWidth === "number"
     ? clamp(Math.round(storedPreferences.defaultWidth), 1, 10)
@@ -206,6 +221,8 @@ let drawingPointer: number | null = null;
 
 let transientTimer: number | undefined;
 let demoResetTimer: number | undefined;
+let recentColors: string[] = loadRecentColors();
+let inlineEditor: InlineTextEditor | null = null;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -235,6 +252,13 @@ function svgIcon(name: string): string {
 
 function isInsideToolbar(target: EventTarget | null): boolean {
   return target instanceof Element && Boolean(target.closest("#annotationToolbar"));
+}
+
+function isInsideTextEditor(target: EventTarget | null): boolean {
+  return (
+    target instanceof Element &&
+    Boolean(target.closest(".inline-text-input, #textInputOverlay"))
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -362,17 +386,7 @@ function buildToolbar(): void {
     toolsHost.append(button);
   }
 
-  colorsHost.replaceChildren();
-  for (const swatch of PALETTE) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "swatch";
-    button.dataset.color = swatch;
-    button.style.setProperty("--swatch", swatch);
-    button.setAttribute("aria-label", `颜色 ${swatch}`);
-    button.setAttribute("aria-pressed", "false");
-    colorsHost.append(button);
-  }
+  renderPalette();
 
   actionsHost.replaceChildren();
   for (const def of ACTION_DEFS) {
@@ -470,27 +484,82 @@ function selectTool(tool: ToolId): void {
     button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", String(active));
   }
-  const showsTextInput = TEXT_INPUT_TOOLS.has(tool);
+  // Text and tag now use the inline editor at the clicked position; only the
+  // watermark keeps the toolbar text field.
+  const showsTextInput = tool === "watermark";
   textInput.hidden = !showsTextInput;
   widthLabelText.textContent =
     tool === "text" || tool === "watermark" ? "字号" : "粗细";
   if (tool === "watermark") {
     entry = watermarkText;
     textInput.value = entry;
-  } else if (tool === "text") {
-    if (!entry) entry = "重点说明";
-    textInput.value = entry;
   }
-  canvas.style.cursor = tool === "drag" ? "move" : "crosshair";
+  canvas.style.cursor = tool === "drag" ? "move" : tool === "text" ? "text" : "crosshair";
 }
 
-function setColor(next: string): void {
-  color = next;
+function renderPalette(): void {
+  colorsHost.replaceChildren();
+  for (const preset of PRESET_COLORS) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "swatch";
+    button.dataset.color = preset;
+    button.style.setProperty("--swatch", preset);
+    button.setAttribute("aria-label", `颜色 ${preset}`);
+    button.setAttribute("aria-pressed", "false");
+    button.addEventListener("click", () => setColor(preset));
+    colorsHost.append(button);
+  }
+
+  const custom = document.createElement("button");
+  custom.type = "button";
+  custom.className = "swatch custom";
+  custom.dataset.colorCustom = "true";
+  custom.setAttribute("aria-label", "自定义颜色");
+  custom.title = "自定义颜色";
+  custom.addEventListener("click", () => customColorInput?.click());
+  colorsHost.append(custom);
+
+  for (const recent of recentColors) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "swatch";
+    button.dataset.colorRecent = recent;
+    button.style.setProperty("--swatch", recent);
+    button.setAttribute("aria-label", `最近使用颜色 ${recent}`);
+    button.setAttribute("aria-pressed", "false");
+    button.addEventListener("click", () => setColor(recent));
+    colorsHost.append(button);
+  }
+  updatePaletteSelection();
+}
+
+function updatePaletteSelection(): void {
+  const current = color.toLowerCase();
   for (const button of colorsHost.querySelectorAll<HTMLElement>(".swatch")) {
-    const selected = button.dataset.color === color;
+    let selected = false;
+    if (button.dataset.color) selected = button.dataset.color.toLowerCase() === current;
+    else if (button.dataset.colorRecent) {
+      selected = button.dataset.colorRecent.toLowerCase() === current;
+    } else if (button.dataset.colorCustom) {
+      selected = !isPresetColor(current) && !recentColors.includes(current);
+    }
     button.classList.toggle("selected", selected);
     button.setAttribute("aria-pressed", String(selected));
   }
+}
+
+function setColor(next: string, remember = false): void {
+  const normalized = normalizeColor(next);
+  if (!normalized) return;
+  color = normalized;
+  if (remember) {
+    recentColors = rememberColor(normalized);
+    renderPalette();
+  } else {
+    updatePaletteSelection();
+  }
+  if (inlineEditor) inlineEditor.element.style.color = color;
 }
 
 function updateWidthValue(): void {
@@ -623,6 +692,41 @@ async function fetchCaptureBlob(url: string): Promise<Blob> {
   return response.blob();
 }
 
+/** Opens the inline text editor at a canvas point (text and tag tools). */
+function openInlineText(point: { x: number; y: number }): void {
+  if (phase !== "annotating" || !engine || inlineEditor) return;
+  const tool = currentTool;
+  if (tool !== "text" && tool !== "tag") return;
+  const shapeColor = color;
+  const shapeWidth = penWidth;
+  const displayFontSize = tool === "tag" ? 20 : shapeWidth * 3 + 16;
+  inlineEditor = new InlineTextEditor({
+    canvas,
+    point,
+    color: shapeColor,
+    displayFontSize,
+    placeholder: tool === "tag" ? "输入标签" : "输入文字",
+    singleLine: tool === "tag",
+    onSubmit: (text) => {
+      inlineEditor = null;
+      engine?.addShape({
+        kind: tool,
+        x: point.x,
+        y: point.y,
+        x2: point.x,
+        y2: point.y,
+        color: shapeColor,
+        width: shapeWidth,
+        text,
+      });
+      updateToolbarState();
+    },
+    onCancel: () => {
+      inlineEditor = null;
+    },
+  });
+}
+
 async function beginAnnotation(payload: OverlayCapture): Promise<void> {
   try {
     await settingsReady;
@@ -640,6 +744,7 @@ async function beginAnnotation(payload: OverlayCapture): Promise<void> {
     const image = await decodeImageBlob(blob);
     const rect = payload.rect ?? committedRect ?? selectionRect();
     committedRect = rect;
+    selection.classList.remove("capturing");
     positionSelection(rect);
     canvas.width = Math.max(1, Math.round(payload.width || rect.width));
     canvas.height = Math.max(1, Math.round(payload.height || rect.height));
@@ -680,11 +785,17 @@ async function beginAnnotation(payload: OverlayCapture): Promise<void> {
 
 async function prepareSelectionFor(rect: Rect): Promise<void> {
   phase = "preparing";
-  prepareState.hidden = false;
+  // Go captures straight through the overlay window: hide the border, corner
+  // marks, size badge, crosshair and hint so the captured image contains none
+  // of our UI (the selection interior is already transparent).
+  hideToolbar();
+  selection.classList.add("capturing");
+  prepareState.hidden = true;
   hint.hidden = true;
   crosshairV.hidden = true;
   crosshairH.hidden = true;
-  updateSizeBadge(rect);
+  sizeBadge.hidden = true;
+  demoToast.hidden = true;
   try {
     const payload = await prepareSelection(rect);
     handleCapture(payload);
@@ -697,6 +808,56 @@ async function prepareSelectionFor(rect: Rect): Promise<void> {
 function failPreparation(message: string): void {
   reset();
   showTransient(`截取失败：${message} · 请重新拖动选择`);
+}
+
+// ---------------------------------------------------------------------------
+// In-overlay failure guidance (no main window involved)
+// ---------------------------------------------------------------------------
+
+function hideCaptureError(): void {
+  captureError.hidden = true;
+}
+
+function showCaptureFailure(rawMessage: string, permission: boolean): void {
+  inlineEditor?.cancel();
+  inlineEditor = null;
+  phase = "finishing";
+  hideToolbar();
+  selection.classList.remove("capturing");
+  selection.hidden = true;
+  dim.hidden = false;
+  sizeBadge.hidden = true;
+  crosshairV.hidden = true;
+  crosshairH.hidden = true;
+  hint.hidden = true;
+  demoToast.hidden = true;
+  captureError.hidden = false;
+  captureErrorTitle.textContent = permission ? "需要屏幕录制权限" : "截图失败";
+  const message = rawMessage || (permission ? "无法读取屏幕内容。" : "截图失败，请重试。");
+  captureErrorText.textContent = permission
+    ? `${message}\n请在「系统设置 › 隐私与安全性 › 屏幕录制」中允许 Tupen，然后重试。`
+    : message;
+  captureErrorSettings.hidden = !permission;
+}
+
+function dismissCaptureFailure(): void {
+  hideCaptureError();
+  reset();
+  // The 取消 button ends the capture session (like Esc elsewhere); Go hides the
+  // overlay. The page never expects the main window from a failure.
+  if (!hasNative) return;
+  void cancelRegion().catch(() => {});
+}
+
+async function retryCapture(): Promise<void> {
+  hideCaptureError();
+  reset();
+  if (!hasNative) return;
+  try {
+    await beginRegion();
+  } catch (error) {
+    showTransient(`无法重新开始截图：${errorMessage(error)}`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -775,6 +936,13 @@ hookHost.__tupenDemoCapture = async (dataUrl: string): Promise<void> => {
 
 function reset(): void {
   phase = "idle";
+  if (inlineEditor) {
+    const editor = inlineEditor;
+    inlineEditor = null;
+    editor.cancel();
+  }
+  hideCaptureError();
+  selection.classList.remove("capturing");
   if (transientTimer) window.clearTimeout(transientTimer);
   if (demoResetTimer) window.clearTimeout(demoResetTimer);
   transientTimer = undefined;
@@ -804,6 +972,7 @@ function reset(): void {
 
 function beginSelection(x: number, y: number): void {
   phase = "selecting";
+  selection.classList.remove("capturing");
   startX = x;
   startY = y;
   currentX = x;
@@ -849,11 +1018,22 @@ function canvasPoint(event: PointerEvent): { x: number; y: number } | null {
 }
 
 window.addEventListener("pointerdown", (event) => {
+  if (isInsideTextEditor(event.target)) return;
   if (phase === "annotating") {
     if (isInsideToolbar(event.target)) return;
     if (event.button !== 0 || !engine) return;
     const point = canvasPoint(event);
     if (!point) return;
+    if (inlineEditor) {
+      // Clicking the canvas while typing commits the current text first.
+      inlineEditor.submit();
+      return;
+    }
+    if (currentTool === "text" || currentTool === "tag") {
+      event.preventDefault();
+      openInlineText(point);
+      return;
+    }
     event.preventDefault();
     drawingPointer = event.pointerId;
     try {
@@ -921,6 +1101,14 @@ window.addEventListener("contextmenu", (event) => {
 });
 
 window.addEventListener("keydown", (event) => {
+  if (!captureError.hidden) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      dismissCaptureFailure();
+    }
+    return;
+  }
+  if (inlineEditor) return; // the inline textarea handles Enter / Esc itself
   if (event.key === "Escape") {
     event.preventDefault();
     if (phase === "annotating") {
@@ -950,6 +1138,24 @@ window.addEventListener("keydown", (event) => {
 // ---------------------------------------------------------------------------
 
 onOverlayCapture((payload) => handleCapture(payload));
+
+onCaptureFailed((payload) => {
+  // Go reports capture failures to the overlay page now: stay here and show
+  // in-place guidance instead of involving the main window.
+  showCaptureFailure(payload.message, payload.permission);
+});
+
+captureErrorSettings.addEventListener("click", () => {
+  void openPermissionSettings().catch(() => {});
+});
+captureErrorRetry.addEventListener("click", () => void retryCapture());
+captureErrorCancel.addEventListener("click", () => dismissCaptureFailure());
+customColorInput?.addEventListener("input", () => {
+  if (customColorInput) setColor(customColorInput.value);
+});
+customColorInput?.addEventListener("change", () => {
+  if (customColorInput) setColor(customColorInput.value, true);
+});
 
 onOverlayShown((payload) => {
   if (payload && Number.isFinite(payload.width) && payload.width > 0) displayInfo = payload;

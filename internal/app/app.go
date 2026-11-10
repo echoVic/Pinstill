@@ -644,13 +644,15 @@ func (a *App) captureRegion(region capture.Rect, opts capture.CaptureOptions) ([
 
 // prepareSelection captures the user's selection and hands the image back to
 // the overlay, which then annotates it in place on the desktop. The overlay
-// briefly hides so it is not part of the capture, then shows again.
+// stays on screen: the page hides the selection chrome and the selection's
+// interior is transparent, so the capture sees the screen behind it. This
+// keeps the flow flicker-free.
 func (a *App) prepareSelection(rect Rect) (OverlayCapturePayload, error) {
 	a.mu.Lock()
 	disp := a.overlayDisplay
-	overlay := a.overlay
 	origin := a.overlayRect
 	capturing := a.capturing
+	overlay := a.overlay
 	a.mu.Unlock()
 	if !capturing {
 		return OverlayCapturePayload{}, errors.New("没有进行中的截图")
@@ -670,37 +672,32 @@ func (a *App) prepareSelection(rect Rect) (OverlayCapturePayload, error) {
 	if region.Empty() || region.Width < 2 || region.Height < 2 {
 		return OverlayCapturePayload{}, errors.New("选区太小")
 	}
-	if overlay != nil {
-		overlay.Hide()
-	}
-	// Let the overlay leave the compositor, then grab the screen behind it.
-	time.Sleep(250 * time.Millisecond)
+	// Give the page a moment to hide its selection border and badges so they
+	// are not part of the capture.
+	time.Sleep(90 * time.Millisecond)
 	s := a.settingsSnapshot()
 	pngBytes, err := a.captureRegion(region, capture.CaptureOptions{IncludeCursor: s.IncludeCursor})
 	if err != nil {
-		a.failCapture(err, false)
+		a.failSelection(err, false)
 		return OverlayCapturePayload{}, err
 	}
 	if blankPNG(pngBytes) {
 		err := errors.New("截图内容为空，可能缺少屏幕录制权限")
-		a.failCapture(err, true)
+		a.failSelection(err, true)
 		return OverlayCapturePayload{}, err
 	}
 	width, height := imageDimensions(pngBytes)
 	if width == 0 || height == 0 {
 		err := errors.New("截图数据无效")
-		a.failCapture(err, false)
+		a.failSelection(err, false)
 		return OverlayCapturePayload{}, err
 	}
 	id := captureID(time.Now())
 	sessionFile := id + ".png"
 	if err := os.WriteFile(filepath.Join(a.sessionDir, sessionFile), pngBytes, 0o644); err != nil {
 		err = fmt.Errorf("截图写入失败: %w", err)
-		a.failCapture(err, false)
+		a.failSelection(err, false)
 		return OverlayCapturePayload{}, err
-	}
-	if overlay != nil {
-		overlay.Show()
 	}
 	payload := OverlayCapturePayload{
 		ID:     id,
@@ -713,6 +710,24 @@ func (a *App) prepareSelection(rect Rect) (OverlayCapturePayload, error) {
 		emitToWindow(a, overlay, EventOverlayCapture, payload)
 	}
 	return payload, nil
+}
+
+// failSelection reports a failed in-place capture to the overlay, which stays
+// on screen so the user can retry or cancel it (unlike a failed whole-region
+// capture, nothing opens the main window).
+func (a *App) failSelection(err error, permission bool) {
+	message := "截图失败"
+	if err != nil {
+		message = err.Error()
+	}
+	if permission {
+		message = "截图内容为空，可能缺少屏幕录制权限。请在系统设置 → 隐私与安全性 → 屏幕录制中允许 Tupen"
+	}
+	a.mu.Lock()
+	a.capturing = false
+	overlay := a.overlay
+	a.mu.Unlock()
+	emitToWindow(a, overlay, EventCaptureFailed, CaptureFailedPayload{Message: message, Permission: permission})
 }
 
 // finishAnnotated completes the in-place annotation: the page sends the

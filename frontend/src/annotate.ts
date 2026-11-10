@@ -189,8 +189,13 @@ export function drawShape(
     ctx.globalAlpha = 1;
   }
   if (shape.kind === "text") {
-    ctx.font = `500 ${(shape.width * 3 + 16) * scale}px -apple-system, sans-serif`;
-    ctx.fillText(shape.text ?? "", shape.x, shape.y);
+    const fontSize = (shape.width * 3 + 16) * scale;
+    ctx.font = `500 ${fontSize}px -apple-system, sans-serif`;
+    const lines = (shape.text ?? "").split("\n");
+    const lineHeight = fontSize * 1.3;
+    lines.forEach((line, index) => {
+      ctx.fillText(line, shape.x, shape.y + index * lineHeight);
+    });
   }
   if (shape.kind === "tag") {
     ctx.beginPath();
@@ -291,6 +296,12 @@ export class AnnotationEngine {
     this.start = null;
     this.dragged = null;
     this.labelNumber = 1;
+  }
+
+  /** Adds a shape created outside the pointer flow (e.g. inline text input). */
+  addShape(shape: Shape): void {
+    this.shapes.push(shape);
+    this.redraw();
   }
 
   undo(): boolean {
@@ -405,5 +416,144 @@ export class AnnotationEngine {
       tool === "highlight" ||
       tool === "watermark"
     );
+  }
+}
+
+export interface InlineTextOptions {
+  canvas: HTMLCanvasElement;
+  /** Where the text is placed, in canvas pixels. */
+  point: Point;
+  color: string;
+  /** Font size in CSS pixels (what the user sees while typing). */
+  displayFontSize: number;
+  value?: string;
+  placeholder?: string;
+  /** Labels (tags) are single-line: newlines become spaces. */
+  singleLine?: boolean;
+  onSubmit: (text: string) => void;
+  onCancel?: () => void;
+}
+
+/**
+ * The in-place text input of the annotation tools: a textarea opened exactly
+ * where the user clicked, positioned over the canvas (display coordinates),
+ * with the same font size the committed annotation will have.
+ *
+ * Enter commits, Shift+Enter inserts a newline, Esc cancels, blur commits;
+ * empty text is discarded; Enter during IME composition never commits.
+ */
+export class InlineTextEditor {
+  readonly element: HTMLTextAreaElement;
+
+  private readonly options: InlineTextOptions;
+  private done = false;
+  private composing = false;
+
+  constructor(options: InlineTextOptions) {
+    this.options = options;
+    const textarea = document.createElement("textarea");
+    textarea.id = "textInputOverlay";
+    textarea.className = "inline-text-input";
+    textarea.value = options.value ?? "";
+    textarea.placeholder = options.placeholder ?? "输入文字";
+    textarea.rows = 1;
+    textarea.spellcheck = false;
+    textarea.setAttribute("aria-label", options.placeholder ?? "输入文字");
+
+    const rect = options.canvas.getBoundingClientRect();
+    const scaleX = rect.width > 0 ? rect.width / options.canvas.width : 1;
+    const scaleY = rect.height > 0 ? rect.height / options.canvas.height : 1;
+    const fontSize = Math.max(11, options.displayFontSize);
+    const width = Math.max(160, Math.min(320, rect.width * 0.4));
+    let left = rect.left + options.point.x * scaleX;
+    let top = rect.top + options.point.y * scaleY - fontSize * 0.85;
+    left = Math.min(Math.max(4, left), Math.max(4, window.innerWidth - width - 8));
+    top = Math.min(Math.max(4, top), Math.max(4, window.innerHeight - fontSize * 3));
+
+    Object.assign(textarea.style, {
+      position: "fixed",
+      left: `${Math.round(left)}px`,
+      top: `${Math.round(top)}px`,
+      width: `${Math.round(width)}px`,
+      minHeight: `${Math.round(fontSize * 1.5)}px`,
+      maxHeight: "220px",
+      padding: "2px 5px",
+      margin: "0",
+      border: "1px dashed rgba(243, 162, 78, 0.95)",
+      borderRadius: "4px",
+      background: "rgba(20, 20, 18, 0.88)",
+      color: options.color,
+      font: `500 ${fontSize}px ui-sans-serif, system-ui, -apple-system, sans-serif`,
+      lineHeight: "1.3",
+      outline: "none",
+      resize: "none",
+      overflow: "hidden",
+      zIndex: "30",
+      boxShadow: "0 8px 24px rgba(0, 0, 0, 0.45)",
+      caretColor: options.color,
+    });
+
+    const autosize = () => {
+      textarea.style.height = "auto";
+      textarea.style.height = `${Math.min(textarea.scrollHeight, 220)}px`;
+    };
+    textarea.addEventListener("input", autosize);
+    textarea.addEventListener("compositionstart", () => {
+      this.composing = true;
+    });
+    textarea.addEventListener("compositionend", () => {
+      this.composing = false;
+    });
+    textarea.addEventListener("keydown", (event) => {
+      if (event.isComposing || this.composing || event.keyCode === 229) return;
+      event.stopPropagation();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        this.cancel();
+        return;
+      }
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        this.submit();
+      }
+    });
+    textarea.addEventListener("blur", () => {
+      if (!this.done) this.submit();
+    });
+
+    document.body.append(textarea);
+    this.element = textarea;
+    window.requestAnimationFrame(() => {
+      textarea.focus();
+      const end = textarea.value.length;
+      textarea.setSelectionRange(end, end);
+      autosize();
+    });
+  }
+
+  submit(): void {
+    if (this.done) return;
+    this.done = true;
+    let text = this.element.value;
+    if (this.options.singleLine) text = text.replace(/\s*\n+\s*/g, " ").replace(/\s+/g, " ");
+    else text = text.replace(/\s+$/, "");
+    const trimmed = text.trim();
+    this.dispose();
+    if (!trimmed) {
+      this.options.onCancel?.();
+      return;
+    }
+    this.options.onSubmit(text);
+  }
+
+  cancel(): void {
+    if (this.done) return;
+    this.done = true;
+    this.dispose();
+    this.options.onCancel?.();
+  }
+
+  private dispose(): void {
+    this.element.remove();
   }
 }

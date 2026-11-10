@@ -55,6 +55,10 @@
 .result-action{margin-top:12px;border:1px solid #ffffff26;background:#33312a;color:#f3e7d5;border-radius:7px;padding:7px 12px;font-size:12px}
 .result-action:hover{background:#3d3a31}
 .capture-toolbar button:disabled{opacity:.35;cursor:default}
+/* Round 5: shared colour palette (presets + custom picker + recent colours). */
+.color-swatch.custom{background:conic-gradient(#e56e48,#efb94c,#78a576,#70a8c2,#e46c4e,#e56e48);display:grid;place-items:center;color:#21170d;font-size:11px;font-weight:700;line-height:1}
+.color-swatch.custom::after{content:"+";text-shadow:0 1px 2px #ffffff99}
+.color-palette{display:inline-flex;align-items:center;gap:3px;flex-wrap:wrap}
 </style>
 </head>
 <body>
@@ -107,6 +111,7 @@
   </main>
 </div>
 <div class="toast" id="toast" role="status" aria-live="polite">已截取一张截图</div>
+<input type="color" id="customColor" hidden aria-hidden="true" />
 <script type="module" src="/src/main.ts"></script>
 </body>
 </html>
