@@ -1031,12 +1031,14 @@ async function runPermissionAction(
     }
   } catch (error) {
     showToast(`权限操作未完成：${errorMessage(error)}`, "error");
-  } finally {
-    setButtonPending(button, false);
   }
+  // Keep the button pending until the status lines have actually re-read the
+  // OS state (MINOR-2 from the R7 review: clearing it in `finally` made the
+  // spinner disappear while the native reads were still in flight).
   await refreshPermissionCenter();
   await refreshPermissionStatus();
   void refreshPermissionBanner();
+  setButtonPending(button, false);
 }
 
 function permissionBanner(): HTMLElement | null {

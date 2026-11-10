@@ -1559,6 +1559,15 @@ func (a *App) selftestPerms() {
 	if bannerExists != "true" {
 		failCheck("permission banner element missing")
 	}
+	// The banner must agree with the live screen-permission state (NIT-2 from
+	// the R7 review: it was printed but not asserted). The page starts a fresh
+	// session, so nothing has been dismissed yet.
+	if strings.Contains(screen, "已授权") && bannerHidden != "true" {
+		failCheck("banner should be hidden when screen recording is granted (hidden=%q)", bannerHidden)
+	}
+	if strings.Contains(screen, "未授权") && bannerHidden != "false" {
+		failCheck("banner should be visible when screen recording is missing (hidden=%q)", bannerHidden)
+	}
 	for _, want := range []string{"grant", "settings", "dismiss"} {
 		found := false
 		for _, got := range strings.Split(bannerActions, ",") {

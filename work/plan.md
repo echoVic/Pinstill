@@ -608,7 +608,7 @@ R6 的完整替换漏了两处旧名首字母 **T** 的图形残留（文字已�
 | 方法 | 返回 | 语义 |
 |---|---|---|
 | `LaunchAtLogin` | `bool` | 系统登录项当前是否生效（`mygo.App.OpenAtLogin()`），只读 |
-| `OpenLoginItemsSettings` | `error` | 打开「登录项」设置页（darwin）；其他平台 `ErrUnsupported` |
+| `OpenLoginItemsSettings` | `error` | 打开「登录项」设置页（darwin）；其他平台返回「登录项设置不支持」错误（与 `capture.ErrUnsupported` 语义一致，内部实现为 `errLoginItemsUnsupported`） |
 
 顺带修复历史缺口：前端从 R5 起就在调用 `Capture.RequestScreenPermission`，但 Go 侧从未实现该绑定（「请求权限」一直静默失败并回退到打开系统设置）。本轮补上同名绑定：`func (s *CaptureService) RequestScreenPermission() bool { return capture.RequestPermission() }`（darwin 为 CGRequestScreenCaptureAccess，会弹系统授权框；其他平台返回 true）。
 
@@ -649,3 +649,20 @@ R6 的完整替换漏了两处旧名首字母 **T** 的图形残留（文字已�
 - **手感与观感（R7.3，frontend）**：四页统一 120–180ms 入场动效并尊重 `prefers-reduced-motion`；按钮 pending/✓ 状态统一（复制/导出/贴图/清空历史/权限动作）；编辑器状态行改为「适应窗口 · 实际 W×H px」，超大图按比例适配不溢出；`:focus-visible` 环、调色板 `aria-pressed`、Esc 输入框/取消冲突处理；历史卡片 hover 删除 + 两次点击确认（3.2s 复位）、空状态文案、缩略图破图兜底。headless 四页 console/errors 为空。
 - **验收**：`work/e2e.sh --skip-build`（隔离 `PINSTILL_DATA_DIR`）20 段 **ALL CHECKS PASSED**；`mygo build` 签名通过（Developer ID，Developer ID）；README 截图按新 UI 再生；README/plan 更新。
 - **已知遗留（不阻塞）**：`restorePins()` 本体无单测（恢复链路由 pinpersist e2e 覆盖）；store 不校验「索引合法但 PNG 被外部删除」；pin 恢复不做 PNG 解码校验；System Events 合成 Escape 偶发不达（selftest 已加「先激活 app + 3 次重试」，本轮全过）。
+
+## R7.7 独立验收（verifier，2026-11-10 深夜）
+
+结论 **PASS**（0 BLOCKER / 0 MAJOR / 2 MINOR / 2 NIT）。基线 `d74fcb7`，验收前后 `git status` 均为空、全程只读。
+
+- **契约逐字核对通过**：3 个新绑定语义正确（含 mygo `OpenAtLogin` 为只读 getter 的源码核对）；7 分类、9 个冻结 DOM hooks、6 + 3 个动作与 plan 一致；浏览器降级显示「浏览器预览 · 无需权限」不误报「已授权」；用 fake `window.mygo` 模拟原生横幅显示/隐藏/focus 刷新/capture:failed/dismiss 全过；`PINSTILL_SELFTEST=perms` 两次输出逐字一致。
+- **稳定性修复双向验证**：在 /tmp 副本「改坏→测试变红」实锤两个 bug 存在且测试能抓（去掉 clamp 后 `Prune(1000000)` 真清空历史；stitch 旧代码 height=300 vs capped 100），自写对抗用例（MaxInt64 retention、MaxHeight 边界/1px 帧/二次 Add 等）在修复版全过。
+- **构建/测试本机复跑全绿**：gofmt/vet/test/-race、Windows amd64+arm64 cross、build:web 四页、签名构建（Developer ID，codesign valid）。
+- **E2E 3 次 × 20 步骤（隔离数据目录）**：run1、run3 ALL CHECKS PASSED；run2 出现 1 次 flow pin 子步超时（见 MINOR-1）。
+- **前端回归 71/71 + 原生模拟 43 checks**：坐标映射（显示缩放 0.873 下命中图片坐标）、大图适配、历史二次确认/超时复位/破图兜底、pending 不卡死、Esc、aria-pressed、focus-visible、动效时长与 reduced-motion。
+- **隐私**：outputs 六张截图均合成内容；README 口径与实现一致。
+
+遗留与处置：
+- MINOR-1（e2e flow pin 子步偶发，pre-existing overlay 会话时序抖动，HEAD~1 即存在）：下轮修复（beginRegion 显式重置 overlay 会话 / action-ready 重试）。
+- MINOR-2（权限「重新检测」按钮 pending 在原生读取完成前被清除）：本轮已修——`main.ts` 把 `setButtonPending(false)` 移到 `refreshPermissionCenter/refreshPermissionStatus/refreshPermissionBanner` 之后。
+- NIT-1（非 darwin 登录项错误未导出为 `ErrUnsupported`）：语义一致，保留实现命名，R7.1 表格已注明。
+- NIT-2（`selftestPerms` 只打印未断言 banner hidden）：本轮已修——断言 banner 显隐与屏幕录制授权状态一致。
