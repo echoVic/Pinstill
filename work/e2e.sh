@@ -7,6 +7,23 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
+# Background shells sometimes miss the nvm-installed node/npm on PATH.
+if ! command -v npm >/dev/null 2>&1; then
+  if command -v node >/dev/null 2>&1; then
+    PATH="$(dirname "$(command -v node)"):$PATH"
+    export PATH
+  fi
+fi
+if ! command -v npm >/dev/null 2>&1; then
+  for dir in "$HOME"/.nvm/versions/node/*/bin; do
+    if [ -x "$dir/npm" ]; then
+      PATH="$dir:$PATH"
+      export PATH
+      break
+    fi
+  done
+fi
+
 fail=0
 step() { printf '\n== %s ==\n' "$1"; }
 check() {
