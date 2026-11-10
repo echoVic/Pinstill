@@ -62,6 +62,8 @@ func (a *App) runSelfTest(mode string) {
 		a.selftestScroll()
 	case "scrollflow":
 		a.selftestScrollFlow()
+	case "scrollmanual":
+		a.selftestScrollManual()
 	case "scrollshot":
 		a.selftestScrollShot()
 	case "quit":
@@ -526,6 +528,30 @@ func syntheticScreenshot() []byte {
 	}
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, img); err != nil {
+		return nil
+	}
+	return buf.Bytes()
+}
+
+// syntheticScrollResultPNG tiles the synthetic screenshot into a tall image so
+// the README preview shot only ever shows generated content.
+func syntheticScrollResultPNG() []byte {
+	frame := syntheticScreenshot()
+	if len(frame) == 0 {
+		return nil
+	}
+	img, err := png.Decode(bytes.NewReader(frame))
+	if err != nil {
+		return nil
+	}
+	b := img.Bounds()
+	const copies = 3
+	tall := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()*copies))
+	for i := 0; i < copies; i++ {
+		draw.Draw(tall, image.Rect(0, i*b.Dy(), b.Dx(), (i+1)*b.Dy()), img, b.Min, draw.Src)
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, tall); err != nil {
 		return nil
 	}
 	return buf.Bytes()
@@ -1018,7 +1044,8 @@ func (a *App) waitControlReady(timeout time.Duration) error {
 	return errors.New("scroll control window never became ready")
 }
 
-// selftestScrollShot captures the scroll control window for the README.
+// selftestScrollShot captures the scroll control window (while running) and
+// the result preview window for the README.
 func (a *App) selftestScrollShot() {
 	if a.main != nil {
 		a.main.Show()
@@ -1047,7 +1074,7 @@ func (a *App) selftestScrollShot() {
 	if err := a.waitControlReady(8 * time.Second); err != nil {
 		fmt.Printf("SELFTEST scrollshot: control error %v\n", err)
 	}
-	time.Sleep(1800 * time.Millisecond)
+	time.Sleep(1200 * time.Millisecond)
 	a.mu.Lock()
 	control := a.control
 	a.mu.Unlock()
@@ -1057,16 +1084,39 @@ func (a *App) selftestScrollShot() {
 			w, h := imageDimensions(pagePNG)
 			fmt.Printf("SELFTEST scrollshot: control %dx%d -> /tmp/pinstill-showcase-scroll.png\n", w, h)
 		} else {
-			fmt.Printf("SELFTEST scrollshot: capture error %v\n", err)
+			fmt.Printf("SELFTEST scrollshot: control capture error %v\n", err)
 		}
 	}
+	// Stop the simulated session and hand the preview window a generated tall
+	// image (the simulated frames are random noise, ugly for the README).
 	_ = a.finishScroll("cancel")
+	time.Sleep(700 * time.Millisecond)
+	if tall := syntheticScrollResultPNG(); len(tall) > 0 {
+		if err := a.showScrollResult(tall, 8, false); err != nil {
+			fmt.Printf("SELFTEST scrollshot: preview error %v\n", err)
+		}
+	}
+	a.mu.Lock()
+	win := a.result
+	a.mu.Unlock()
+	if win != nil {
+		time.Sleep(900 * time.Millisecond)
+		if pagePNG, err := win.CapturePage(); err == nil {
+			_ = os.WriteFile("/tmp/pinstill-showcase-scroll-result.png", pagePNG, 0o644)
+			w, h := imageDimensions(pagePNG)
+			fmt.Printf("SELFTEST scrollshot: result %dx%d -> /tmp/pinstill-showcase-scroll-result.png\n", w, h)
+		} else {
+			fmt.Printf("SELFTEST scrollshot: result capture error %v\n", err)
+		}
+		a.closeScrollResult()
+	}
 	time.Sleep(500 * time.Millisecond)
 	mygo.App.Exit(0)
 }
 
 // selftestScrollFlow drives the real page: annotate a capture, click the
-// 滚动截图 tool, wait for stitched frames, then click 进入编辑器.
+// 滚动截图 tool, and wait for the automatic finish to open the result preview
+// window, whose DOM must expose the long image and its actions.
 func (a *App) selftestScrollFlow() {
 	if a.main != nil {
 		a.main.Show()
@@ -1092,50 +1142,54 @@ func (a *App) selftestScrollFlow() {
 	if _, err := a.overlay.Page().Eval(`(() => { const b = document.querySelector('[data-tool="scroll"]'); if (!b) return 'missing'; b.click(); return 'clicked'; })()`); err != nil {
 		fmt.Printf("SELFTEST scrollflow: scroll tool click error %v\n", err)
 	}
-	// wait for the session and a few stitched frames
-	deadline := time.Now().Add(15 * time.Second)
-	var frames int
+	deadline := time.Now().Add(25 * time.Second)
+	var win *mygo.Window
 	for time.Now().Before(deadline) {
 		a.mu.Lock()
-		session := a.scroll
+		win = a.result
 		a.mu.Unlock()
-		if session != nil {
-			frames, _, _, _ = session.snapshot()
-			if frames >= 4 {
-				break
-			}
+		if win != nil {
+			break
 		}
-		time.Sleep(120 * time.Millisecond)
+		time.Sleep(150 * time.Millisecond)
 	}
-	fmt.Printf("SELFTEST scrollflow: frames=%d\n", frames)
-	if err := a.waitControlReady(8 * time.Second); err != nil {
-		fmt.Printf("SELFTEST scrollflow: control error %v\n", err)
-	} else {
-		mygo.Clipboard.Clear()
-		if _, err := a.control.Page().Eval(`(() => { const b = document.querySelector('[data-scroll-action="copy"]'); if (!b) return 'missing'; b.click(); return 'clicked'; })()`); err != nil {
-			fmt.Printf("SELFTEST scrollflow: copy click error %v\n", err)
+	if win == nil {
+		fmt.Printf("SELFTEST scrollflow: result window never opened\n")
+		mygo.App.Exit(1)
+		return
+	}
+	time.Sleep(900 * time.Millisecond)
+	eval := func(js string) string {
+		v, err := win.Page().Eval(js)
+		if err != nil {
+			return fmt.Sprintf("error: %v", err)
 		}
+		return strings.TrimSpace(fmt.Sprint(v))
 	}
-	time.Sleep(2800 * time.Millisecond)
-	if img := mygo.Clipboard.ReadImage(); len(img) > 0 {
-		width, height := imageDimensions(img)
-		fmt.Printf("SELFTEST scrollflow: clipboard=%dx%d\n", width, height)
-	} else {
-		fmt.Printf("SELFTEST scrollflow: clipboard EMPTY\n")
-	}
+	imageState := eval(`String((() => { const img = document.getElementById('resultImage'); return !!img && img.complete && img.naturalWidth > 0 ? (img.naturalWidth + 'x' + img.naturalHeight) : 'missing'; })())`)
+	meta := eval(`String(document.getElementById('resultMeta')?.textContent ?? '')`)
+	actions := eval(`[...document.querySelectorAll('[data-result-action]')].map((b) => b.dataset.resultAction).join(',')`)
+	metaInfo := a.scrollResultMeta()
+	fmt.Printf("SELFTEST scrollflow: result=%dx%d frames=%d window=true\n", metaInfo.Width, metaInfo.Height, metaInfo.Frames)
+	fmt.Printf("SELFTEST scrollflow: image=%s meta=%q actions=%s\n", imageState, meta, actions)
+	eval(`document.querySelector('[data-result-action="close"]')?.click(), 'ok'`)
+	time.Sleep(700 * time.Millisecond)
+	a.mu.Lock()
+	stillOpen := a.result != nil
+	a.mu.Unlock()
+	fmt.Printf("SELFTEST scrollflow: closed=%v\n", !stillOpen)
 	mygo.App.Exit(0)
 }
 
-// selftestScroll exercises the scrolling capture loop with simulated frames:
-// it starts a session, waits for stitched frames, then finishes into the
-// editor with the long image and checks its size.
+// selftestScroll exercises the scrolling capture in automatic mode with
+// simulated frames: the session must finish by itself, open the result
+// preview window and let the result be copied.
 func (a *App) selftestScroll() {
 	accessibility := capture.AccessibilityGranted()
 	fmt.Printf("SELFTEST scroll: accessibility=%v supported=%v\n", accessibility, capture.ScrollSupported())
 	if a.main != nil {
-		a.main.Show()
+		a.main.Hide()
 	}
-	time.Sleep(1000 * time.Millisecond)
 	if err := a.beginRegion(); err != nil {
 		fmt.Printf("SELFTEST scroll: begin error %v\n", err)
 		mygo.App.Exit(1)
@@ -1143,74 +1197,88 @@ func (a *App) selftestScroll() {
 	}
 	time.Sleep(1000 * time.Millisecond)
 	rect := Rect{X: 60, Y: 80, Width: 520, Height: 420}
-	autoErr := a.startScroll(rect, true)
-	if accessibility {
-		fmt.Printf("SELFTEST scroll: auto start err=%v\n", autoErr)
-		if autoErr == nil {
-			_ = a.finishScroll("cancel")
-			time.Sleep(500 * time.Millisecond)
-			if err := a.beginRegion(); err != nil {
-				fmt.Printf("SELFTEST scroll: re-begin error %v\n", err)
-			}
-			time.Sleep(800 * time.Millisecond)
-		}
-	} else if autoErr == nil {
-		fmt.Printf("SELFTEST scroll: auto without permission was allowed\n")
-		_ = a.finishScroll("cancel")
-	} else {
-		fmt.Printf("SELFTEST scroll: auto denied ok\n")
-	}
-	if err := a.startScroll(rect, false); err != nil {
+	if err := a.startScroll(rect, true); err != nil {
 		fmt.Printf("SELFTEST scroll: start error %v\n", err)
 		mygo.App.Exit(1)
 		return
 	}
-	deadline := time.Now().Add(15 * time.Second)
-	var frames, height int
-	status := "running"
+	deadline := time.Now().Add(25 * time.Second)
+	var win *mygo.Window
 	for time.Now().Before(deadline) {
 		a.mu.Lock()
-		session := a.scroll
+		win = a.result
 		a.mu.Unlock()
-		if session == nil {
+		if win != nil {
 			break
 		}
-		frames, height, status, _ = session.snapshot()
-		if frames >= 6 || status == "done" || status == "max" {
-			break
-		}
-		time.Sleep(120 * time.Millisecond)
+		time.Sleep(150 * time.Millisecond)
 	}
-	fmt.Printf("SELFTEST scroll: frames=%d height=%d status=%s\n", frames, height, status)
-	// Switch the running session to automatic scrolling (simulated frames
-	// mean no real wheel events are posted).
-	if accessibility {
-		if err := a.setScrollAuto(true); err != nil {
-			fmt.Printf("SELFTEST scroll: set auto error %v\n", err)
-		} else {
-			a.mu.Lock()
-			session := a.scroll
-			a.mu.Unlock()
-			if session != nil {
-				_, _, _, auto := session.snapshot()
-				fmt.Printf("SELFTEST scroll: auto enabled=%v\n", auto)
-			}
-			_ = a.setScrollAuto(false)
-		}
-	}
-	mygo.Clipboard.Clear()
-	if err := a.finishScroll("copy"); err != nil {
-		fmt.Printf("SELFTEST scroll: finish error %v\n", err)
+	meta := a.scrollResultMeta()
+	fmt.Printf("SELFTEST scroll: result=%dx%d frames=%d window=%v capped=%v\n", meta.Width, meta.Height, meta.Frames, win != nil, meta.Capped)
+	if win == nil || meta.Width == 0 {
+		fmt.Printf("SELFTEST scroll: checks=FAILED\n")
 		mygo.App.Exit(1)
 		return
 	}
-	time.Sleep(900 * time.Millisecond)
+	mygo.Clipboard.Clear()
+	if err := a.copyScrollResult(); err != nil {
+		fmt.Printf("SELFTEST scroll: copy error %v\n", err)
+	}
+	time.Sleep(700 * time.Millisecond)
 	if img := mygo.Clipboard.ReadImage(); len(img) > 0 {
 		width, height := imageDimensions(img)
 		fmt.Printf("SELFTEST scroll: clipboard=%dx%d\n", width, height)
 	} else {
 		fmt.Printf("SELFTEST scroll: clipboard EMPTY\n")
 	}
+	a.mu.Lock()
+	stillOpen := a.result != nil
+	a.mu.Unlock()
+	fmt.Printf("SELFTEST scroll: closed_after_copy=%v\n", !stillOpen)
+	mygo.App.Exit(0)
+}
+
+// selftestScrollManual starts a manual scrolling session: the simulated frames
+// stop changing, so the session must finish by itself and open the preview.
+func (a *App) selftestScrollManual() {
+	if a.main != nil {
+		a.main.Hide()
+	}
+	if err := a.beginRegion(); err != nil {
+		fmt.Printf("SELFTEST scrollmanual: begin error %v\n", err)
+		mygo.App.Exit(1)
+		return
+	}
+	time.Sleep(1000 * time.Millisecond)
+	rect := Rect{X: 60, Y: 80, Width: 520, Height: 420}
+	if err := a.startScroll(rect, false); err != nil {
+		fmt.Printf("SELFTEST scrollmanual: start error %v\n", err)
+		mygo.App.Exit(1)
+		return
+	}
+	deadline := time.Now().Add(25 * time.Second)
+	var win *mygo.Window
+	for time.Now().Before(deadline) {
+		a.mu.Lock()
+		win = a.result
+		a.mu.Unlock()
+		if win != nil {
+			break
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	meta := a.scrollResultMeta()
+	fmt.Printf("SELFTEST scrollmanual: result=%dx%d frames=%d window=%v\n", meta.Width, meta.Height, meta.Frames, win != nil)
+	if win != nil {
+		a.closeScrollResult()
+		time.Sleep(500 * time.Millisecond)
+	}
+	if win == nil || meta.Width == 0 {
+		fmt.Printf("SELFTEST scrollmanual: checks=FAILED\n")
+		mygo.App.Exit(1)
+		return
+	}
+	fmt.Printf("SELFTEST scrollmanual: checks=ok\n")
 	mygo.App.Exit(0)
 }
 

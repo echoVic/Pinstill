@@ -49,10 +49,28 @@ func (s *CaptureService) FinishScroll(action string) error {
 	return s.app.finishScroll(action)
 }
 
-// SetScrollAuto switches a running scroll capture to automatic scrolling.
+// SetScrollAuto switches a running scroll capture between auto and manual
+// scrolling.
 func (s *CaptureService) SetScrollAuto(enabled bool) error {
 	return s.app.setScrollAuto(enabled)
 }
+
+// SetScrollPaused pauses or resumes frame capturing for the running session.
+func (s *CaptureService) SetScrollPaused(paused bool) error {
+	return s.app.setScrollPaused(paused)
+}
+
+// CopyScrollResult puts the stitched long image on the clipboard.
+func (s *CaptureService) CopyScrollResult() error { return s.app.copyScrollResult() }
+
+// SaveScrollResult saves the stitched long image through the save dialog.
+func (s *CaptureService) SaveScrollResult() (string, error) { return s.app.saveScrollResult() }
+
+// PinScrollResult opens the stitched long image as a desktop pin.
+func (s *CaptureService) PinScrollResult() (string, error) { return s.app.pinScrollResult() }
+
+// CloseScrollResult closes the scroll result preview window.
+func (s *CaptureService) CloseScrollResult() { s.app.closeScrollResult() }
 
 // ScrollAccessibilityGranted reports whether automatic scrolling is allowed.
 func (s *CaptureService) ScrollAccessibilityGranted() bool { return capture.AccessibilityGranted() }

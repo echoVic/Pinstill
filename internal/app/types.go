@@ -105,7 +105,18 @@ type PinWindowState struct {
 type ScrollInitPayload struct {
 	Rect                 Rect `json:"rect"`
 	Auto                 bool `json:"auto"`
+	AutoDenied           bool `json:"autoDenied"`
 	AccessibilityGranted bool `json:"accessibilityGranted"`
+}
+
+// ScrollResultPayload tells the preview window which long image to show.
+type ScrollResultPayload struct {
+	URL       string `json:"url"`
+	Width     int    `json:"width"`
+	Height    int    `json:"height"`
+	Frames    int    `json:"frames"`
+	Capped    bool   `json:"capped"`
+	HistoryID string `json:"historyId,omitempty"`
 }
 
 // ScrollProgressPayload reports how a scrolling capture is going.
@@ -184,6 +195,8 @@ var (
 	EventScrollInit = mygo.NewEvent[ScrollInitPayload]("scroll:init")
 	// EventScrollProgress reports the state of a scrolling capture.
 	EventScrollProgress = mygo.NewEvent[ScrollProgressPayload]("scroll:progress")
+	// EventScrollResult hands the stitched long image to the preview window.
+	EventScrollResult = mygo.NewEvent[ScrollResultPayload]("scroll:result")
 	// EventOverlayCapture is emitted to the overlay window with the image it
 	// now annotates in place.
 	EventOverlayCapture = mygo.NewEvent[OverlayCapturePayload]("overlay:capture")

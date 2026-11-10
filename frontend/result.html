@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pinstill — 滚动截图预览</title>
+<style>
+  :root {
+    --amber: #f3a24e;
+    --paper: #f2eee4;
+    --panel: #201f1b;
+    --panel2: #2f2d26;
+    --muted: #9c9487;
+    --line: rgba(242, 238, 228, 0.14);
+    --ease-out: cubic-bezier(.22,.61,.36,1);
+    --motion: 160ms;
+    --font: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #141412;
+    color: var(--paper);
+    user-select: none;
+    -webkit-user-select: none;
+    font-family: var(--font);
+  }
+  [hidden] { display: none !important; }
+  button { font: inherit; color: inherit; cursor: pointer; }
+
+  .result-window {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    background: #141412;
+    animation: result-in var(--motion) var(--ease-out) both;
+  }
+  @keyframes result-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+  .result-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    --app-region: drag;
+    flex: 0 0 auto;
+  }
+  .result-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: -.01em;
+    white-space: nowrap;
+  }
+  .result-title::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--amber);
+    box-shadow: 0 0 0 4px rgba(243, 162, 78, 0.14);
+  }
+  .result-meta {
+    flex: 1;
+    min-width: 0;
+    font-size: 11px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-variant-numeric: tabular-nums;
+  }
+  .result-close {
+    --app-region: no-drag;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    background: transparent;
+    color: #b8b1a5;
+    font-size: 16px;
+    line-height: 1;
+    display: grid;
+    place-items: center;
+    transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+  }
+  .result-close:hover { background: var(--panel2); color: var(--paper); border-color: #ffffff1f; }
+
+  .result-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 14px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    background:
+      radial-gradient(circle at 50% 0, #23221c 0, #171614 60%, #141412 100%);
+  }
+  #resultImage {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    border-radius: 6px;
+    box-shadow: 0 16px 44px rgba(0, 0, 0, 0.45);
+    background: #f4f1eb;
+  }
+  .result-loading {
+    margin: auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .result-spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(242, 238, 228, 0.24);
+    border-top-color: var(--amber);
+    border-radius: 50%;
+    animation: result-spin 0.8s linear infinite;
+  }
+  @keyframes result-spin { to { transform: rotate(360deg); } }
+
+  .result-foot {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 14px;
+    background: var(--panel);
+    border-top: 1px solid var(--line);
+    --app-region: drag;
+  }
+  .result-status {
+    flex: 1;
+    min-width: 0;
+    font-size: 11px;
+    line-height: 1.4;
+    color: #b7c6a7;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .result-status:not(:empty)::before {
+    content: "";
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: #a8c7a0;
+    flex: 0 0 5px;
+  }
+  .result-status[data-kind="error"] { color: #e8a08c; }
+  .result-status[data-kind="error"]::before { background: #e46c4e; }
+  .result-actions {
+    --app-region: no-drag;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    flex: 0 0 auto;
+  }
+  .result-action {
+    position: relative;
+    font-size: 12px;
+    line-height: 1;
+    padding: 9px 13px;
+    border-radius: 8px;
+    border: 1px solid #ffffff22;
+    background: var(--panel2);
+    color: #eee4d5;
+    transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, opacity 120ms ease;
+  }
+  .result-action:hover { background: #3b372c; border-color: #ffffff30; }
+  .result-action.primary {
+    background: var(--amber);
+    border-color: var(--amber);
+    color: #2f200e;
+    font-weight: 700;
+  }
+  .result-action.primary:hover { background: #f3b878; border-color: #f3b878; }
+  .result-action:disabled { opacity: 0.5; cursor: not-allowed; }
+  button:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+  button:disabled { cursor: not-allowed; }
+
+  button.is-pending { cursor: progress; }
+  button.is-pending::after {
+    content: ""; position: absolute; top: -4px; right: -4px; width: 9px; height: 9px;
+    border: 2px solid rgba(243, 162, 78, .32); border-top-color: #f3a24e; border-radius: 50%;
+    animation: result-spin .7s linear infinite; pointer-events: none;
+  }
+  button.is-success::after {
+    content: "✓"; position: absolute; top: -5px; right: -5px; min-width: 12px; height: 12px;
+    padding: 0 3px; border-radius: 999px; background: #a8c7a0; color: #1c241a;
+    font-size: 9px; font-weight: 800; line-height: 12px; text-align: center;
+    animation: result-pop 150ms var(--ease-out) both; pointer-events: none;
+  }
+  @keyframes result-pop { from { opacity: 0; transform: scale(.55); } to { opacity: 1; transform: scale(1); } }
+
+  body.closing .result-window { animation: result-out var(--motion) var(--ease-out) both; }
+  @keyframes result-out { to { opacity: 0; transform: translateY(4px); } }
+  .result-closed {
+    position: fixed;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    background: #141412;
+    color: var(--muted);
+    font-size: 12px;
+    text-align: center;
+    padding: 24px;
+    line-height: 1.7;
+  }
+  .result-closed strong { display: block; color: #e9c18e; font-size: 13px; margin-bottom: 4px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: .001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: .001ms !important;
+    }
+  }
+</style>
+</head>
+<body>
+  <div class="result-window" id="resultWindow">
+    <header class="result-head">
+      <span class="result-title">滚动截图</span>
+      <span class="result-meta" id="resultMeta" role="status" aria-live="polite">正在载入长图…</span>
+      <button type="button" class="result-close" id="resultCloseIcon" aria-label="关闭预览" title="关闭（Esc）">×</button>
+    </header>
+    <div class="result-scroll" id="resultScroll">
+      <div class="result-loading" id="resultLoading">
+        <span class="result-spinner" aria-hidden="true"></span>
+        <span>正在载入长图…</span>
+      </div>
+      <img id="resultImage" alt="滚动截图长图预览" hidden />
+    </div>
+    <footer class="result-foot">
+      <span class="result-status" id="resultStatus" role="status" aria-live="polite"></span>
+      <div class="result-actions" role="group" aria-label="长图操作">
+        <button type="button" class="result-action primary" data-result-action="copy">复制</button>
+        <button type="button" class="result-action" data-result-action="save">保存</button>
+        <button type="button" class="result-action" data-result-action="pin">贴图</button>
+        <button type="button" class="result-action" data-result-action="close">关闭</button>
+      </div>
+    </footer>
+  </div>
+  <script type="module" src="/src/result.ts"></script>
+</body>
+</html>

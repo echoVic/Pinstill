@@ -163,18 +163,31 @@ sleep 1.0
 expect 'SELFTEST pinpersist: check restored=[1-9]' /tmp/pinstill-selftest-pinpersist-check.log
 expect 'SELFTEST pinpersist: check after close stored=0' /tmp/pinstill-selftest-pinpersist-check.log
 
-step "Selftest: scrolling capture"
+step "Selftest: scrolling capture (auto finish + preview)"
 PINSTILL_SELFTEST=scroll PINSTILL_SELFTEST_SCROLL_SIM=1 "$APP" 2>&1 | tee /tmp/pinstill-selftest-scroll.log
 sleep 1.0
-expect 'SELFTEST scroll: frames=' /tmp/pinstill-selftest-scroll.log
+expect 'SELFTEST scroll: accessibility=' /tmp/pinstill-selftest-scroll.log
+expect 'SELFTEST scroll: result=[0-9][0-9]*x[0-9][0-9]*' /tmp/pinstill-selftest-scroll.log
 expect 'SELFTEST scroll: clipboard=1280x' /tmp/pinstill-selftest-scroll.log
-grep -q 'SELFTEST scroll: auto denied ok' /tmp/pinstill-selftest-scroll.log || grep -q 'SELFTEST scroll: auto start err=' /tmp/pinstill-selftest-scroll.log || { echo "FAIL  scroll accessibility check missing"; fail=1; }
+expect 'SELFTEST scroll: closed_after_copy=true' /tmp/pinstill-selftest-scroll.log
 
 step "Selftest: scrolling capture through the page"
 PINSTILL_SELFTEST=scrollflow PINSTILL_SELFTEST_SCROLL_SIM=1 "$APP" 2>&1 | tee /tmp/pinstill-selftest-scrollflow.log
 sleep 1.0
-expect 'SELFTEST scrollflow: frames=' /tmp/pinstill-selftest-scrollflow.log
-expect 'SELFTEST scrollflow: clipboard=1280x' /tmp/pinstill-selftest-scrollflow.log
+expect 'SELFTEST scrollflow: result=[0-9][0-9]*x[0-9][0-9]*' /tmp/pinstill-selftest-scrollflow.log
+expect 'SELFTEST scrollflow: image=[0-9][0-9]*x[0-9][0-9]*' /tmp/pinstill-selftest-scrollflow.log
+expect 'SELFTEST scrollflow: actions=.*copy' /tmp/pinstill-selftest-scrollflow.log
+expect 'SELFTEST scrollflow: actions=.*save' /tmp/pinstill-selftest-scrollflow.log
+expect 'SELFTEST scrollflow: actions=.*pin' /tmp/pinstill-selftest-scrollflow.log
+expect 'SELFTEST scrollflow: actions=.*close' /tmp/pinstill-selftest-scrollflow.log
+expect 'SELFTEST scrollflow: closed=true' /tmp/pinstill-selftest-scrollflow.log
+
+step "Selftest: scrolling capture (manual mode auto finish)"
+PINSTILL_SELFTEST=scrollmanual PINSTILL_SELFTEST_SCROLL_SIM=1 "$APP" 2>&1 | tee /tmp/pinstill-selftest-scrollmanual.log
+sleep 1.0
+expect 'SELFTEST scrollmanual: result=[0-9][0-9]*x[0-9][0-9]*' /tmp/pinstill-selftest-scrollmanual.log
+expect 'SELFTEST scrollmanual: window=true' /tmp/pinstill-selftest-scrollmanual.log
+expect 'SELFTEST scrollmanual: checks=ok' /tmp/pinstill-selftest-scrollmanual.log
 
 step "Selftest: whole-display capture"
 PINSTILL_SELFTEST=fullscreen "$APP" 2>&1 | tee /tmp/pinstill-selftest-fullscreen.log

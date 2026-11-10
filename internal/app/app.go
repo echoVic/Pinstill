@@ -33,8 +33,13 @@ type App struct {
 	main           *mygo.Window
 	overlay        *mygo.Window
 	control        *mygo.Window
+	result         *mygo.Window
 	overlayDisplay mygo.Display
 	overlayRect    mygo.Rectangle
+
+	// resultPNG/resultMeta back the scrolling-capture preview window.
+	resultPNG  []byte
+	resultMeta ScrollResultPayload
 
 	pins      map[string]*mygo.Window
 	pinStates map[string]pin.State

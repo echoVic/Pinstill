@@ -450,16 +450,18 @@ async function startScrollFromToolbar(): Promise<void> {
   if (!hasNative) {
     setToolbarStatus("滚动截图 · 浏览器预览", "info");
     showTransient(
-      "浏览器预览 · 桌面应用中会隐藏选区并弹出滚动截图控制条（可手动滚动，或授权辅助功能后自动滚动）",
+      "浏览器预览 · 桌面应用中会默认自动滚动、自动完成并弹出长图预览窗口",
       3400,
     );
     return;
   }
   setToolbarPending(true, "正在进入滚动截图…");
   try {
-    await startScroll(committedRect, false);
+    // R9: scrolling capture starts in automatic mode; Go falls back to manual
+    // (and reports autoDenied on the control bar) when Accessibility is missing.
+    await startScroll(committedRect, true);
     phase = "finishing";
-    setToolbarStatus("滚动截图进行中…");
+    setToolbarStatus("滚动截图进行中 · 结束后自动预览");
   } catch (error) {
     setToolbarPending(false);
     setToolbarStatus(`无法开始滚动截图：${errorMessage(error)}`, "error");

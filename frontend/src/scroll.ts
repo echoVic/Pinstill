@@ -1,14 +1,14 @@
-// The scrolling-capture control bar (Round 4, independent window).
+// The scrolling-capture control bar (R9, compact 380x64 window).
 //
-// Go hides the region overlay and shows this small frameless window while it
-// captures and stitches frames. The page only drives the session UI:
-// - `scroll:init {rect, auto, accessibilityGranted}` configures the bar;
-// - `scroll:progress {frames, height, status, auto}` updates progress/status;
-// - `Capture.SetScrollAuto(enabled)` toggles automatic scrolling (Go returns an
-//   error without macOS Accessibility permission; the page shows guidance and
-//   offers a button for `Capture.OpenScrollAccessibilitySettings()`);
-// - the action buttons call `Capture.FinishScroll(action)` and Go hides this
-//   window afterwards.
+// Flow: the overlay starts a session with `Capture.StartScroll(rect, true)`.
+// Go hides the overlay and shows this control bar next to the selection. It
+// captures frames while the user (or automatic scrolling) moves the target:
+// - `scroll:init {rect, auto, accessibilityGranted, autoDenied}` configures the bar;
+// - `scroll:progress {frames, height, status, auto}` updates status/progress;
+// - pause/resume: `Capture.SetScrollPaused(bool)`;
+// - auto/manual: `Capture.SetScrollAuto(bool)` (permission denied → guidance);
+// - finish/cancel: `Capture.FinishScroll("finish" | "cancel")`; Go stitches,
+//   stores the long image and opens the result preview window / discards it.
 //
 // In a plain browser (no MyGo runtime) the bar runs a simulated session so the
 // page remains demoable without errors.
@@ -21,33 +21,12 @@ import {
   openScrollAccessibilitySettings,
   scrollAccessibilityGranted,
   setScrollAuto,
-  type FinishAnnotatedAction,
+  setScrollPaused,
   type ScrollProgress,
 } from "./bridge";
 import { flashButtonSuccess, setButtonPending } from "./util";
 
-type ScrollUiAction = "copy" | "save" | "pin" | "cancel";
-
-const ACTION_DEFS: Array<{ action: ScrollUiAction; label: string; className?: string }> = [
-  { action: "copy", label: "复制", className: "primary" },
-  { action: "save", label: "保存" },
-  { action: "pin", label: "贴图" },
-  { action: "cancel", label: "取消", className: "cancel" },
-];
-
-const PENDING_TEXT: Record<ScrollUiAction, string> = {
-  copy: "正在复制长图…",
-  save: "正在保存长图…",
-  pin: "正在固定长图…",
-  cancel: "已取消，正在关闭…",
-};
-
-const DEMO_TEXT: Record<ScrollUiAction, string> = {
-  copy: "复制长图到剪贴板",
-  save: "打开保存对话框",
-  pin: "创建桌面贴图",
-  cancel: "取消本次滚动截图",
-};
+type ControlAction = "pause" | "mode" | "finish" | "cancel";
 
 const el = <T extends HTMLElement = HTMLElement>(id: string): T => {
   const element = document.getElementById(id);
@@ -56,307 +35,343 @@ const el = <T extends HTMLElement = HTMLElement>(id: string): T => {
 };
 
 const bar = el("scrollBar");
+const statusEl = el("scrollStatus");
 const progressEl = el("scrollProgress");
-const hint = el("scrollHint");
-const permissionButton = el<HTMLButtonElement>("scrollPermission");
-const autoInput = el<HTMLInputElement>("scrollAuto");
-const actionsHost = el("scrollActions");
+const permissionButton =
+  document.querySelector<HTMLButtonElement>("[data-scroll-permission]") ??
+  (() => {
+    throw new Error("missing element [data-scroll-permission]");
+  })();
 
 let auto = false;
+let paused = false;
 let accessibilityGranted = false;
-let progress: ScrollProgress | null = null;
+let denied = false;
+let frames = 0;
+let height = 0;
+let status: ScrollProgress["status"] = "running";
 let busy = false;
 let noticeTimer: number | undefined;
 let demoTimer: number | undefined;
+let demoTick = 0;
 
 function errorMessage(error: unknown): string {
   if (error instanceof Error && error.message) return error.message;
+  if (typeof error === "string" && error) return error;
   return "未知错误";
 }
 
-function buildActions(): void {
-  actionsHost.replaceChildren();
-  for (const def of ACTION_DEFS) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = `scroll-action${def.className ? ` ${def.className}` : ""}`;
-    button.dataset.scrollAction = def.action;
-    button.textContent = def.label;
-    button.title = def.label;
-    actionsHost.append(button);
-  }
+function actionButton(action: ControlAction): HTMLButtonElement | null {
+  return bar.querySelector<HTMLButtonElement>(`[data-scroll-action="${action}"]`);
 }
 
 function setBusy(next: boolean): void {
   busy = next;
   bar.classList.toggle("busy", busy);
-  for (const button of actionsHost.querySelectorAll<HTMLButtonElement>("button")) {
+  for (const button of bar.querySelectorAll<HTMLButtonElement>("button")) {
+    if (button === permissionButton) continue;
     button.disabled = busy;
   }
-  autoInput.disabled = busy;
 }
 
-function actionButton(action: ScrollUiAction): HTMLButtonElement | null {
-  return actionsHost.querySelector<HTMLButtonElement>(`button[data-scroll-action="${action}"]`);
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+
+function statusText(): string {
+  if (status === "paused") return "已暂停";
+  if (status === "max") return "已达上限";
+  if (status === "stalled") return "等待滚动…";
+  return auto ? "正在自动滚动…" : "手动滚动中…";
 }
 
-function progressText(payload: ScrollProgress | null): string {
-  if (!payload) return "正在准备滚动会话…";
-  const base = `${payload.frames} 帧 · ${payload.height} px`;
-  switch (payload.status) {
-    case "running":
-      return `正在拼接 · ${base}`;
-    case "done":
-      return `拼接完成 · ${base}`;
-    case "stalled":
-      return `等待滚动 · ${base}`;
-    case "max":
-      return `已达上限 · ${base}`;
-    case "stopped":
-      return `已停止 · ${base}`;
-    default:
-      return `正在拼接 · ${base}`;
+function render(): void {
+  // A transient notice owns the status line until it expires.
+  if (noticeTimer === undefined) {
+    statusEl.dataset.status = status;
+    statusEl.textContent = statusText();
   }
-}
+  progressEl.dataset.status = status;
+  progressEl.textContent = `已拼接 ${frames} 帧 · ${height} px`;
 
-function renderProgress(): void {
-  progressEl.dataset.status = progress?.status ?? "running";
-  progressEl.textContent = progressText(progress);
-}
-
-function renderHint(): void {
-  if (!permissionButton.hidden) return;
-  hint.hidden = false;
-  hint.dataset.kind = "";
-  const status = progress?.status;
-  if (status === "max") hint.textContent = "已达最大长度，请选择完成动作";
-  else if (status === "done" || status === "stalled") {
-    hint.textContent = "可继续滚动，或选择完成动作";
-  } else if (auto) {
-    hint.textContent = "自动滚动中…（可关闭开关或直接完成）";
-  } else {
-    hint.textContent = "请滚动目标窗口，Pinstill 会自动抓帧";
+  const pauseButton = actionButton("pause");
+  if (pauseButton) {
+    pauseButton.textContent = paused ? "继续" : "暂停";
+    pauseButton.setAttribute("aria-pressed", String(paused));
+    pauseButton.title = paused ? "继续抓帧" : "暂停抓帧";
   }
+  const modeButton = actionButton("mode");
+  if (modeButton) {
+    modeButton.textContent = auto ? "自动" : "手动";
+    modeButton.setAttribute("aria-pressed", String(auto));
+    modeButton.title = auto ? "切换到手动滚动" : "切换到自动滚动";
+  }
+  const finishButton = actionButton("finish");
+  if (finishButton) finishButton.disabled = busy || frames === 0;
+  permissionButton.hidden = !denied;
+  permissionButton.textContent = "自动滚动需要辅助功能权限 · 去授权";
 }
 
 function showNotice(text: string, kind: "info" | "warn" | "error" = "info"): void {
-  progressEl.dataset.status = kind === "info" ? (progress?.status ?? "running") : "notice";
-  progressEl.textContent = text;
+  statusEl.dataset.status = kind === "info" ? "notice" : kind;
+  statusEl.textContent = text;
   if (noticeTimer) window.clearTimeout(noticeTimer);
   noticeTimer = window.setTimeout(() => {
     noticeTimer = undefined;
-    if (!busy) renderProgress();
+    if (!busy) render();
   }, 2800);
 }
 
-function showPermission(message?: string): void {
-  hint.hidden = true;
-  permissionButton.hidden = false;
-  if (message) permissionButton.title = message;
-  showNotice("需要「辅助功能」权限才能自动滚动", "warn");
-}
-
-function hidePermission(): void {
-  permissionButton.hidden = true;
-  hint.hidden = false;
-  renderHint();
-}
-
-function syncAutoInput(): void {
-  autoInput.checked = auto;
+function applyProgress(payload: ScrollProgress): void {
+  frames = Math.max(0, payload.frames || 0);
+  height = Math.max(0, payload.height || 0);
+  status = payload.status;
+  if (payload.status === "paused") paused = true;
+  else if (payload.status === "running") paused = false;
+  if (typeof payload.auto === "boolean") auto = payload.auto;
+  if (!busy) render();
 }
 
 // ---------------------------------------------------------------------------
-// Session state
+// Session init
 // ---------------------------------------------------------------------------
 
 function applyInit(payload: unknown): void {
-  const init = payload as { auto?: unknown; accessibilityGranted?: unknown } | null;
+  const init = payload as {
+    auto?: unknown;
+    accessibilityGranted?: unknown;
+    autoDenied?: unknown;
+  } | null;
   auto = Boolean(init?.auto);
   accessibilityGranted = Boolean(init?.accessibilityGranted);
-  progress = null;
+  denied = Boolean(init?.autoDenied);
+  paused = false;
+  frames = 0;
+  height = 0;
+  status = "running";
   setBusy(false);
-  permissionButton.hidden = true;
-  hint.hidden = false;
-  syncAutoInput();
-  renderProgress();
-  renderHint();
+  render();
 }
 
-onScrollInit((payload) => applyInit(payload));
+onScrollInit((payload) => {
+  applyInit(payload);
+  if (!hasNative) startDemo(denied);
+});
 
 onScrollProgress((payload) => {
   if (!payload) return;
-  progress = payload;
-  if (typeof payload.auto === "boolean" && payload.auto !== auto) {
-    auto = payload.auto;
-    syncAutoInput();
-  }
-  if (!busy) {
-    renderProgress();
-    renderHint();
-  }
+  applyProgress(payload);
 });
 
 // ---------------------------------------------------------------------------
-// Automatic scrolling toggle
+// Controls
 // ---------------------------------------------------------------------------
 
-async function onAutoChange(): Promise<void> {
-  if (busy) {
-    syncAutoInput();
-    return;
+async function togglePause(): Promise<void> {
+  if (busy) return;
+  const next = !paused;
+  const button = actionButton("pause");
+  setButtonPending(button, true);
+  try {
+    await setScrollPaused(next);
+    paused = next;
+    status = next ? "paused" : "running";
+    render();
+    if (!hasNative) {
+      showNotice(next ? "浏览器预览 · 已暂停抓帧（模拟）" : "浏览器预览 · 已继续抓帧（模拟）");
+    }
+  } catch (error) {
+    showNotice(`暂停/继续失败：${errorMessage(error)}`, "error");
   }
-  const desired = autoInput.checked;
-  if (!hasNative) {
-    auto = desired;
-    renderHint();
-    showNotice(desired ? "浏览器预览 · 自动滚动已开启（模拟）" : "浏览器预览 · 已切回手动滚动");
-    return;
-  }
+  setButtonPending(button, false);
+}
+
+async function toggleMode(): Promise<void> {
+  if (busy) return;
+  const desired = !auto;
+  const button = actionButton("mode");
+  setButtonPending(button, true);
   try {
     await setScrollAuto(desired);
     auto = desired;
-    if (desired) accessibilityGranted = true;
-    hidePermission();
-    syncAutoInput();
-    showNotice(desired ? "自动滚动已开启" : "自动滚动已关闭");
+    if (desired) {
+      accessibilityGranted = true;
+      denied = false;
+    }
+    render();
+    if (!hasNative) {
+      showNotice(desired ? "浏览器预览 · 已切换到自动滚动" : "浏览器预览 · 已切换到手动滚动");
+    } else {
+      showNotice(desired ? "已切换到自动滚动" : "已切换到手动滚动");
+    }
   } catch (error) {
-    syncAutoInput();
-    showPermission(errorMessage(error));
+    // No Accessibility permission: keep manual mode and surface the guidance.
+    auto = false;
+    denied = true;
+    render();
+    showNotice("自动滚动需要「辅助功能」权限", "warn");
+    permissionButton.title = errorMessage(error);
   }
+  setButtonPending(button, false);
 }
 
-autoInput.addEventListener("change", () => void onAutoChange());
-
-permissionButton.addEventListener("click", async () => {
-  try {
-    await openScrollAccessibilitySettings();
-  } catch {
-    // The dialog may still open; keep the guidance visible.
-  }
-  showNotice("已打开系统设置，请为 Pinstill 勾选「辅助功能」");
-  window.setTimeout(async () => {
-    const granted = await scrollAccessibilityGranted().catch(() => false);
-    accessibilityGranted = granted;
-    if (granted) {
-      hidePermission();
-      showNotice("已获得辅助功能权限，可再次开启自动滚动");
-    }
-  }, 1200);
-});
-
-// ---------------------------------------------------------------------------
-// Finish actions
-// ---------------------------------------------------------------------------
-
-async function runAction(uiAction: ScrollUiAction): Promise<void> {
+async function finish(cancel = false): Promise<void> {
   if (busy) return;
-  const button = actionButton(uiAction);
-  setButtonPending(button, true);
+  const action = cancel ? "cancel" : "finish";
+  const button = actionButton(action);
   busy = true;
   setBusy(true);
   if (noticeTimer) {
     window.clearTimeout(noticeTimer);
     noticeTimer = undefined;
   }
-  progressEl.dataset.status = "running";
-  progressEl.textContent = PENDING_TEXT[uiAction];
-  const goAction: FinishAnnotatedAction = uiAction;
+  if (cancel) {
+    statusEl.dataset.status = "notice";
+    statusEl.textContent = "已取消，正在关闭…";
+  } else {
+    statusEl.dataset.status = "running";
+    statusEl.textContent = frames > 0 ? "正在生成预览…" : "还没有抓到帧…";
+  }
   if (!hasNative) {
-    demoFinish(uiAction);
+    demoFinish(cancel, button);
     return;
   }
+  setButtonPending(button, true);
   try {
-    await finishScroll(goAction);
-    // Go hides this window and performs the action; nothing to reset here.
+    await finishScroll(action);
+    // Go hides this window; on "finish" it opens the result preview window.
   } catch (error) {
     busy = false;
-    setButtonPending(button, false);
     setBusy(false);
-    renderProgress();
+    setButtonPending(button, false);
+    render();
     showNotice(`操作失败：${errorMessage(error)}`, "error");
   }
 }
 
-function demoFinish(uiAction: ScrollUiAction): void {
-  if (demoTimer) {
-    window.clearInterval(demoTimer);
-    demoTimer = undefined;
+permissionButton.addEventListener("click", async () => {
+  try {
+    await openScrollAccessibilitySettings();
+  } catch {
+    // The system dialog may still open; keep the guidance visible.
   }
-  progressEl.dataset.status = "done";
-  progressEl.textContent = `浏览器预览 · 会${DEMO_TEXT[uiAction]}`;
-  window.setTimeout(() => {
-    busy = false;
-    const button = actionButton(uiAction);
-    setButtonPending(button, false);
-    setBusy(false);
-    if (uiAction !== "cancel") flashButtonSuccess(button);
-    renderProgress();
-    renderHint();
-    startDemo();
-  }, 1900);
-}
+  showNotice("已打开系统设置，请为 Pinstill 勾选「辅助功能」");
+  window.setTimeout(async () => {
+    const granted = await scrollAccessibilityGranted().catch(() => false);
+    accessibilityGranted = granted;
+    if (granted) {
+      denied = false;
+      render();
+      showNotice("已获得辅助功能权限，可切换到自动滚动", "info");
+    }
+  }, 1200);
+});
 
-actionsHost.addEventListener("click", (event) => {
+bar.addEventListener("click", (event) => {
   const target = event.target;
   if (!(target instanceof Element)) return;
   const button = target.closest<HTMLButtonElement>("button[data-scroll-action]");
   if (!button || button.disabled) return;
-  void runAction(button.dataset.scrollAction as ScrollUiAction);
+  if (button.dataset.scrollAction === "pause") void togglePause();
+  else if (button.dataset.scrollAction === "mode") void toggleMode();
+  else if (button.dataset.scrollAction === "finish") void finish(false);
+  else if (button.dataset.scrollAction === "cancel") void finish(true);
 });
 
 window.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
   event.preventDefault();
-  void runAction("cancel");
+  void finish(true);
 });
 
 // ---------------------------------------------------------------------------
 // Browser-preview simulation
 // ---------------------------------------------------------------------------
 
-function startDemo(): void {
+function startDemo(startDenied = false): void {
   if (hasNative) return;
-  if (demoTimer) window.clearInterval(demoTimer);
-  let frames = 0;
-  let height = 0;
-  auto = false;
-  accessibilityGranted = false;
+  stopDemo();
+  frames = 0;
+  height = 0;
+  demoTick = 0;
+  denied = startDenied;
+  auto = startDenied ? false : true;
+  paused = false;
+  status = "running";
   setBusy(false);
-  syncAutoInput();
-  permissionButton.hidden = true;
-  hint.hidden = false;
-  progress = { frames, height, status: "running", auto: false };
-  renderProgress();
-  renderHint();
+  render();
+  if (startDenied) {
+    showNotice("浏览器预览 · 无辅助功能权限，已降级为手动滚动", "warn");
+  }
   demoTimer = window.setInterval(() => {
-    if (busy) return;
+    if (busy || paused) return;
+    demoTick += 1;
     frames += 1;
-    height += 340 + Math.floor(Math.random() * 60);
-    const status: ScrollProgress["status"] = frames >= 6 ? "done" : "running";
-    progress = { frames, height, status, auto };
-    renderProgress();
-    renderHint();
-    if (status === "done" && demoTimer) {
-      window.clearInterval(demoTimer);
-      demoTimer = undefined;
+    height += 360 + (demoTick % 3) * 24;
+    if (frames >= 6) {
+      status = "max";
+      paused = false;
+      stopDemo();
+      render();
+      showNotice("浏览器预览 · 已达上限，可点「立即完成」查看长图预览", "info");
+      return;
     }
+    status = "running";
+    render();
   }, 700);
+}
+
+function stopDemo(): void {
+  if (demoTimer) {
+    window.clearInterval(demoTimer);
+    demoTimer = undefined;
+  }
+}
+
+function demoFinish(cancel: boolean, button: HTMLButtonElement | null): void {
+  stopDemo();
+  window.setTimeout(() => {
+    busy = false;
+    setBusy(false);
+    setButtonPending(button, false);
+    if (cancel) {
+      showNotice("浏览器预览 · 已取消本次滚动截图", "info");
+      window.setTimeout(() => startDemo(denied), 1200);
+      return;
+    }
+    if (frames === 0) {
+      showNotice("还没有抓到帧，请先滚动目标窗口", "warn");
+      startDemo(denied);
+      return;
+    }
+    flashButtonSuccess(button);
+    showNotice("浏览器预览 · 桌面应用中会打开长图预览窗口", "info");
+    const query = new URLSearchParams({
+      demo: "1",
+      frames: String(frames),
+      width: "1280",
+      height: String(Math.max(1200, height)),
+    });
+    try {
+      const opened = window.open(`./result.html?${query.toString()}`, "_blank");
+      if (opened) document.documentElement.dataset.demoResultOpened = "1";
+      else document.documentElement.dataset.demoResultOpened = "blocked";
+    } catch {
+      document.documentElement.dataset.demoResultOpened = "error";
+    }
+  }, cancel ? 450 : 700);
 }
 
 // ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
 
-buildActions();
 setBusy(false);
-syncAutoInput();
-hint.hidden = false;
-renderHint();
-if (!hasNative) {
-  startDemo();
+render();
+if (hasNative) {
+  statusEl.dataset.status = "running";
+  statusEl.textContent = "正在准备滚动会话…";
 } else {
-  progressEl.dataset.status = "running";
-  progressEl.textContent = "正在准备滚动会话…";
+  const params = new URLSearchParams(window.location.search);
+  startDemo(params.get("autoDenied") === "1");
 }

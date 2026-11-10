@@ -774,3 +774,60 @@ R6 的完整替换漏了两处旧名首字母 **T** 的图形残留（文字已�
 - **验证**：`work/e2e.sh --skip-build`（隔离数据目录）**23 步 ALL CHECKS PASSED**；其中 drag 改为「页面拖选 → PrepareSelection 后与直接截屏比较」same=true；scroll/scrollflow 长图经剪贴板校验 1280×2300 / 1280×1700；新增 fullscreen（整屏 3840×2160 进剪贴板 + 历史 +1）与 historyactions（Copy/Pin/Remove，delta=1）；uicapture 断言 `views=history,settings`、`editor_dom=false`、预览打开/关闭，并截取 history/preview/settings；permissions/palette 回归通过（palette 断言主窗口无调色板）。
 - README 与结构说明已更新（删除编辑器截图，新增历史预览截图），签名构建通过（Developer ID）。
 - 已知：设置里少数原本只影响主窗口编辑器的项（图标文字提示、Enter 保存等）暂为惰性项；预览保存对话框未自动化。
+
+---
+
+# Round 9：滚动截图 2.0（对齐主流：默认自动滚动 + 自动收尾 + 结果预览）（2026-11-11 凌晨，用户反馈）
+
+用户反馈：「滚动截图做的和主流都不一样，优化一下」。主流工具（PixPin / 微信 / QQ / CleanShot）是：选区里点长截图 → **默认自动滚动** → 到底或停止后**自动完成** → 弹出**长图预览窗口**（复制 / 保存 / 贴图 / 关闭）。现状是默认手动滚动 + 独立控制条等用户点动作 + 完成后没有预览。
+
+## R9.1 交互（冻结）
+
+1. 选区工具栏点「滚动截图」→ 默认请求**自动滚动**：overlay 隐藏，控制条（380×64）贴在选区旁：
+   - 状态文案：「正在自动滚动… 已拼接 N 帧 · H px」/「手动滚动中…」/「已暂停」/「已达上限」
+   - 按钮：`暂停/继续`、`自动/手动`、`立即完成`、`取消`
+   - 辅助功能未授权：自动不可用 → **降级为手动模式开始**，控制条显示「自动滚动需要辅助功能权限」+「去授权」；授权后可切回自动。
+2. **自动收尾**（不再等用户点动作）：满足任一条件 → 停止抓帧 → 拼接 → 存历史 → 打开**结果预览窗口**：
+   - 连续 3 帧几乎相同（到底/停顿，约 1.2s 无新内容）
+   - 达到上限（120 帧 / 30000px）
+   - 用户点「立即完成」（至少 1 帧）
+   - `取消`/Esc/关闭控制条 → 丢弃，无结果窗口
+3. **结果预览窗口**：新窗口 `/result.html`（普通窗口，1000×760 上限，按图片比例适配、居中于选区所在显示器）：
+   - 标题「滚动截图」+ 尺寸/帧数/上限提示 + 关闭按钮
+   - 长图按窗口宽度等比展示、可滚动查看
+   - 动作：**复制 / 保存 / 贴图 / 关闭**；Esc 关闭；复制/保存/贴图成功后自动关闭（图片已进历史）
+4. 手动模式保留：用户自己滚动，停顿约 1.2s 自动收尾出预览；控制条同样可「立即完成」。
+
+## R9.2 事件/绑定（冻结）
+
+- `scroll:init` payload 增加 `autoDenied`；`scroll:progress` 状态 `running|paused|stalled|max`，`auto` 表示当前模式。
+- 结果窗口事件 `scroll:result` payload `{url,width,height,frames,capped,historyId}`。
+- Capture 服务新增：`CopyScrollResult() error`、`SaveScrollResult() (string,error)`、`PinScrollResult() (string,error)`、`CloseScrollResult()`、`SetScrollPaused(paused bool) error`（控制条暂停/继续；暂停时状态 `paused`）。
+- `StartScroll(rect, auto)`：auto 不可用时**不报错**，以手动模式开始并给 `autoDenied=true`。
+- `FinishScroll(action)`：`finish`（立即收尾出结果窗口）或 `cancel`（丢弃）；旧的 copy/pin/save 不再作为控制条动作。
+
+## R9.3 前端
+
+- `scroll.html`/`scroll.ts`：控制条重做（状态、暂停/继续、自动/手动、立即完成、取消、授权引导；不再有结果动作按钮）。
+- 新增 `result.html` + `src/result.ts` + vite 入口：预览窗口（图片自适应宽度、可滚动、复制/保存/贴图/关闭、Esc、动作后关闭）。
+- `overlay.ts`：滚动按钮 `StartScroll(rect, true)`。
+- `bridge.ts`：结果动作包装、`onScrollResult`，更新 scroll 事件类型。
+- 冻结 DOM hooks：控制条 `#scrollStatus`、`#scrollProgress`、`[data-scroll-action="pause|mode|finish|cancel"]`、`[data-scroll-permission]`；结果窗口 `#resultImage`、`#resultMeta`、`[data-result-action="copy|save|pin|close"]`。
+
+## R9.4 Go（Lead）
+
+- scroll.go：auto 降级、自动收尾、结果窗口（复用单例窗口，关闭即隐藏）、事件与 4 个绑定、上限/停顿文案；控制条 380×64。
+- selftest：`scroll`（自动+模拟帧→自动收尾→结果窗口断言）、`scrollflow`（页面驱动）、`scrollmanual`（手动+停顿自动收尾）、`scrollshot`（结果窗口截图）；`e2e` 更新；类型契约测试更新。
+- README/截图更新：滚动截图描述改为「默认自动滚动、自动完成、结果预览」，截图换控制条 + 结果窗口。
+
+## R9.5 非目标
+
+固定表头/表尾智能去除、横向滚动、结果窗口内编辑、窗口缩放手柄。
+
+## R9.6 实测结论（Lead，2026-11-11 凌晨）
+
+- **默认自动滚动 + 自动收尾 + 结果预览**已实现：`StartScroll(rect, true)` 为默认；辅助功能缺失时降级手动并在控制条给出授权入口；连续 3 帧静止（≈1.2s）、达到上限或「立即完成」都会自动收尾 → 拼接 → 存历史 → 打开 `/result.html` 结果预览窗口；预览窗口支持复制 / 保存 / 贴图 / 关闭（Esc），复制/保存/贴图成功后自动关闭。
+- **新增绑定**：`Capture.SetScrollPaused`、`CopyScrollResult`、`SaveScrollResult`、`PinScrollResult`、`CloseScrollResult`；事件 `scroll:result`；`scroll:init` 增加 `autoDenied`，`scroll:progress` 增加 `paused` 状态；控制条 380×64，结果窗口 980×720 上限按显示器夹取。
+- **selftest**：`scroll`（自动收尾 → 结果 1280×2600 → 剪贴板 1280×2600 → 复制后窗口关闭）、`scrollmanual`（手动模式停顿自动收尾）、`scrollflow`（页面驱动 → 结果窗口 DOM：图片 1280×2600 / 9 帧 / copy,save,pin,close / 关闭）全绿；`scrollshot` 产出控制条与结果窗口截图（用于 README，需解锁后重拍）。
+- `go test`/`go vet` 全绿；`npm run build:web` 5 页通过。
+- **待补**：完整 e2e 与 Developer ID 签名构建（本轮验证时 Mac 已锁屏，登录钥匙串不可用导致 codesign 卡在取私钥；临时用 ad-hoc 构建验证了滚动相关 selftest；README 截图与文案在解锁后补跑并提交）。

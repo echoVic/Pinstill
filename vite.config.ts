@@ -2,7 +2,8 @@ import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 
 // Every page of the app is an HTML entry: the main window, the region
-// selection overlay and the pinned-image window.
+// selection overlay, the pinned-image window, the scrolling-capture control bar
+// and the scrolling-capture result preview.
 const page = (file: string) =>
   fileURLToPath(new URL(`./frontend/${file}`, import.meta.url));
 
@@ -22,6 +23,7 @@ export default defineConfig({
         overlay: page("overlay.html"),
         pin: page("pin.html"),
         scroll: page("scroll.html"),
+        result: page("result.html"),
       },
     },
   },

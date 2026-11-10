@@ -100,6 +100,7 @@ export interface Rect {
 export interface ScrollInitPayload {
   rect: Rect;
   auto: boolean;
+  autoDenied: boolean;
   accessibilityGranted: boolean;
 }
 
@@ -109,6 +110,16 @@ export interface ScrollProgressPayload {
   height: number;
   status: string;
   auto: boolean;
+}
+
+/** ScrollResultPayload tells the preview window which long image to show. */
+export interface ScrollResultPayload {
+  url: string;
+  width: number;
+  height: number;
+  frames: number;
+  capped: boolean;
+  historyId?: string;
 }
 
 /**
@@ -177,6 +188,10 @@ export const Capture = {
   closePin(id: string): Promise<void> {
     return call("Capture.ClosePin", id);
   },
+  /** CloseScrollResult closes the scroll result preview window. */
+  closeScrollResult(): Promise<void> {
+    return call("Capture.CloseScrollResult");
+  },
   /** CopyImage puts a PNG on the system clipboard. */
   copyImage(dataBase64: string): Promise<void> {
     return call("Capture.CopyImage", dataBase64);
@@ -184,6 +199,10 @@ export const Capture = {
   /** CopyPin puts a pin's image on the clipboard. */
   copyPin(id: string): Promise<void> {
     return call("Capture.CopyPin", id);
+  },
+  /** CopyScrollResult puts the stitched long image on the clipboard. */
+  copyScrollResult(): Promise<void> {
+    return call("Capture.CopyScrollResult");
   },
   /**
    * ExportImage asks where to save the annotated image, converts it to the
@@ -241,6 +260,10 @@ export const Capture = {
   pinImage(dataBase64: string): Promise<string> {
     return call("Capture.PinImage", dataBase64);
   },
+  /** PinScrollResult opens the stitched long image as a desktop pin. */
+  pinScrollResult(): Promise<string> {
+    return call("Capture.PinScrollResult");
+  },
   /**
    * PrepareSelection captures the region the user selected and hands it back
    * to the overlay, so it can annotate the capture in place on the desktop.
@@ -273,6 +296,10 @@ export const Capture = {
   savePin(id: string): Promise<string> {
     return call("Capture.SavePin", id);
   },
+  /** SaveScrollResult saves the stitched long image through the save dialog. */
+  saveScrollResult(): Promise<string> {
+    return call("Capture.SaveScrollResult");
+  },
   /** ScrollAccessibilityGranted reports whether automatic scrolling is allowed. */
   scrollAccessibilityGranted(): Promise<boolean> {
     return call("Capture.ScrollAccessibilityGranted");
@@ -281,9 +308,16 @@ export const Capture = {
   setPinOpacity(id: string, opacity: number): Promise<void> {
     return call("Capture.SetPinOpacity", id, opacity);
   },
-  /** SetScrollAuto switches a running scroll capture to automatic scrolling. */
+  /**
+   * SetScrollAuto switches a running scroll capture between auto and manual
+   * scrolling.
+   */
   setScrollAuto(enabled: boolean): Promise<void> {
     return call("Capture.SetScrollAuto", enabled);
+  },
+  /** SetScrollPaused pauses or resumes frame capturing for the running session. */
+  setScrollPaused(paused: boolean): Promise<void> {
+    return call("Capture.SetScrollPaused", paused);
   },
   /**
    * Settings returns the settings currently applied, so pages (the overlay)
@@ -361,6 +395,8 @@ export const events = {
   scrollInit: event<ScrollInitPayload>("scroll:init"),
   /** EventScrollProgress reports the state of a scrolling capture. */
   scrollProgress: event<ScrollProgressPayload>("scroll:progress"),
+  /** EventScrollResult hands the stitched long image to the preview window. */
+  scrollResult: event<ScrollResultPayload>("scroll:result"),
   /**
    * EventOverlayCapture is emitted to the overlay window with the image it
    * now annotates in place.

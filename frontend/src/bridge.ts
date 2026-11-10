@@ -61,6 +61,8 @@ export interface ScrollInit {
   auto: boolean;
   /** Whether macOS Accessibility is granted (needed for automatic scrolling). */
   accessibilityGranted: boolean;
+  /** Auto was requested without Accessibility: the session fell back to manual. */
+  autoDenied?: boolean;
 }
 
 /** One `scroll:progress` event of a scrolling-capture session. */
@@ -68,10 +70,27 @@ export interface ScrollProgress {
   frames: number;
   /** Total stitched height in image pixels. */
   height: number;
-  status: "running" | "done" | "stalled" | "max" | "stopped";
+  status: "running" | "paused" | "stalled" | "max";
   /** Current automatic-scrolling state, when Go reports it. */
   auto?: boolean;
 }
+
+/** Payload of `scroll:result`: sent to the result preview window (R9). */
+export interface ScrollResult {
+  /** Absolute URL of the stitched long image (Go-prepared). */
+  url: string;
+  /** Image pixels. */
+  width: number;
+  height: number;
+  frames: number;
+  /** true when the session stopped at the frame/height cap. */
+  capped?: boolean;
+  /** History entry id, when the long image was stored. */
+  historyId?: string;
+}
+
+/** What `Capture.FinishScroll` does with a running session. */
+export type ScrollFinishAction = "finish" | "cancel";
 
 /** A selection captured by `Capture.PrepareSelection`, ready for in-place annotation. */
 export interface OverlayCapture {
@@ -226,7 +245,7 @@ export function startScroll(rect: Rect, autoScroll: boolean): Promise<void> {
   return call("Capture.StartScroll", rect, autoScroll);
 }
 
-export function finishScroll(action: FinishAnnotatedAction): Promise<void> {
+export function finishScroll(action: ScrollFinishAction): Promise<void> {
   if (!hasNative) return Promise.resolve();
   return call("Capture.FinishScroll", action);
 }
@@ -234,6 +253,34 @@ export function finishScroll(action: FinishAnnotatedAction): Promise<void> {
 export function setScrollAuto(enabled: boolean): Promise<void> {
   if (!hasNative) return Promise.resolve();
   return call("Capture.SetScrollAuto", enabled);
+}
+
+/** Pauses/resumes frame capture for the running scrolling session (R9). */
+export function setScrollPaused(paused: boolean): Promise<void> {
+  if (!hasNative) return Promise.resolve();
+  return call("Capture.SetScrollPaused", paused);
+}
+
+// ------------------------------------------------- scroll result window (R9)
+
+export function copyScrollResult(): Promise<void> {
+  if (!hasNative) return Promise.resolve();
+  return call("Capture.CopyScrollResult");
+}
+
+export function saveScrollResult(): Promise<string> {
+  if (!hasNative) return Promise.resolve("");
+  return call<string>("Capture.SaveScrollResult");
+}
+
+export function pinScrollResult(): Promise<string> {
+  if (!hasNative) return Promise.resolve("browser-preview-pin");
+  return call<string>("Capture.PinScrollResult");
+}
+
+export function closeScrollResult(): Promise<void> {
+  if (!hasNative) return Promise.resolve();
+  return call("Capture.CloseScrollResult");
 }
 
 export function scrollAccessibilityGranted(): Promise<boolean> {
@@ -383,6 +430,10 @@ export function onScrollInit(cb: (payload: ScrollInit) => void): () => void {
 
 export function onScrollProgress(cb: (payload: ScrollProgress) => void): () => void {
   return subscribe("scroll:progress", cb);
+}
+
+export function onScrollResult(cb: (payload: ScrollResult) => void): () => void {
+  return subscribe("scroll:result", cb);
 }
 
 export function onHistoryChanged(cb: () => void): () => void {

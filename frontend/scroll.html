@@ -11,6 +11,7 @@
     --panel: #201f1b;
     --panel2: #2f2d26;
     --muted: #9c9487;
+    --ease-out: cubic-bezier(.22,.61,.36,1);
     --font: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   }
   * { box-sizing: border-box; }
@@ -34,13 +35,14 @@
     display: flex;
     flex-direction: column;
     justify-content: center;
-    gap: 5px;
+    gap: 4px;
     padding: 6px 9px;
     border: 1px solid rgba(242, 238, 228, 0.12);
     border-radius: 10px;
     background: var(--panel);
     box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
     --app-region: drag;
+    animation: bar-in 160ms var(--ease-out) both;
   }
   .scroll-row {
     display: flex;
@@ -49,83 +51,81 @@
     min-width: 0;
   }
 
-  .scroll-progress {
+  .scroll-status {
     flex: 1;
     min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
     font-size: 11px;
-    line-height: 1.35;
+    font-weight: 600;
+    line-height: 1.3;
     color: #f0ebe1;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-variant-numeric: tabular-nums;
   }
-  .scroll-progress::before {
+  .scroll-status::before {
     content: "";
-    display: inline-block;
+    flex: 0 0 6px;
     width: 6px;
     height: 6px;
-    margin-right: 6px;
     border-radius: 50%;
     background: var(--amber);
-    vertical-align: 1px;
     box-shadow: 0 0 0 3px rgba(243, 162, 78, 0.16);
     animation: pulse 1.6s ease-in-out infinite;
   }
-  .scroll-progress[data-status="done"]::before,
-  .scroll-progress[data-status="stalled"]::before,
-  .scroll-progress[data-status="max"]::before,
-  .scroll-progress[data-status="stopped"]::before { animation: none; background: #a8c7a0; box-shadow: none; }
-  @keyframes pulse { 50% { opacity: 0.45; } }
+  .scroll-status[data-status="paused"]::before { animation: none; background: #d7c08d; box-shadow: none; }
+  .scroll-status[data-status="stalled"]::before { animation: none; background: #b9ae9a; box-shadow: none; }
+  .scroll-status[data-status="max"]::before { animation: none; background: #a8c7a0; box-shadow: none; }
+  .scroll-status[data-status="notice"] { color: #e8c08a; }
+  .scroll-status[data-status="notice"]::before { animation: none; background: #e8b27a; box-shadow: none; }
+  .scroll-status[data-status="error"] { color: #e8a08c; }
+  .scroll-status[data-status="error"]::before { animation: none; background: #e46c4e; box-shadow: none; }
+  @keyframes pulse { 50% { opacity: 0.4; } }
+  @keyframes bar-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 
-  .scroll-toggle {
+  .scroll-progress {
+    flex: 0 0 auto;
+    font-size: 10px;
+    line-height: 1.3;
+    color: var(--muted);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .scroll-actions {
     --app-region: no-drag;
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: 3px;
     flex: 0 0 auto;
-    font-size: 11px;
-    color: #d8d1c4;
-    cursor: pointer;
   }
-  .scroll-toggle input {
-    appearance: none;
-    width: 26px;
-    height: 15px;
-    margin: 0;
-    border-radius: 8px;
-    background: #4b473c;
+  .scroll-action {
     position: relative;
-    cursor: pointer;
-    transition: background 0.15s ease;
-  }
-  .scroll-toggle input::after {
-    content: "";
-    position: absolute;
-    top: 2px;
-    left: 2px;
-    width: 11px;
-    height: 11px;
-    border-radius: 50%;
-    background: #b9b1a3;
-    transition: transform 0.15s ease, background 0.15s ease;
-  }
-  .scroll-toggle input:checked { background: #dfa15f; }
-  .scroll-toggle input:checked::after { transform: translateX(11px); background: #261e13; }
-  .scroll-toggle input:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
-
-  .scroll-hint {
-    flex: 1;
-    min-width: 0;
-    font-size: 10px;
-    line-height: 1.4;
-    color: var(--muted);
+    display: flex;
+    align-items: center;
+    height: 21px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: #f0ebe1;
+    font: 500 10.5px/1 var(--font);
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    cursor: pointer;
+    transition: background-color 120ms ease, color 120ms ease, opacity 120ms ease;
   }
-  .scroll-hint[data-kind="warn"] { color: #e8b27a; }
-  .scroll-hint[data-kind="error"] { color: #e8a08c; }
+  .scroll-action:hover { background: var(--panel2); }
+  .scroll-action:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+  .scroll-action[data-scroll-action="mode"] { color: #e8c08a; }
+  .scroll-action[data-scroll-action="mode"][aria-pressed="true"] { background: rgba(243, 162, 78, 0.16); color: #f6c78e; }
+  .scroll-action[data-scroll-action="finish"] { background: var(--amber); color: #21170d; font-weight: 700; }
+  .scroll-action[data-scroll-action="finish"]:hover { background: #ffb765; }
+  .scroll-action[data-scroll-action="cancel"] { color: #e8a08c; }
+  .scroll-action[data-scroll-action="cancel"]:hover { background: #3a2622; }
+  .scroll-action:disabled { opacity: 0.4; cursor: default; background: transparent; color: var(--muted); }
+  .scroll-action:disabled[data-scroll-action="finish"] { background: rgba(243, 162, 78, 0.4); color: #21170d; }
 
   .scroll-permission {
     --app-region: no-drag;
@@ -137,7 +137,7 @@
     color: #e8b27a;
     font: inherit;
     font-size: 10px;
-    line-height: 1.4;
+    line-height: 1.3;
     text-align: left;
     white-space: nowrap;
     overflow: hidden;
@@ -147,58 +147,20 @@
   .scroll-permission:hover { text-decoration: underline; text-underline-offset: 3px; }
   .scroll-permission:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; border-radius: 3px; }
 
-  .scroll-actions {
-    --app-region: no-drag;
-    display: flex;
-    align-items: center;
-    gap: 2px;
-    flex: 0 0 auto;
-  }
-  .scroll-action {
-    display: flex;
-    align-items: center;
-    height: 23px;
-    padding: 0 8px;
-    border: 0;
-    border-radius: 6px;
-    background: transparent;
-    color: #f0ebe1;
-    font: 500 11px/1 var(--font);
-    white-space: nowrap;
-    cursor: pointer;
-  }
-  .scroll-action:hover { background: var(--panel2); }
-  .scroll-action:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
-  .scroll-action.primary { background: var(--amber); color: #21170d; font-weight: 700; }
-  .scroll-action.primary:hover { background: #ffb765; }
-  .scroll-action.cancel { color: #e8a08c; }
-  .scroll-action.cancel:hover { background: #3a2622; }
-  .scroll-action:disabled { opacity: 0.4; cursor: default; background: transparent; color: #9c9487; }
-
-  .scroll-bar.busy { cursor: default; }
-
-  /* Round 7.3: 120–180ms entrance motion, button feedback, reduced motion. */
-  :root { --ease-out: cubic-bezier(.22,.61,.36,1); --motion: 160ms; }
-  @keyframes scroll-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
-  @keyframes scroll-spin { to { transform: rotate(360deg); } }
-  @keyframes scroll-pop { from { opacity: 0; transform: scale(.55); } to { opacity: 1; transform: scale(1); } }
-  .scroll-bar { animation: scroll-in var(--motion) var(--ease-out) both; }
-  .scroll-permission:not([hidden]) { animation: scroll-in 150ms var(--ease-out) both; }
-  .scroll-hint { transition: color 140ms ease; }
-  .scroll-action { position: relative; transition: background-color 140ms ease, color 140ms ease, opacity 140ms ease; }
-  .scroll-action.is-pending { cursor: progress; }
-  .scroll-action.is-pending::after {
-    content: ""; position: absolute; top: -3px; right: -3px; width: 8px; height: 8px;
-    border: 2px solid rgba(243, 162, 78, .32); border-top-color: #f3a24e; border-radius: 50%;
+  button.is-pending { cursor: progress; }
+  button.is-pending::after {
+    content: ""; position: absolute; top: -2px; right: -2px; width: 7px; height: 7px;
+    border: 1.5px solid rgba(243, 162, 78, .3); border-top-color: #f3a24e; border-radius: 50%;
     animation: scroll-spin .7s linear infinite; pointer-events: none;
   }
-  .scroll-action.is-success::after {
+  button.is-success::after {
     content: "✓"; position: absolute; top: -4px; right: -4px;
-    min-width: 11px; height: 11px; padding: 0 3px; border-radius: 999px;
-    background: #a8c7a0; color: #1c241a; font-size: 9px; font-weight: 800; line-height: 11px;
-    text-align: center; box-shadow: 0 2px 6px rgba(0, 0, 0, .35);
-    animation: scroll-pop 160ms var(--ease-out) both; pointer-events: none;
+    min-width: 10px; height: 10px; padding: 0 2px; border-radius: 999px;
+    background: #a8c7a0; color: #1c241a; font-size: 8px; font-weight: 800; line-height: 10px;
+    text-align: center; animation: scroll-pop 150ms var(--ease-out) both; pointer-events: none;
   }
+  @keyframes scroll-spin { to { transform: rotate(360deg); } }
+  @keyframes scroll-pop { from { opacity: 0; transform: scale(.55); } to { opacity: 1; transform: scale(1); } }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
       animation-duration: .001ms !important;
@@ -211,16 +173,17 @@
 <body>
   <div class="scroll-bar" id="scrollBar">
     <div class="scroll-row">
-      <span class="scroll-progress" id="scrollProgress" role="status" aria-live="polite">正在准备滚动会话…</span>
-      <label class="scroll-toggle" for="scrollAuto">
-        <input id="scrollAuto" type="checkbox" aria-label="自动滚动" />
-        <span>自动滚动</span>
-      </label>
+      <span class="scroll-status" id="scrollStatus" data-status="running" role="status" aria-live="polite">正在准备滚动会话…</span>
+      <span class="scroll-progress" id="scrollProgress">已拼接 0 帧 · 0 px</span>
     </div>
     <div class="scroll-row">
-      <span class="scroll-hint" id="scrollHint">请滚动目标窗口，Pinstill 会自动抓帧</span>
-      <button type="button" class="scroll-permission" id="scrollPermission" hidden>需要「辅助功能」权限 · 点此打开系统设置</button>
-      <div class="scroll-actions" id="scrollActions" role="group" aria-label="滚动截图动作"></div>
+      <button type="button" class="scroll-permission" data-scroll-permission hidden>自动滚动需要辅助功能权限 · 去授权</button>
+      <div class="scroll-actions" role="group" aria-label="滚动截图控制">
+        <button type="button" class="scroll-action" data-scroll-action="pause" title="暂停 / 继续抓帧">暂停</button>
+        <button type="button" class="scroll-action" data-scroll-action="mode" aria-pressed="false" title="切换自动 / 手动滚动">手动</button>
+        <button type="button" class="scroll-action" data-scroll-action="finish" title="立即完成并预览">立即完成</button>
+        <button type="button" class="scroll-action" data-scroll-action="cancel" title="取消本次滚动截图">取消</button>
+      </div>
     </div>
   </div>
   <script type="module" src="/src/scroll.ts"></script>
