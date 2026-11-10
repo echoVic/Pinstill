@@ -22,6 +22,11 @@ const (
 	indexVersion  = 1
 	pngExt        = ".png"
 	thumbExt      = ".thumb.jpg"
+
+	// maxRetentionDays caps the age limit so multiplying by 24h cannot
+	// overflow time.Duration for absurd configuration values. A retention of
+	// "forever" is expressed as 0, and no screenshot is older than 100 years.
+	maxRetentionDays = 100 * 365
 )
 
 // errCorruptIndex marks an index.json that cannot be trusted. It triggers a
@@ -262,7 +267,8 @@ func (s *Store) Prune(retentionDays int, maxBytes int64) (int, error) {
 	removed := make([]Entry, 0)
 	var cutoff time.Time
 	if retentionDays > 0 {
-		cutoff = time.Now().Add(-time.Duration(retentionDays) * 24 * time.Hour)
+		days := min(retentionDays, maxRetentionDays)
+		cutoff = time.Now().Add(-time.Duration(days) * 24 * time.Hour)
 	}
 	for _, entry := range s.entries {
 		if !cutoff.IsZero() && entry.CreatedAt.Before(cutoff) {

@@ -70,6 +70,7 @@ export const TOOL_ICONS: Record<string, string> = {
   download: "download",
   cancel: "x",
   clipboard: "copy",
+  permissions: "shield-check",
 };
 
 /** Ids of tools that draw on the canvas (everything before "pin"). */

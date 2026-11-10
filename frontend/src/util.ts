@@ -84,6 +84,82 @@ export function formatBytes(bytes: number): string {
   return `${value >= 10 || exponent === 0 ? Math.round(value) : value.toFixed(1)} ${units[exponent]}`;
 }
 
+// ---------------------------------------------------------------------------
+// Button feedback states (R7.3): a pending badge while a native action runs and
+// a short ✓ badge when it succeeded. The page CSS owns the visuals
+// (`.is-pending` / `.is-success`), this only keeps the DOM state honest.
+// ---------------------------------------------------------------------------
+
+const feedbackTimers = new WeakMap<HTMLElement, number>();
+const priorDisabled = new WeakMap<HTMLElement, boolean>();
+
+function feedbackTarget(target: HTMLElement | null | undefined): HTMLButtonElement | null {
+  return target instanceof HTMLButtonElement ? target : null;
+}
+
+/** Shows/hides the pending badge and disables the button while work runs. */
+export function setButtonPending(
+  target: HTMLElement | null | undefined,
+  pending: boolean,
+): void {
+  const button = feedbackTarget(target);
+  if (!button) return;
+  if (pending) {
+    // Remember the original disabled state only once per pending run, so
+    // repeated calls cannot leave the button stuck disabled.
+    if (!button.classList.contains("is-pending")) priorDisabled.set(button, button.disabled);
+    button.disabled = true;
+    button.classList.add("is-pending");
+    button.setAttribute("aria-busy", "true");
+    return;
+  }
+  button.classList.remove("is-pending");
+  button.removeAttribute("aria-busy");
+  button.disabled = priorDisabled.get(button) ?? false;
+  priorDisabled.delete(button);
+}
+
+/** Flashes the ✓ success badge (same duration as the toast it usually follows). */
+export function flashButtonSuccess(
+  target: HTMLElement | null | undefined,
+  duration = 900,
+): void {
+  const button = feedbackTarget(target);
+  if (!button) return;
+  const timer = feedbackTimers.get(button);
+  if (timer) window.clearTimeout(timer);
+  button.classList.remove("is-success");
+  // Force a reflow so rapid repeats restart the pop animation.
+  void button.offsetWidth;
+  button.classList.add("is-success");
+  feedbackTimers.set(
+    button,
+    window.setTimeout(() => {
+      button.classList.remove("is-success");
+      feedbackTimers.delete(button);
+    }, duration),
+  );
+}
+
+/** Runs `task` with the pending badge, then flashes ✓ unless it throws. */
+export async function withButtonFeedback<T>(
+  target: HTMLElement | null | undefined,
+  task: () => Promise<T>,
+  options: { flash?: boolean } = {},
+): Promise<T> {
+  const button = feedbackTarget(target);
+  setButtonPending(button, true);
+  try {
+    const result = await task();
+    setButtonPending(button, false);
+    if (options.flash !== false) flashButtonSuccess(button);
+    return result;
+  } catch (error) {
+    setButtonPending(button, false);
+    throw error;
+  }
+}
+
 /** Waits for the browser to paint the next frame. */
 export function nextFrame(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));

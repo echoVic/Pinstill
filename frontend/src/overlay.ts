@@ -41,7 +41,7 @@ import {
   rememberColor,
 } from "./colors";
 import { DRAW_TOOLS, TOOLS, TOOL_ICONS, type ToolId } from "./tools";
-import { blobToBase64, decodeImageBlob } from "./util";
+import { blobToBase64, decodeImageBlob, flashButtonSuccess, setButtonPending } from "./util";
 
 const MIN_SELECTION = 3;
 const TOOLBAR_GAP = 10;
@@ -628,8 +628,16 @@ function showToolbar(): void {
   placeToolbar();
 }
 
+/** Clears pending badges left over by an action that a new session replaced. */
+function clearActionFeedback(): void {
+  for (const button of toolbar.querySelectorAll<HTMLButtonElement>("button.is-pending")) {
+    setButtonPending(button, false);
+  }
+}
+
 function hideToolbar(): void {
   toolbar.hidden = true;
+  clearActionFeedback();
   setToolbarPending(false);
   setToolbarStatus("");
 }
@@ -864,7 +872,14 @@ async function retryCapture(): Promise<void> {
 // Finish
 // ---------------------------------------------------------------------------
 
+function actionButton(action: ToolbarAction): HTMLButtonElement | null {
+  return toolbar.querySelector<HTMLButtonElement>(`button[data-action="${action}"]`);
+}
+
 function demoFinish(action: ToolbarAction): void {
+  const button = actionButton(action);
+  setButtonPending(button, false);
+  if (action !== "cancel") flashButtonSuccess(button);
   showTransient(`浏览器预览 · ${DEMO_MESSAGES[action]}`, 3200);
   setToolbarPending(false);
   if (demoResetTimer) window.clearTimeout(demoResetTimer);
@@ -878,6 +893,8 @@ async function finishWith(
 ): Promise<void> {
   if (phase === "finishing") return;
   phase = "finishing";
+  const button = actionButton(uiAction);
+  setButtonPending(button, true);
   setToolbarPending(true, PENDING_LABELS[uiAction]);
   if (!hasNative) {
     demoFinish(uiAction);
@@ -889,6 +906,7 @@ async function finishWith(
     // (BeginRegion) resets this page.
   } catch (error) {
     const message = errorMessage(error);
+    setButtonPending(button, false);
     if (!engine) {
       // The afterCapture shortcut path has no annotation surface to return to.
       reset();

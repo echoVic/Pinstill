@@ -21,7 +21,8 @@ Pinstill 是一个面向 macOS 和 Windows 的桌面截图与标注工具。它�
 - **历史**：截图自动落盘、真实缩略图、点击载入编辑器、单条删除 / 清空；保留天数与容量上限生效
 - **托盘**：菜单栏常驻图标：截取区域 / 截取整个屏幕 / 固定剪贴板图片 / 显示主窗口 / 退出
 - **全局快捷键**：默认 ⌘⇧1（截取区域）、⌘⇧2（固定剪贴板图片）、⌘⇧O（提取文字，能力待接入）；可在设置里重新录制，注册失败会提示
-- **设置**：6 个分类、localStorage 持久化，并实时推给 Go 侧生效（截图后就地标注/复制/贴图/进编辑器、光标、提示音、格式、默认保存文件夹、登录启动、历史保留策略、贴图透明度/边框等）
+- **设置**：7 个分类（通用与截图 / 快捷键 / 保存与历史 / 标注与水印 / 贴图与桌面 / 识别与翻译 / 权限）、localStorage 持久化，并实时推给 Go 侧生效（截图后就地标注/复制/贴图/进编辑器、光标、提示音、格式、默认保存文件夹、登录启动、历史保留策略、贴图透明度/边框等）
+- **权限中心**：设置 →「权限」实时显示屏幕录制、辅助功能（自动滚动）、登录时启动的真实系统状态，可一键请求权限、打开对应系统设置、重新检测；主窗口在缺少屏幕录制权限时显示可关闭的引导横幅
 
 仍是「待接入」占位（点开有明确说明，不会假装可用）：OCR 文字识别、翻译、二维码识别。
 
@@ -99,7 +100,7 @@ frontend/pin.html            置顶贴图窗口
 frontend/src/                TypeScript 模块（bridge 是唯一的原生调用入口）
 vite.config.ts               四页多入口构建（index/overlay/pin/scroll）
 work/plan.md                 本轮开发的冻结接口契约与实测结论
-work/e2e.sh                  端到端验收脚本（构建 + 16 项 selftest）
+work/e2e.sh                  端到端验收脚本（构建 + 17 项 selftest）
 ```
 
 ### 端到端验收
@@ -109,7 +110,7 @@ bash work/e2e.sh            # 完整构建 + 全部自检
 bash work/e2e.sh --skip-build   # 用现有构建产物只跑自检
 ```
 
-脚本会依次跑 Go 测试 / vet / Windows 交叉编译、前端与桌面构建，以及 16 项应用级自检（真实退出、真实截图+历史+剪贴板、overlay 渲染、选区映射像素级对比、Esc 取消、**就地标注全流程 copy/pin/editor/cancel + afterCapture 自动动作**、**桌面贴图交互（双击/菜单/滚轮/关闭）**、**贴图重启恢复**、**滚动截图拼接与页面全流程**、编辑器交付、编辑器内动作、主窗口视图、贴图窗口、全局快捷键注册、设置应用）。自检通过环境变量驱动（`PINSTILL_SELFTEST=quit|capture|overlay|drag|esc|flow|pinpersist-setup|pinpersist-check|scroll|scrollflow|deliver|uiactions|uicapture|pin|history|hotkeys|settings|showcase|scrollshot|demo|hold`），产物与日志在 `/tmp/pinstill-selftest-*`。
+脚本会依次跑 Go 测试 / vet / Windows 交叉编译、前端与桌面构建，以及 17 项应用级自检（真实退出、真实截图+历史+剪贴板、overlay 渲染、选区映射像素级对比、Esc 取消、**就地标注全流程 copy/pin/editor/cancel + afterCapture 自动动作**、**桌面贴图交互（双击/菜单/滚轮/关闭）**、**贴图重启恢复**、**滚动截图拼接与页面全流程**、编辑器交付、编辑器内动作、主窗口视图、贴图窗口、全局快捷键注册、设置应用、**权限中心**）。自检通过环境变量驱动（`PINSTILL_SELFTEST=quit|capture|overlay|drag|esc|flow|pinpersist-setup|pinpersist-check|scroll|scrollflow|deliver|uiactions|uicapture|pin|history|hotkeys|settings|perms|showcase|scrollshot|demo|hold`），产物与日志在 `/tmp/pinstill-selftest-*`。
 
 ### 数据与权限
 

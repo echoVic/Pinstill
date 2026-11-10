@@ -251,9 +251,14 @@ export class Editor {
   private updateSizeLabel(): void {
     if (this.mode === "empty") {
       this.captureSizeEl.textContent = "尚未截取";
+      this.captureSizeEl.removeAttribute("title");
       return;
     }
-    this.captureSizeEl.textContent = `${this.canvas.width} × ${this.canvas.height} px`;
+    const size = `${this.canvas.width} × ${this.canvas.height} px`;
+    // R7.3: the canvas is fitted to the frame, so show both the fit state and
+    // the real pixel size (the editing geometry stays untouched).
+    this.captureSizeEl.textContent = `适应窗口 · 实际 ${size}`;
+    this.captureSizeEl.title = `实际尺寸 ${size}`;
   }
 
   private renderBase(): void {
@@ -468,6 +473,7 @@ export class Editor {
       button.dataset.color = preset;
       button.style.setProperty("--swatch", preset);
       button.setAttribute("aria-label", `颜色 ${preset}`);
+      button.setAttribute("aria-pressed", String(preset.toLowerCase() === current));
       button.addEventListener("click", () => this.setColor(preset));
       palette.append(button);
     }
@@ -477,6 +483,7 @@ export class Editor {
     customButton.className = `color-swatch custom${custom ? " selected" : ""}`;
     customButton.dataset.colorCustom = "true";
     customButton.setAttribute("aria-label", "自定义颜色");
+    customButton.setAttribute("aria-pressed", String(custom));
     customButton.title = "自定义颜色";
     customButton.addEventListener("click", () => this.customColorInput?.click());
     palette.append(customButton);
@@ -488,6 +495,7 @@ export class Editor {
       button.dataset.colorRecent = recent;
       button.style.setProperty("--swatch", recent);
       button.setAttribute("aria-label", `最近使用颜色 ${recent}`);
+      button.setAttribute("aria-pressed", String(recent === current));
       button.addEventListener("click", () => this.setColor(recent));
       palette.append(button);
     }

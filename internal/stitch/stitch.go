@@ -80,9 +80,12 @@ func (a *Accumulator) Add(frame *image.RGBA) (int, error) {
 	if a.canvas == nil {
 		a.opts = a.opts.withDefaults(frame.Bounds().Dy())
 		b := frame.Bounds()
+		// The height cap applies to the first frame too: keep a.merged in sync
+		// with the canvas, otherwise Size()/Result() would report more rows
+		// than the image holds when one frame is taller than MaxHeight.
 		a.canvas = image.NewRGBA(image.Rect(0, 0, b.Dx(), min(a.opts.MaxHeight, b.Dy())))
-		copyRows(a.canvas, 0, frame, b.Dy())
-		a.merged = b.Dy()
+		a.merged = a.canvas.Bounds().Dy()
+		copyRows(a.canvas, 0, frame, a.merged)
 		a.prev = frame
 		return 0, nil
 	}

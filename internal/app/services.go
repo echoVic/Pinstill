@@ -204,8 +204,24 @@ func (s *CaptureService) ApplySettings(settings Settings) map[string]string {
 // PermissionGranted reports whether the OS lets the app record the screen.
 func (s *CaptureService) PermissionGranted() bool { return capture.PermissionGranted() }
 
+// RequestScreenPermission asks the OS for screen recording access. macOS shows
+// its system prompt when the grant is missing; the return value is the state
+// after the request, which is still false until the user approves and the
+// process restarts. The page falls back to opening System Settings when the
+// request cannot be shown.
+func (s *CaptureService) RequestScreenPermission() bool { return capture.RequestPermission() }
+
 // OpenPermissionSettings opens the OS privacy pane for screen recording.
 func (s *CaptureService) OpenPermissionSettings() error { return capture.OpenPermissionSettings() }
+
+// LaunchAtLogin reports whether the OS currently launches Pinstill at login.
+// It reads the real login item state, which can differ from the preference
+// when the app runs from a path macOS refuses to register (e.g. not copied to
+// /Applications).
+func (s *CaptureService) LaunchAtLogin() bool { return mygo.App.OpenAtLogin() }
+
+// OpenLoginItemsSettings opens the OS login items settings pane.
+func (s *CaptureService) OpenLoginItemsSettings() error { return openLoginItemsSettings() }
 
 // OverlayInfo describes the display the overlay covers.
 func (s *CaptureService) OverlayInfo() OverlayInfo { return s.app.overlayInfo() }

@@ -39,6 +39,8 @@ func (a *App) runSelfTest(mode string) {
 		a.selftestHotkeys()
 	case "settings":
 		a.selftestSettings()
+	case "perms":
+		a.selftestPerms()
 	case "deliver":
 		a.selftestDeliver()
 	case "uicapture":
@@ -360,6 +362,13 @@ func (a *App) selftestEscape() {
 		return
 	}
 	time.Sleep(900 * time.Millisecond)
+	// System Events types into the frontmost app, and earlier selftest steps
+	// may have left another app in front on a busy machine. Activate Pinstill
+	// first so the synthetic Escape lands on the overlay.
+	activate := exec.Command("/usr/bin/osascript", "-e",
+		`tell application "System Events" to set frontmost of process "Pinstill" to true`)
+	activate.Run()
+	time.Sleep(400 * time.Millisecond)
 	// System Events occasionally misses a synthesized key while the system
 	// is busy; press Escape a few times before calling it a failure.
 	for attempt := 1; attempt <= 3; attempt++ {
@@ -1468,4 +1477,105 @@ func (a *App) selftestSettings() {
 		fmt.Printf("SELFTEST settings: %s=%s\n", key, acc)
 	}
 	mygo.App.Exit(0)
+}
+
+// selftestPerms drives the main window into Settings > Permissions and checks
+// the permission center contract from plan R7.1: seven categories with
+// data-settings-cat, three live status lines, the six permission actions and
+// the banner actions.
+func (a *App) selftestPerms() {
+	if a.main == nil {
+		fmt.Printf("SELFTEST perms: no main window\n")
+		mygo.App.Exit(1)
+		return
+	}
+	a.showMain()
+	time.Sleep(1500 * time.Millisecond)
+	eval := func(js string) string {
+		v, err := a.main.Page().Eval(js)
+		if err != nil {
+			fmt.Printf("SELFTEST perms: eval error %v\n", err)
+			return ""
+		}
+		return fmt.Sprint(v)
+	}
+	// Settings view, then the Permissions category (both are page clicks so
+	// the test proves wiring, not just markup).
+	eval(`document.querySelector('[data-view="settings"]')?.click(), 'ok'`)
+	time.Sleep(700 * time.Millisecond)
+	eval(`document.querySelector('#settingsNav button[data-settings-cat="permissions"]')?.click(), 'ok'`)
+	time.Sleep(900 * time.Millisecond)
+
+	categories := eval(`String(document.querySelectorAll('#settingsNav button[data-settings-cat]').length)`)
+	status := func(id string) string {
+		return strings.TrimSpace(eval(`String(document.getElementById('` + id + `')?.textContent ?? '')`))
+	}
+	screen := status("permScreenStatus")
+	accessibility := status("permAccessibilityStatus")
+	login := status("permLaunchStatus")
+	actions := eval(`[...document.querySelectorAll('[data-perm-action]')].map((e) => e.dataset.permAction).join(',')`)
+	bannerActions := eval(`[...document.querySelectorAll('[data-banner-action]')].map((e) => e.dataset.bannerAction).join(',')`)
+	bannerExists := eval(`String(!!document.getElementById('permissionBanner'))`)
+	bannerHidden := eval(`String(document.getElementById('permissionBanner')?.hidden ?? false)`)
+
+	fmt.Printf("SELFTEST perms: categories=%s\n", categories)
+	fmt.Printf("SELFTEST perms: screen=%q accessibility=%q login=%q\n", screen, accessibility, login)
+	fmt.Printf("SELFTEST perms: actions=%s\n", actions)
+	fmt.Printf("SELFTEST perms: banner=%s hidden=%s banner_actions=%s\n", bannerExists, bannerHidden, bannerActions)
+
+	ok := true
+	failCheck := func(format string, args ...any) {
+		ok = false
+		fmt.Printf("SELFTEST perms: "+format+"\n", args...)
+	}
+	hasStatusToken := func(text string) bool {
+		return strings.Contains(text, "已授权") || strings.Contains(text, "未授权") || strings.Contains(text, "浏览器预览")
+	}
+	if categories != "7" {
+		failCheck("want 7 settings categories, got %q", categories)
+	}
+	if !hasStatusToken(screen) {
+		failCheck("screen status %q has no known token", screen)
+	}
+	if !hasStatusToken(accessibility) {
+		failCheck("accessibility status %q has no known token", accessibility)
+	}
+	if login == "" {
+		failCheck("login status is empty")
+	}
+	actionSet := strings.Split(actions, ",")
+	for _, want := range []string{"screen-request", "screen-open", "screen-check", "accessibility-open", "accessibility-check", "login-open"} {
+		found := false
+		for _, got := range actionSet {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			failCheck("missing permission action %q (got %q)", want, actions)
+		}
+	}
+	if bannerExists != "true" {
+		failCheck("permission banner element missing")
+	}
+	for _, want := range []string{"grant", "settings", "dismiss"} {
+		found := false
+		for _, got := range strings.Split(bannerActions, ",") {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			failCheck("missing banner action %q (got %q)", want, bannerActions)
+		}
+	}
+	if ok {
+		fmt.Printf("SELFTEST perms: checks=ok\n")
+		mygo.App.Exit(0)
+		return
+	}
+	fmt.Printf("SELFTEST perms: checks=FAILED\n")
+	mygo.App.Exit(1)
 }

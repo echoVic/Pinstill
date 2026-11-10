@@ -59,6 +59,70 @@
 .color-swatch.custom{background:conic-gradient(#e56e48,#efb94c,#78a576,#70a8c2,#e46c4e,#e56e48);display:grid;place-items:center;color:#21170d;font-size:11px;font-weight:700;line-height:1}
 .color-swatch.custom::after{content:"+";text-shadow:0 1px 2px #ffffff99}
 .color-palette{display:inline-flex;align-items:center;gap:3px;flex-wrap:wrap}
+/* Round 7.1: main-window permission banner (hidden until screen recording is
+   denied inside the desktop app; the browser preview never shows it). */
+.permission-banner{display:flex;align-items:center;gap:14px;margin:0 0 20px;padding:12px 14px;border:1px solid rgba(243,162,78,.34);border-radius:12px;background:linear-gradient(100deg,rgba(243,162,78,.15),rgba(243,162,78,.04) 62%,rgba(32,31,27,.55));box-shadow:0 14px 34px rgba(0,0,0,.18)}
+.permission-banner-icon{flex:0 0 30px;width:30px;height:30px;border-radius:9px;display:grid;place-items:center;background:rgba(243,162,78,.16);color:#f3b878;box-shadow:inset 0 0 0 1px rgba(243,162,78,.22)}
+.permission-banner-copy{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1}
+.permission-banner-copy strong{font-size:13px;font-weight:600;letter-spacing:-.01em;color:#f4e7d3}
+.permission-banner-copy span{font-size:11.5px;line-height:1.55;color:#bdb3a2}
+.permission-banner-actions{display:flex;align-items:center;gap:7px;flex-wrap:wrap;flex-shrink:0}
+.permission-banner button{font-size:11.5px;line-height:1;padding:8px 11px;border-radius:7px;border:1px solid #ffffff22;background:#302d25;color:#eee4d5;transition:background .14s ease,border-color .14s ease,color .14s ease}
+.permission-banner button:hover{background:#3b372c;border-color:#ffffff2e}
+.permission-banner button[data-banner-action=grant]{background:#e8ac64;border-color:#e8ac64;color:#2f200e;font-weight:600}
+.permission-banner button[data-banner-action=grant]:hover{background:#f3b878;border-color:#f3b878}
+.permission-banner button.ghost{background:transparent;border-color:transparent;color:#9d968a}
+.permission-banner button.ghost:hover{background:#ffffff0d;color:#c9c2b5}
+.permission-banner button:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+.permission-banner button:disabled{opacity:.55;cursor:default}
+/* Round 7.1: permission centre rows (settings → 权限). */
+.setting-row.perm-row{align-items:flex-start}
+.setting-row.perm-row .settings-control{display:flex;flex-direction:column;align-items:flex-end;gap:8px;max-width:330px}
+.perm-status{display:inline-flex;align-items:center;gap:6px;padding:4px 9px;border-radius:999px;border:1px solid #ffffff1f;background:#2a2822;color:#d7d0c2;font-size:11.5px;line-height:1.35;white-space:nowrap}
+.perm-status::before{content:"";flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.85}
+.perm-status.ok{color:#b6d3ad;border-color:rgba(168,199,160,.28);background:#232a21}
+.perm-status.warn{color:#f0c089;border-color:rgba(243,162,78,.3);background:#2f2719}
+.perm-status.muted{color:#a29b8d;border-color:#ffffff1a}
+.perm-actions{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:wrap}
+.perm-btn{font-size:11px;line-height:1;padding:6px 10px;border-radius:7px;border:1px solid #ffffff22;background:#302d25;color:#eee4d5;transition:background .14s ease,border-color .14s ease,color .14s ease,opacity .14s ease}
+.perm-btn:hover{background:#3b372c;border-color:#ffffff2e}
+.perm-btn.primary{background:#e8ac64;border-color:#e8ac64;color:#2f200e;font-weight:600}
+.perm-btn.primary:hover{background:#f3b878;border-color:#f3b878}
+.perm-btn:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+.perm-btn.pending,.perm-btn:disabled{opacity:.55;cursor:default}
+.perm-note{font-size:10.5px;color:#9a9386;line-height:1.5;text-align:right}
+/* Round 7.3: motion, button feedback, oversized captures, history cards. */
+:root{--ease-out:cubic-bezier(.22,.61,.36,1);--motion:150ms}
+@keyframes pinstill-in{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+@keyframes pinstill-fade{from{opacity:0}to{opacity:1}}
+@keyframes pinstill-pop{from{opacity:0;transform:scale(.55)}to{opacity:1;transform:scale(1)}}
+@keyframes pinstill-spin{to{transform:rotate(360deg)}}
+.capture-toolbar:not(.hidden){animation:pinstill-in var(--motion) var(--ease-out) both}
+.tool-properties:not([hidden]){animation:pinstill-fade var(--motion) var(--ease-out) both}
+.result-panel:not([hidden]){animation:pinstill-in var(--motion) var(--ease-out) both}
+.permission-banner:not([hidden]){animation:pinstill-in var(--motion) var(--ease-out) both}
+.toast{transition:opacity var(--motion) var(--ease-out),transform var(--motion) var(--ease-out)}
+.history-card{transition:border-color var(--motion) ease,background-color var(--motion) ease}
+.history-card:hover{border-color:rgba(243,162,78,.3)}
+.history-delete{transition:opacity var(--motion) ease,background-color var(--motion) ease,color var(--motion) ease,width var(--motion) ease,padding var(--motion) ease}
+/* Unified button feedback: pending badge (corner spinner) + brief ✓ badge. */
+.capture-toolbar button,.btn,.history-actions .btn,.settings-nav button,.shortcut-record,.settings-footer button,.perm-btn,.permission-banner button,.result-action,.history-open{position:relative;transition:background-color var(--motion) ease,color var(--motion) ease,border-color var(--motion) ease,opacity var(--motion) ease}
+button.is-pending{cursor:progress}
+button.is-pending::after{content:"";position:absolute;top:-4px;right:-4px;width:10px;height:10px;border:2px solid rgba(243,162,78,.32);border-top-color:#f3a24e;border-radius:50%;animation:pinstill-spin .7s linear infinite;pointer-events:none;z-index:3}
+button.is-success::after{content:"✓";position:absolute;top:-5px;right:-5px;z-index:3;min-width:13px;height:13px;padding:0 3px;border-radius:999px;background:#a8c7a0;color:#1c241a;font-size:10px;font-weight:800;line-height:13px;text-align:center;box-shadow:0 2px 6px rgba(0,0,0,.35);animation:pinstill-pop 160ms var(--ease-out) both;pointer-events:none}
+.capture-toolbar button.is-pending::after,.capture-toolbar button.is-success::after{top:-2px;right:-2px}
+button:disabled,.btn:disabled,.settings-footer button:disabled{opacity:.45;cursor:not-allowed}
+/* Keyboard accessibility: visible focus on every actionable control. */
+button:focus-visible,.btn:focus-visible,.history-open:focus-visible,.history-delete:focus-visible{outline:2px solid var(--amber);outline-offset:2px;border-radius:6px}
+select:focus-visible,input[type=text]:focus-visible,input[type=range]:focus-visible,input[type=color]:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+/* Oversized captures fit the editor frame instead of stretching the page. */
+.capture-frame{display:flex;align-items:flex-start;justify-content:center;width:fit-content;max-width:100%;margin-left:auto;margin-right:auto}
+#shotCanvas{display:block;width:auto;height:auto;max-width:100%;max-height:min(70vh,720px);touch-action:none;cursor:crosshair}
+/* History cards: armed delete confirmation + broken thumbnail fallback. */
+.history-card .thumb{position:relative;display:block;height:110px;overflow:hidden;background:#24231e}
+.history-delete.armed{width:auto;min-width:24px;padding:0 7px;background:#3a2320;border-color:#5c332c;color:#f0a08c;font-size:11px;font-weight:600;opacity:1}
+.history-card .thumb.broken::after{content:"缩略图不可用";position:absolute;inset:0;display:grid;place-items:center;color:#8e8a7e;font-size:11px;background:repeating-linear-gradient(135deg,#24231e,#24231e 9px,#2a2923 9px,#2a2923 18px)}
+@media (prefers-reduced-motion: reduce){*,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}}
 </style>
 </head>
 <body>
@@ -77,6 +141,20 @@
     <div class="top">
       <div><div class="eyebrow">capture / keep / move</div><h1 class="title">截取、标注，再带走。</h1><p class="sub">截图后就地编辑，一步复制、下载或固定到屏幕。</p></div>
       <div class="actions"><button class="btn small" id="shortcut">⌘ ⇧ 1&nbsp;&nbsp;快捷键</button><button class="btn primary" id="capture">截一张</button></div>
+    </div>
+    <div class="permission-banner" id="permissionBanner" hidden role="status" aria-live="polite">
+      <div class="permission-banner-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><rect x="3" y="4" width="18" height="13" rx="2"></rect><path d="M8 21h8M12 17v4"></path><path d="M9 10.5h6"></path></svg>
+      </div>
+      <div class="permission-banner-copy">
+        <strong>Pinstill 还差「屏幕录制」权限才能截图</strong>
+        <span>在「系统设置 → 隐私与安全性 → 屏幕录制」中允许 Pinstill，然后回到这里重新检测。</span>
+      </div>
+      <div class="permission-banner-actions">
+        <button type="button" data-banner-action="grant">请求权限</button>
+        <button type="button" data-banner-action="settings">打开系统设置</button>
+        <button type="button" class="ghost" data-banner-action="dismiss">本次会话隐藏</button>
+      </div>
     </div>
     <section class="settings-view" id="settingsView" hidden aria-label="偏好设置"><div class="settings-layout"><nav class="settings-nav" aria-label="设置分类" id="settingsNav"></nav><div class="settings-content"><div id="settingsBody"></div><div class="settings-footer"><span class="settings-status" id="settingsStatus" role="status">设置已保存在此浏览器</span><button id="resetSettings" type="button">恢复本分类默认值</button></div><p class="settings-preview-note" id="settingsPreviewNote">设计预览 · 设置保存在当前浏览器。开机启动、系统快捷键、文件夹访问及识别服务将在桌面应用中接入。</p></div></div></section><div class="workspace" id="workspaceView">
       <section class="stage">

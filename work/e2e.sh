@@ -217,6 +217,17 @@ expect 'SELFTEST settings: captureKey=CmdOrCtrl+Shift+1' /tmp/pinstill-selftest-
 expect 'SELFTEST settings: pinKey=CmdOrCtrl+Shift+2' /tmp/pinstill-selftest-settings.log
 expect 'SELFTEST settings: ocrKey=CmdOrCtrl+Shift+O' /tmp/pinstill-selftest-settings.log
 
+step "Selftest: permission center"
+PINSTILL_SELFTEST=perms "$APP" 2>&1 | tee /tmp/pinstill-selftest-perms.log
+sleep 1.0
+expect 'SELFTEST perms: categories=7' /tmp/pinstill-selftest-perms.log
+expect 'SELFTEST perms: screen=' /tmp/pinstill-selftest-perms.log
+expect 'SELFTEST perms: actions=.*screen-request' /tmp/pinstill-selftest-perms.log
+expect 'SELFTEST perms: actions=.*accessibility-check' /tmp/pinstill-selftest-perms.log
+expect 'SELFTEST perms: actions=.*login-open' /tmp/pinstill-selftest-perms.log
+expect 'SELFTEST perms: banner=true' /tmp/pinstill-selftest-perms.log
+expect 'SELFTEST perms: checks=ok' /tmp/pinstill-selftest-perms.log
+
 printf '\n'
 if [ "$fail" -eq 0 ]; then
   echo "ALL CHECKS PASSED"

@@ -278,6 +278,20 @@ export function openPermissionSettings(): Promise<void> {
   return call("Capture.OpenPermissionSettings");
 }
 
+// ------------------------------------------------- permission centre (R7.1)
+
+/** System state of the OS login item, independent of the saved preference. */
+export function launchAtLogin(): Promise<boolean> {
+  if (!hasNative) return Promise.resolve(false);
+  return call<boolean>("Capture.LaunchAtLogin");
+}
+
+/** Opens the OS login-items settings pane (macOS; unsupported elsewhere). */
+export function openLoginItemsSettings(): Promise<void> {
+  if (!hasNative) return Promise.resolve();
+  return call("Capture.OpenLoginItemsSettings");
+}
+
 export function overlayInfo(): Promise<OverlayInfo> {
   if (!hasNative) {
     return Promise.resolve({

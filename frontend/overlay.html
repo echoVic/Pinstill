@@ -333,6 +333,46 @@
     box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
     z-index: 12;
   }
+
+  /* Round 7.3: 120–180ms entrance motion, unified button feedback, reduced motion. */
+  :root { --ease-out: cubic-bezier(.22,.61,.36,1); --motion: 160ms; }
+  @keyframes pt-fade { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes pt-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+  @keyframes pt-toast-in { from { opacity: 0; transform: translate(-50%, 6px); } to { opacity: 1; transform: translate(-50%, 0); } }
+  @keyframes pt-spin { to { transform: rotate(360deg); } }
+  @keyframes pt-pop { from { opacity: 0; transform: scale(.55); } to { opacity: 1; transform: scale(1); } }
+  .annotation-toolbar:not([hidden]) { animation: pt-in var(--motion) var(--ease-out) both; }
+  .prepare-state:not([hidden]) { animation: pt-fade 140ms var(--ease-out) both; }
+  .size-badge:not([hidden]) { animation: pt-fade 140ms var(--ease-out) both; }
+  .hint:not([hidden]) { animation: pt-fade var(--motion) var(--ease-out) both; }
+  .capture-error:not([hidden]) { animation: pt-fade 180ms var(--ease-out) both; }
+  .demo-toast:not([hidden]) { animation: pt-toast-in var(--motion) var(--ease-out) both; }
+  .tool-btn, .action-btn, .swatch, .capture-error-actions button {
+    transition: background-color 140ms ease, color 140ms ease, border-color 140ms ease, opacity 140ms ease;
+  }
+  .action-btn, .capture-error-actions button { position: relative; }
+  button.is-pending { cursor: progress; }
+  button.is-pending::after {
+    content: ""; position: absolute; top: -4px; right: -4px; width: 9px; height: 9px;
+    border: 2px solid rgba(243, 162, 78, .32); border-top-color: #f3a24e; border-radius: 50%;
+    animation: pt-spin .7s linear infinite; pointer-events: none; z-index: 3;
+  }
+  button.is-success::after {
+    content: "✓"; position: absolute; top: -5px; right: -5px; z-index: 3;
+    min-width: 12px; height: 12px; padding: 0 3px; border-radius: 999px;
+    background: #a8c7a0; color: #1c241a; font-size: 9px; font-weight: 800; line-height: 12px;
+    text-align: center; box-shadow: 0 2px 6px rgba(0, 0, 0, .35);
+    animation: pt-pop 160ms var(--ease-out) both; pointer-events: none;
+  }
+  .capture-error-actions button:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+  .capture-error-actions button:disabled { opacity: .45; cursor: not-allowed; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: .001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: .001ms !important;
+    }
+  }
 </style>
 </head>
 <body>

@@ -173,6 +173,23 @@
     color: #6f6a5e;
     background: var(--paper);
   }
+
+  /* Round 7.3: 120–180ms toast/menu entrance + reduced motion. */
+  :root { --ease-out: cubic-bezier(.22,.61,.36,1); --motion: 160ms; }
+  @keyframes pin-fade { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes pin-toast-in { from { opacity: 0; transform: translate(-50%, 5px); } to { opacity: 1; transform: translate(-50%, 0); } }
+  @keyframes pin-menu-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+  .pin-toast:not([hidden]) { animation: pin-toast-in var(--motion) var(--ease-out) both; }
+  .pin-menu:not([hidden]) { animation: pin-menu-in 150ms var(--ease-out) both; }
+  .pin-error:not([hidden]) { animation: pin-fade var(--motion) var(--ease-out) both; }
+  .pin-close, .pin-resize { transition: opacity 150ms ease, background-color 140ms ease; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: .001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: .001ms !important;
+    }
+  }
 </style>
 </head>
 <body>

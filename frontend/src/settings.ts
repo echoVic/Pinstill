@@ -1,4 +1,4 @@
-// Preferences: the UI schema of the six settings categories, localStorage
+// Preferences: the UI schema of the settings categories, localStorage
 // persistence, and the mapping to the native `Settings` object of plan §3.4.
 //
 // The UI stores more preferences than Go needs (tooltips, editor keys, …);
@@ -55,6 +55,9 @@ interface RowBase {
   description: string;
 }
 
+/** The three OS-level permissions the permission centre reports (R7.1). */
+export type PermissionSetting = "screen" | "accessibility" | "launch";
+
 export type SettingRow =
   | (RowBase & { type: "toggle" })
   | (RowBase & {
@@ -66,6 +69,7 @@ export type SettingRow =
   | (RowBase & { type: "shortcut" })
   | (RowBase & { type: "color" })
   | (RowBase & { type: "text" })
+  | (RowBase & { type: "permission"; perm: PermissionSetting })
   | (RowBase & { type: "info"; text: string });
 
 export interface SettingGroup {
@@ -83,7 +87,7 @@ export interface SettingsCategory {
 
 const toolOptions = DEFAULT_TOOL_CHOICES.map((id) => ({ value: id, label: toolName(id) }));
 
-/** The six categories of the design's settings view. */
+/** The seven categories of the settings view (six design ones + 权限). */
 export const SETTINGS_SCHEMA: SettingsCategory[] = [
   {
     id: "general",
@@ -430,6 +434,40 @@ export const SETTINGS_SCHEMA: SettingsCategory[] = [
             name: "同时显示原文",
             description: "对照阅读原文与翻译结果。",
             type: "toggle",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    id: "permissions",
+    name: "权限",
+    icon: "permissions",
+    description: "Pinstill 只在本机处理截图。系统权限决定能否读取屏幕内容与自动滚动。",
+    groups: [
+      {
+        title: "系统权限",
+        rows: [
+          {
+            key: "screenPermission",
+            name: "屏幕录制",
+            description: "截图必需。未授权时 Pinstill 无法读取屏幕内容，主窗口会显示授权提示。",
+            type: "permission",
+            perm: "screen",
+          },
+          {
+            key: "accessibilityPermission",
+            name: "辅助功能",
+            description: "滚动截图的自动滚动需要它；未授权时仍可手动滚动并拼接。",
+            type: "permission",
+            perm: "accessibility",
+          },
+          {
+            key: "launchItem",
+            name: "登录时启动",
+            description: "读取 macOS「登录项」里的真实状态；与「通用与截图」中的开关联动。",
+            type: "permission",
+            perm: "launch",
           },
         ],
       },

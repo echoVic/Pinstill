@@ -46,3 +46,65 @@ func TestBuildScreencaptureArgsIgnoresDelay(t *testing.T) {
 		t.Fatalf("buildScreencaptureArgs() = %v, want %v", got, want)
 	}
 }
+
+func TestBuildScreencaptureArgsEmptyRectYieldsZeroRectangle(t *testing.T) {
+	got := buildScreencaptureArgs(Rect{}, CaptureOptions{})
+	want := []string{"-x", "-t", "png", "-R", "0,0,0,0"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("buildScreencaptureArgs() = %v, want %v", got, want)
+	}
+}
+
+func TestBuildScreencaptureArgsDegenerateRectYieldsZeroRectangle(t *testing.T) {
+	for _, rect := range []Rect{
+		{X: 10, Y: 20, Width: 0, Height: 30},
+		{X: 10, Y: 20, Width: 30, Height: 0},
+		{X: 10, Y: 20, Width: -10, Height: 30},
+		{X: 10, Y: 20, Width: 30, Height: -10},
+	} {
+		got := buildScreencaptureArgs(rect, CaptureOptions{})
+		want := []string{"-x", "-t", "png", "-R", "0,0,0,0"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("buildScreencaptureArgs(%+v) = %v, want %v", rect, got, want)
+		}
+	}
+}
+
+func TestBuildScreencaptureArgsCrossScreenBoundary(t *testing.T) {
+	tests := []struct {
+		name string
+		rect Rect
+		want []string
+	}{
+		{
+			name: "display left of the primary",
+			rect: Rect{X: -1440, Y: -900, Width: 2880, Height: 1800},
+			want: []string{"-x", "-t", "png", "-R", "-1440,-900,2880,1800"},
+		},
+		{
+			name: "rectangle crossing the primary origin",
+			rect: Rect{X: -960, Y: 0, Width: 1920, Height: 1080},
+			want: []string{"-x", "-t", "png", "-R", "-960,0,1920,1080"},
+		},
+		{
+			name: "fractional cross-screen bounds round per component",
+			rect: Rect{X: -960.5, Y: 0.5, Width: 1920.5, Height: 1080},
+			want: []string{"-x", "-t", "png", "-R", "-961,1,1921,1080"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := buildScreencaptureArgs(tt.rect, CaptureOptions{}); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("buildScreencaptureArgs(%+v) = %v, want %v", tt.rect, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildScreencaptureArgsHalfPointRounding(t *testing.T) {
+	got := buildScreencaptureArgs(Rect{X: -0.5, Y: 0.5, Width: 1.5, Height: 2.5}, CaptureOptions{})
+	want := []string{"-x", "-t", "png", "-R", "-1,1,2,3"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("buildScreencaptureArgs() = %v, want %v", got, want)
+	}
+}

@@ -562,3 +562,90 @@ R6 的完整替换漏了两处旧名首字母 **T** 的图形残留（文字已�
 - README 截图重新生成（editor/history/settings 里能看到品牌标记），仍为隔离数据目录下的合成内容
 - 实测：菜单栏状态项渲染为圆体 **P**（模板图标随菜单栏外观着色；截屏证据 `/tmp/pinstill-menubar-sec.png`，状态项出现在副屏菜单栏 x≈2289pt）
 - 验证：`gofmt`/`go vet`/`go test ./...` 全绿；`npm run build:web` + `mygo build`（Developer ID 签名，Developer ID）；完整 `work/e2e.sh --skip-build`（隔离 `PINSTILL_DATA_DIR`）ALL CHECKS PASSED
+
+---
+
+# Round 7：权限体验、稳定性与手感打磨（2026-11-10 晚）
+
+背景：Round 6 更名完成、用户开始试用；本轮**不加新功能**，把「发版前」的权限体验、稳定性与手感补齐。用户试用反馈由 Lead 随时并入，契约以本节为准。
+
+## R7.0 本轮文件所有权（写作用域互斥）
+
+| 成员 | 写作用域 |
+|---|---|
+| Lead | `internal/app/`、`cmd/`、`work/`、`README.md`、`outputs/` |
+| go-native | `internal/capture/`、`internal/store/`、`internal/pin/`、`internal/stitch/` |
+| frontend | `frontend/` |
+| verifier | 只读 |
+
+不要改 `outputs/pinstill-design.html`；不要 git commit / push（Lead 统一处理）。
+**进程约定**：用户正在试用当前构建，任何成员都**不要启动或 kill `Pinstill.app` 进程**；需要 app 级验证的步骤由 Lead 统一在集成阶段做。前端自测只用 `npm run build:web` + 浏览器 headless；Go 侧用单元测试。
+
+## R7.1 权限中心 + 主窗口权限横幅
+
+设置新增第 7 个分类：`id: "permissions"`、名称「权限」、排在「识别与翻译」之后。`#settingsNav` 的**每个**分类按钮都加 `data-settings-cat="<category id>"`（现有六个也补上，e2e 用）。
+
+分类内容三行（实时状态 + 动作按钮）：
+
+1. **屏幕录制**（截图必需）：状态为 `已授权` / `未授权` / `浏览器预览 · 无需权限`。
+   动作：`请求权限`（`Capture.RequestScreenPermission`）、`打开系统设置`（`Capture.OpenPermissionSettings`）、`重新检测`（`Capture.PermissionGranted`）
+2. **辅助功能**（自动滚动需要）：状态 `已授权` / `未授权` / `浏览器预览 · 无需权限`。
+   动作：`打开系统设置`（`Capture.OpenScrollAccessibilitySettings`）、`重新检测`（`Capture.ScrollAccessibilityGranted`）
+3. **登录时启动**：显示系统真实状态（新绑定 `Capture.LaunchAtLogin`）与偏好开关当前值；未安装/未生效时给出说明。
+   动作：`打开登录项设置`（新绑定 `Capture.OpenLoginItemsSettings`，darwin 打开「系统设置 → 通用 → 登录项」，其他平台返回 `ErrUnsupported`）
+
+冻结 DOM hooks（e2e/headless 断言用，id/属性不可改）：
+- 分类按钮：`#settingsNav button[data-settings-cat="permissions"]`
+- 状态文本：`#permScreenStatus`、`#permAccessibilityStatus`、`#permLaunchStatus`（文本必须包含 `已授权`、`未授权`、`浏览器预览` 三者之一）
+- 按钮：`[data-perm-action="screen-request|screen-open|screen-check|accessibility-open|accessibility-check|login-open"]`
+
+主窗口权限横幅：`#permissionBanner`（放在 `main.main` 内、`#workspaceView` 之前，默认 `hidden`）：
+- 屏幕录制未授权时显示：文案「Pinstill 还差「屏幕录制」权限才能截图」+ 按钮 `[data-banner-action="grant"]`（请求权限）、`[data-banner-action="settings"]`（打开系统设置）、`[data-banner-action="dismiss"]`（本次会话隐藏）
+- 已授权或浏览器预览时隐藏；`window focus` 与截图失败事件后刷新状态
+
+新增 Go 绑定（Capture 服务，方法名冻结）：
+
+| 方法 | 返回 | 语义 |
+|---|---|---|
+| `LaunchAtLogin` | `bool` | 系统登录项当前是否生效（`mygo.App.OpenAtLogin()`），只读 |
+| `OpenLoginItemsSettings` | `error` | 打开「登录项」设置页（darwin）；其他平台 `ErrUnsupported` |
+
+顺带修复历史缺口：前端从 R5 起就在调用 `Capture.RequestScreenPermission`，但 Go 侧从未实现该绑定（「请求权限」一直静默失败并回退到打开系统设置）。本轮补上同名绑定：`func (s *CaptureService) RequestScreenPermission() bool { return capture.RequestPermission() }`（darwin 为 CGRequestScreenCaptureAccess，会弹系统授权框；其他平台返回 true）。
+
+## R7.2 稳定性加固（go-native）
+
+只做审计 + 补测试/小修，不改接口：
+- store：index.json 损坏 → 从 PNG 重建（现行为）补测试；目录不可写/缺失的降级路径；保留策略边界（0 天 / 超大 MB）
+- pin：pins.json 损坏容忍（图片保留、索引重建为空）补测试；越界几何 clamp；最多恢复 60 张
+- capture：坐标取整/负坐标/零尺寸边界补测试；`GOOS=windows go build ./...` 保持通过
+- `gofmt -l` 空、`go vet ./...` 空、`go test ./...` 与 `go test -race ./internal/...` 全绿
+- 发现真 bug 允许在作用域内修复并在报告写清楚（不要顺手重构）
+
+## R7.3 手感与观感打磨（frontend）
+
+1. 过渡动效：overlay 工具栏/属性条、滚动控制条、结果面板、toast 统一 120–180ms 缓动；尊重 `prefers-reduced-motion: reduce`
+2. 按钮状态统一：pending（禁用 + 视觉反馈）、成功（短暂 ✓ 反馈）、禁用样式；复制/保存/贴图动作有明确成功反馈
+3. 编辑器显示：状态行显示「适应窗口 · 实际 W×H px」；超大图不溢出容器；不改绘制引擎
+4. 键盘可达性：工具栏/设置按钮 `:focus-visible` 环、`aria-pressed` 正确、Esc 关闭菜单/输入框不冲突
+5. 历史卡片：hover 出现删除按钮（含确认）、空状态文案、缩略图破图兜底
+6. 权限中心 UI 与既有暗色暖调一致（与 R7.1 同一成员完成）
+约束：不改 Go 接口；不新增功能；四页 build:web 通过。
+
+## R7.4 验收（各自完成前自测；Lead 集成）
+
+- frontend：`npm run build:web` 四页 + 浏览器 headless（无 Go 桥接降级）无 console 错误；对 `data-settings-cat` / `#perm*` / `#permissionBanner` 做 DOM 断言；报告改动文件
+- go-native：`gofmt`/`go vet`/`go test`/`go test -race`/Windows cross 全绿 + 新增测试清单
+- Lead：新绑定 + selftest `PINSTILL_SELFTEST=perms`（进入「设置 → 权限」，断言三状态与按钮存在，打印 `SELFTEST perms: screen=... accessibility=... login=...`）；`work/e2e.sh` 增加该步骤；`mygo build` 签名；完整 e2e；README/plan；截图再生
+- verifier：独立验收（只读、报告 BLOCKER/MAJOR/MINOR）
+
+## R7.5 非目标
+
+公证/发版、OCR/翻译/二维码、Windows 真机、多显示器覆盖、编辑器缩放平移交互（只在状态行展示「适应窗口」，不做 zoom 控件）。
+
+## R7.6 实测结论（Lead，2026-11-10 晚）
+
+- **权限中心（R7.1）**：设置第 7 分类「权限」上线（屏幕录制 / 辅助功能 / 登录时启动 三行实时状态 + 六个动作按钮）；主窗口未授权横幅（grant / settings / dismiss，dismiss 为本次会话内存态）。新增绑定：`Capture.RequestScreenPermission`（**补的是真 bug**：前端自 R5 起就在调、Go 侧从未实现，请求权限一直静默失败回退打开设置）、`Capture.LaunchAtLogin`、`Capture.OpenLoginItemsSettings`。`PINSTILL_SELFTEST=perms` 断言 7 分类 / 三状态含冻结词 / 六个 `data-perm-action` / 三个 `data-banner-action`；e2e 新增一步通过。
+- **稳定性（R7.2，go-native）**：新增 `internal/store/recovery_test.go`、`internal/pin/recovery_test.go`、`internal/app/pins_geometry_test.go`（经 Lead 授权，仅测试文件）并扩充 capture/store/stitch 测试；修 2 个真 bug——store.Prune `retentionDays` 的 `time.Duration` 溢出（数据丢失级，极大保留天数会把 cut-off 算到未来/2211 年，已 clamp 到 100 年）、stitch 首帧高于 MaxHeight 时 `Size()`/`Result()` 与画布不一致。`gofmt`/`go vet`/`go test`/`go test -race ./internal/...`/Windows cross 全绿。
+- **手感与观感（R7.3，frontend）**：四页统一 120–180ms 入场动效并尊重 `prefers-reduced-motion`；按钮 pending/✓ 状态统一（复制/导出/贴图/清空历史/权限动作）；编辑器状态行改为「适应窗口 · 实际 W×H px」，超大图按比例适配不溢出；`:focus-visible` 环、调色板 `aria-pressed`、Esc 输入框/取消冲突处理；历史卡片 hover 删除 + 两次点击确认（3.2s 复位）、空状态文案、缩略图破图兜底。headless 四页 console/errors 为空。
+- **验收**：`work/e2e.sh --skip-build`（隔离 `PINSTILL_DATA_DIR`）20 段 **ALL CHECKS PASSED**；`mygo build` 签名通过（Developer ID，Developer ID）；README 截图按新 UI 再生；README/plan 更新。
+- **已知遗留（不阻塞）**：`restorePins()` 本体无单测（恢复链路由 pinpersist e2e 覆盖）；store 不校验「索引合法但 PNG 被外部删除」；pin 恢复不做 PNG 解码校验；System Events 合成 Escape 偶发不达（selftest 已加「先激活 app + 3 次重试」，本轮全过）。

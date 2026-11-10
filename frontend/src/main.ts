@@ -1,7 +1,7 @@
 // The main Pinstill window: the design prototype's single-page UI, wired to the
 // native capture/history/settings bindings through bridge.ts.
 //
-// Views: 截图 (editor) · 历史 (stored captures) · 偏好设置 (six categories).
+// Views: 截图 (editor) · 历史 (stored captures) · 偏好设置 (seven categories).
 // When the page runs in a plain browser the bridge degrades to the prototype
 // simulation and the design still demos without errors.
 
@@ -13,14 +13,18 @@ import {
   historyList,
   historyRemove,
   hasNative,
+  launchAtLogin,
   onCaptureCancelled,
   onCaptureCompleted,
   onCaptureFailed,
   onHistoryChanged,
   onToast,
+  openLoginItemsSettings,
   openPermissionSettings,
+  openScrollAccessibilitySettings,
   permissionGranted,
   requestScreenPermission,
+  scrollAccessibilityGranted,
   pinImage,
   beginRegion,
   applySettings,
@@ -43,11 +47,18 @@ import {
   savePreferences,
   setPreferenceValue,
   toNativeSettings,
+  type PermissionSetting,
   type Preferences,
   type SettingRow,
 } from "./settings";
 import { TOOL_ICONS } from "./tools";
-import { formatBytes, loadCanvasImage } from "./util";
+import {
+  flashButtonSuccess,
+  formatBytes,
+  loadCanvasImage,
+  setButtonPending,
+  withButtonFeedback,
+} from "./util";
 
 const el = <T extends HTMLElement = HTMLElement>(id: string): T => {
   const element = document.getElementById(id);
@@ -68,8 +79,11 @@ let applyTimer: number | undefined;
 let historyTimer: number | undefined;
 let clearArmed = false;
 let clearTimer: number | undefined;
+let armedDelete: { id: string; button: HTMLButtonElement; timer: number } | null = null;
 let toastTimer: number | undefined;
 let permissionClickBound = false;
+let bannerDismissed = false;
+let permissionRefreshSequence = 0;
 
 // ---------------------------------------------------------------------------
 // Editor
@@ -170,6 +184,11 @@ function updateShortcutButton(): void {
   el("shortcut").textContent = `${formatAccelerator(preferences.captureKey)}　快捷键`;
 }
 
+/** Toolbar button by tool id, used for pending/✓ feedback (R7.3). */
+function toolbarButton(tool: string): HTMLButtonElement | null {
+  return document.querySelector<HTMLButtonElement>(`#captureToolbar button[data-tool="${tool}"]`);
+}
+
 // ---------------------------------------------------------------------------
 // Editor actions (toolbar)
 // ---------------------------------------------------------------------------
@@ -179,9 +198,12 @@ async function copyCurrent(): Promise<void> {
     showToast("先截取一张图片，再保存到剪贴板", "info");
     return;
   }
+  const button = toolbarButton("clipboard");
   try {
-    const base64 = await editor.toPNGBase64();
-    await copyImage(base64);
+    await withButtonFeedback(button, async () => {
+      const base64 = await editor.toPNGBase64();
+      await copyImage(base64);
+    });
     showToast("截图与标注已保存到剪贴板", "success");
   } catch (error) {
     if (!hasNative) {
@@ -200,13 +222,21 @@ async function exportCurrent(): Promise<void> {
     showToast("先截取一张图片，再导出", "info");
     return;
   }
+  const button = toolbarButton("download");
+  setButtonPending(button, true);
   try {
     const base64 = await editor.toPNGBase64();
     const suggestedName = `${safeFilenamePrefix(preferences.filenamePrefix)}-${dateStamp()}`;
     const path = await exportImage(base64, suggestedName);
-    if (path) showToast(`已导出：${path}`, "success");
-    else showToast("已取消导出", "info");
+    setButtonPending(button, false);
+    if (path) {
+      flashButtonSuccess(button);
+      showToast(`已导出：${path}`, "success");
+    } else {
+      showToast("已取消导出", "info");
+    }
   } catch (error) {
+    setButtonPending(button, false);
     showToast(`导出失败：${errorMessage(error)}`, "error");
   }
 }
@@ -216,16 +246,23 @@ async function pinCurrent(): Promise<void> {
     showToast("先截取一张图片，再固定到屏幕", "info");
     return;
   }
+  const button = toolbarButton("pin");
+  setButtonPending(button, true);
   try {
     const base64 = await editor.toPNGBase64();
     if (!hasNative) {
       showPinnedPreview(editor.getCanvas().toDataURL("image/png"));
+      setButtonPending(button, false);
+      flashButtonSuccess(button);
       showToast("浏览器预览 · 桌面应用中会创建置顶贴图窗口", "info");
       return;
     }
     await pinImage(base64);
+    setButtonPending(button, false);
+    flashButtonSuccess(button);
     showToast("已固定到屏幕", "success");
   } catch (error) {
+    setButtonPending(button, false);
     showToast(`固定到屏幕失败：${errorMessage(error)}`, "error");
   }
 }
@@ -299,10 +336,38 @@ function updateCounts(): void {
 
 const HISTORY_RENDER_LIMIT = 60;
 
+/** Restores the delete button after a confirm timeout / category switch. */
+function disarmHistoryDelete(): void {
+  if (!armedDelete) return;
+  if (armedDelete.timer) window.clearTimeout(armedDelete.timer);
+  const button = armedDelete.button;
+  armedDelete = null;
+  button.classList.remove("armed");
+  button.textContent = "×";
+  button.setAttribute("aria-label", "删除这张截图");
+}
+
+/** First click arms the delete; the second click within 3s really removes it. */
+function armHistoryDelete(id: string, button: HTMLButtonElement): void {
+  disarmHistoryDelete();
+  button.classList.add("armed");
+  button.textContent = "确认?";
+  button.setAttribute("aria-label", "再次点击确认删除这张截图");
+  armedDelete = {
+    id,
+    button,
+    timer: window.setTimeout(() => disarmHistoryDelete(), 3200),
+  };
+}
+
 function renderHistory(): void {
+  disarmHistoryDelete();
   const grid = el("historyGrid");
   grid.replaceChildren();
   const empty = el("historyEmpty");
+  empty.textContent = `还没有截图 · 点击右上角「截一张」，或按 ${formatAccelerator(
+    preferences.captureKey,
+  )} 开始`;
   empty.hidden = historyEntries.length > 0;
   grid.hidden = historyEntries.length === 0;
   for (const entry of historyEntries.slice(0, HISTORY_RENDER_LIMIT)) {
@@ -319,11 +384,21 @@ function renderHistory(): void {
     const thumb = document.createElement("span");
     thumb.className = "thumb";
     const image = document.createElement("img");
-    image.src = entry.thumbUrl;
     image.alt = "";
     image.loading = "lazy";
     image.decoding = "async";
-    thumb.append(image);
+    const markBroken = () => {
+      image.remove();
+      thumb.classList.add("broken");
+      thumb.setAttribute("aria-hidden", "true");
+    };
+    if (entry.thumbUrl) {
+      image.addEventListener("error", markBroken);
+      image.src = entry.thumbUrl;
+      thumb.append(image);
+    } else {
+      markBroken();
+    }
     const caption = document.createElement("p");
     caption.textContent = `${formatHistoryTime(entry.createdAt)} · ${entry.width} × ${entry.height} · ${formatBytes(entry.size)}`;
     open.append(thumb, caption);
@@ -336,7 +411,12 @@ function renderHistory(): void {
     remove.setAttribute("aria-label", "删除这张截图");
     remove.addEventListener("click", (event) => {
       event.stopPropagation();
-      void removeHistoryEntry(entry.id);
+      if (armedDelete?.id === entry.id) {
+        disarmHistoryDelete();
+        void removeHistoryEntry(entry.id);
+        return;
+      }
+      armHistoryDelete(entry.id, remove);
     });
 
     card.append(open, remove);
@@ -388,10 +468,15 @@ function resetClearButton(): void {
 }
 
 async function clearHistory(): Promise<void> {
+  const button = document.getElementById("historyClear") as HTMLButtonElement | null;
+  setButtonPending(button, true);
   try {
     await historyClear();
+    setButtonPending(button, false);
+    flashButtonSuccess(button);
     showToast("已清空截图历史", "success");
   } catch (error) {
+    setButtonPending(button, false);
     showToast(`清空失败：${errorMessage(error)}`, "error");
   }
   await refreshHistory();
@@ -438,6 +523,7 @@ function renderSettings(): void {
   for (const category of SETTINGS_SCHEMA) {
     const button = document.createElement("button");
     button.type = "button";
+    button.dataset.settingsCat = category.id;
     button.className = category.id === settingsCategory ? "active" : "";
     if (category.id === settingsCategory) button.setAttribute("aria-current", "page");
     button.innerHTML = `<i data-lucide="${TOOL_ICONS[category.icon]}" aria-hidden="true"></i><span>${category.name}</span>`;
@@ -473,6 +559,10 @@ function renderSettings(): void {
     for (const row of group.rows) card.append(renderSettingRow(row));
     body.append(card);
   }
+  // Permissions come from the OS, not from saved preferences: no "reset".
+  const resetButton = document.getElementById("resetSettings") as HTMLButtonElement | null;
+  if (resetButton) resetButton.hidden = category.id === "permissions";
+  if (category.id === "permissions") void refreshPermissionCenter();
 }
 
 function renderSettingRow(row: SettingRow): HTMLElement {
@@ -580,6 +670,37 @@ function renderSettingRow(row: SettingRow): HTMLElement {
     input.id = `setting-${row.key}`;
     input.setAttribute("aria-label", row.name);
     input.setAttribute("aria-describedby", description.id);
+  } else if (row.type === "permission") {
+    wrapper.classList.add("perm-row");
+    label.removeAttribute("for");
+    const spec = PERMISSION_ROWS[row.perm];
+    const status = document.createElement("span");
+    status.id = spec.statusId;
+    status.className = "perm-status muted";
+    status.setAttribute("role", "status");
+    status.setAttribute("aria-live", "polite");
+    status.textContent = hasNative ? "未授权 · 正在检测…" : BROWSER_PERMISSION_TEXT;
+    const actions = document.createElement("div");
+    actions.className = "perm-actions";
+    for (const item of spec.actions) {
+      const actionButton = document.createElement("button");
+      actionButton.type = "button";
+      actionButton.className = item.primary ? "perm-btn primary" : "perm-btn";
+      actionButton.dataset.permAction = item.action;
+      actionButton.textContent = item.label;
+      actionButton.addEventListener("click", () =>
+        void runPermissionAction(row.perm, item.action, actionButton),
+      );
+      actions.append(actionButton);
+    }
+    control.append(status, actions);
+    if (row.perm === "launch") {
+      const note = document.createElement("span");
+      note.className = "perm-note";
+      note.id = "permLaunchNote";
+      note.textContent = launchPreferenceNote();
+      control.append(note);
+    }
   } else {
     control.textContent = row.text;
     control.style.cssText = "font-size:11px;color:#aaa18f";
@@ -703,6 +824,7 @@ function resetCurrentCategory(): void {
   applyPreferences();
   renderSettings();
   scheduleApplySettings(0);
+  flashButtonSuccess(document.getElementById("resetSettings") as HTMLButtonElement | null);
   setSettingsStatus("本分类已恢复默认值", "info");
 }
 
@@ -758,6 +880,235 @@ async function refreshPermissionStatus(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Permission centre (settings → 权限) + main-window banner (R7.1)
+// ---------------------------------------------------------------------------
+
+type PermissionTone = "ok" | "warn" | "muted";
+
+interface PermissionActionSpec {
+  action: string;
+  label: string;
+  primary?: boolean;
+}
+
+// Frozen DOM hooks from work/plan.md R7.1: status ids and data-perm-action
+// values must not change (headless assertions and PINSTILL_SELFTEST=perms).
+const PERMISSION_ROWS: Record<
+  PermissionSetting,
+  { statusId: string; actions: PermissionActionSpec[] }
+> = {
+  screen: {
+    statusId: "permScreenStatus",
+    actions: [
+      { action: "screen-request", label: "请求权限", primary: true },
+      { action: "screen-open", label: "打开系统设置" },
+      { action: "screen-check", label: "重新检测" },
+    ],
+  },
+  accessibility: {
+    statusId: "permAccessibilityStatus",
+    actions: [
+      { action: "accessibility-open", label: "打开系统设置" },
+      { action: "accessibility-check", label: "重新检测" },
+    ],
+  },
+  launch: {
+    statusId: "permLaunchStatus",
+    actions: [{ action: "login-open", label: "打开登录项设置" }],
+  },
+};
+
+const BROWSER_PERMISSION_TEXT = "浏览器预览 · 无需权限";
+
+function setPermissionStatusText(id: string, text: string, tone: PermissionTone): void {
+  const status = document.getElementById(id);
+  if (!status) return;
+  status.textContent = text;
+  status.className = `perm-status ${tone}`;
+}
+
+function launchPreferenceNote(): string {
+  return hasNative
+    ? `偏好开关：${preferences.launch ? "已开启" : "已关闭"} · 与「通用与截图」的登录开关联动`
+    : "浏览器预览 · 桌面应用中读取系统登录项的真实状态";
+}
+
+/** Re-reads the three OS permissions; safe to call when the category is closed. */
+async function refreshPermissionCenter(): Promise<void> {
+  if (!document.getElementById("permScreenStatus")) return;
+  const sequence = ++permissionRefreshSequence;
+  const note = document.getElementById("permLaunchNote");
+  if (note) note.textContent = launchPreferenceNote();
+  if (!hasNative) {
+    setPermissionStatusText("permScreenStatus", BROWSER_PERMISSION_TEXT, "muted");
+    setPermissionStatusText("permAccessibilityStatus", BROWSER_PERMISSION_TEXT, "muted");
+    setPermissionStatusText("permLaunchStatus", BROWSER_PERMISSION_TEXT, "muted");
+    return;
+  }
+  const [screen, accessibility, systemLaunch] = await Promise.all([
+    settle(permissionGranted),
+    settle(scrollAccessibilityGranted),
+    settle(launchAtLogin),
+  ]);
+  if (sequence !== permissionRefreshSequence) return;
+
+  if (screen.ok) {
+    setPermissionStatusText(
+      "permScreenStatus",
+      screen.value ? "已授权 · 可以截取屏幕" : "未授权 · 无法读取屏幕内容",
+      screen.value ? "ok" : "warn",
+    );
+  } else {
+    setPermissionStatusText("permScreenStatus", "未授权 · 原生桥接未就绪", "muted");
+  }
+
+  if (accessibility.ok) {
+    setPermissionStatusText(
+      "permAccessibilityStatus",
+      accessibility.value ? "已授权 · 自动滚动可用" : "未授权 · 自动滚动需手动",
+      accessibility.value ? "ok" : "warn",
+    );
+  } else {
+    setPermissionStatusText("permAccessibilityStatus", "未授权 · 原生桥接未就绪", "muted");
+  }
+
+  if (systemLaunch.ok) {
+    if (systemLaunch.value) {
+      setPermissionStatusText("permLaunchStatus", "已授权 · 系统登录项已生效", "ok");
+    } else if (preferences.launch) {
+      setPermissionStatusText(
+        "permLaunchStatus",
+        "未授权 · 已开启偏好，但系统登录项未生效",
+        "warn",
+      );
+    } else {
+      setPermissionStatusText("permLaunchStatus", "未授权 · 登录时不会启动", "muted");
+    }
+  } else {
+    setPermissionStatusText("permLaunchStatus", "未授权 · 无法读取系统登录项状态", "muted");
+  }
+  if (note) note.textContent = launchPreferenceNote();
+}
+
+async function runPermissionAction(
+  kind: PermissionSetting,
+  action: string,
+  button: HTMLButtonElement,
+): Promise<void> {
+  if (!hasNative) {
+    showToast("浏览器预览 · 权限操作只在桌面应用中生效", "info");
+    return;
+  }
+  setButtonPending(button, true);
+  try {
+    if (action === "screen-request") {
+      let granted = false;
+      try {
+        granted = await requestScreenPermission();
+      } catch {
+        granted = false;
+      }
+      if (granted) {
+        setButtonPending(button, false);
+        flashButtonSuccess(button);
+        showToast("已获得屏幕录制权限，可以截图了", "success");
+      } else {
+        showToast("请在系统设置中允许 Pinstill 录制屏幕", "info");
+        await openPermissionSettings().catch(() => {});
+      }
+    } else if (action === "screen-open") {
+      await openPermissionSettings();
+      showToast("已打开系统设置 · 授权后点「重新检测」", "info");
+    } else if (action === "accessibility-open") {
+      await openScrollAccessibilitySettings();
+      showToast("已打开辅助功能设置 · 授权后点「重新检测」", "info");
+    } else if (action === "login-open") {
+      await openLoginItemsSettings();
+      showToast("已打开登录项设置", "info");
+    } else {
+      // screen-check / accessibility-check.
+      showToast("正在重新检测权限…", "info");
+    }
+  } catch (error) {
+    showToast(`权限操作未完成：${errorMessage(error)}`, "error");
+  } finally {
+    setButtonPending(button, false);
+  }
+  await refreshPermissionCenter();
+  await refreshPermissionStatus();
+  void refreshPermissionBanner();
+}
+
+function permissionBanner(): HTMLElement | null {
+  return document.getElementById("permissionBanner");
+}
+
+/** Refreshes the main-window banner; hidden when granted, in-browser or dismissed. */
+async function refreshPermissionBanner(): Promise<void> {
+  const banner = permissionBanner();
+  if (!banner) return;
+  if (!hasNative || bannerDismissed) {
+    banner.hidden = true;
+    return;
+  }
+  try {
+    banner.hidden = await permissionGranted();
+  } catch {
+    banner.hidden = false;
+  }
+}
+
+async function handleBannerAction(action: string, button: HTMLButtonElement): Promise<void> {
+  if (!hasNative) return;
+  const banner = permissionBanner();
+  if (action === "dismiss") {
+    bannerDismissed = true;
+    if (banner) banner.hidden = true;
+    return;
+  }
+  setButtonPending(button, true);
+  try {
+    if (action === "grant") {
+      let granted = false;
+      try {
+        granted = await requestScreenPermission();
+      } catch {
+        granted = false;
+      }
+      if (granted) {
+        setButtonPending(button, false);
+        flashButtonSuccess(button);
+        showToast("已获得屏幕录制权限，可以截图了", "success");
+      } else {
+        showToast("请在系统设置中允许 Pinstill 录制屏幕", "info");
+        await openPermissionSettings().catch(() => {});
+      }
+    } else if (action === "settings") {
+      await openPermissionSettings();
+      showToast("已打开系统设置 · 授权后回来即可截图", "info");
+    }
+  } catch (error) {
+    showToast(`权限操作未完成：${errorMessage(error)}`, "error");
+  } finally {
+    setButtonPending(button, false);
+  }
+  await refreshPermissionBanner();
+  await refreshPermissionStatus();
+  void refreshPermissionCenter();
+}
+
+/** Settles a native permission reader without throwing (binding may be absent). */
+async function settle<T>(
+  read: () => Promise<T>,
+): Promise<{ ok: true; value: T } | { ok: false; error: unknown }> {
+  try {
+    return { ok: true, value: await read() };
+  } catch (error) {
+    return { ok: false, error };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Mode-specific copy
 // ---------------------------------------------------------------------------
 
@@ -784,6 +1135,13 @@ document.querySelectorAll<HTMLButtonElement>("[data-view]").forEach((button) => 
 el("unpin").addEventListener("click", () => {
   el("pinnedPreview").hidden = true;
 });
+document
+  .querySelectorAll<HTMLButtonElement>("#permissionBanner [data-banner-action]")
+  .forEach((button) => {
+    button.addEventListener("click", () =>
+      void handleBannerAction(button.dataset.bannerAction ?? "", button),
+    );
+  });
 el("resetSettings").addEventListener("click", () => resetCurrentCategory());
 el("historyClear").addEventListener("click", () => {
   const button = el<HTMLButtonElement>("historyClear");
@@ -838,6 +1196,8 @@ onCaptureFailed((payload) => {
   showToast(payload.message || "截取失败", "error");
   if (payload.permission) {
     setPermissionLabel("需要屏幕录制权限", true);
+    void refreshPermissionBanner();
+    void refreshPermissionCenter();
     editor.showResult(
       "需要屏幕录制权限",
       "Pinstill 需要系统的「屏幕录制」权限才能截图。点击下方按钮授权，或到系统设置中开启。",
@@ -876,10 +1236,14 @@ if (hasNative) {
 }
 void refreshHistory();
 void refreshPermissionStatus();
+void refreshPermissionBanner();
 void pushNativeSettings();
 
 // Keep the permission hint fresh when the app regains focus (e.g. after the
 // user granted screen recording in System Settings).
 window.addEventListener("focus", () => {
-  if (hasNative) void refreshPermissionStatus();
+  if (!hasNative) return;
+  void refreshPermissionStatus();
+  void refreshPermissionBanner();
+  void refreshPermissionCenter();
 });

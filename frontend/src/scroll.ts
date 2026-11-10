@@ -24,6 +24,7 @@ import {
   type FinishAnnotatedAction,
   type ScrollProgress,
 } from "./bridge";
+import { flashButtonSuccess, setButtonPending } from "./util";
 
 type ScrollUiAction = "copy" | "save" | "pin" | "editor" | "cancel";
 
@@ -96,6 +97,10 @@ function setBusy(next: boolean): void {
     button.disabled = busy;
   }
   autoInput.disabled = busy;
+}
+
+function actionButton(action: ScrollUiAction): HTMLButtonElement | null {
+  return actionsHost.querySelector<HTMLButtonElement>(`button[data-scroll-action="${action}"]`);
 }
 
 function progressText(payload: ScrollProgress | null): string {
@@ -250,6 +255,8 @@ permissionButton.addEventListener("click", async () => {
 
 async function runAction(uiAction: ScrollUiAction): Promise<void> {
   if (busy) return;
+  const button = actionButton(uiAction);
+  setButtonPending(button, true);
   busy = true;
   setBusy(true);
   if (noticeTimer) {
@@ -268,6 +275,7 @@ async function runAction(uiAction: ScrollUiAction): Promise<void> {
     // Go hides this window and performs the action; nothing to reset here.
   } catch (error) {
     busy = false;
+    setButtonPending(button, false);
     setBusy(false);
     renderProgress();
     showNotice(`操作失败：${errorMessage(error)}`, "error");
@@ -283,7 +291,10 @@ function demoFinish(uiAction: ScrollUiAction): void {
   progressEl.textContent = `浏览器预览 · 会${DEMO_TEXT[uiAction]}`;
   window.setTimeout(() => {
     busy = false;
+    const button = actionButton(uiAction);
+    setButtonPending(button, false);
     setBusy(false);
+    if (uiAction !== "cancel") flashButtonSuccess(button);
     renderProgress();
     renderHint();
     startDemo();

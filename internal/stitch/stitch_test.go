@@ -141,3 +141,44 @@ func TestAddRejectsEmptyFrame(t *testing.T) {
 		t.Fatal("empty frame accepted")
 	}
 }
+
+// TestFirstFrameTallerThanMaxHeightIsCapped covers the height cap applying to
+// the very first frame: Size()/Result() must agree on the capped height instead
+// of reporting more rows than the image contains.
+func TestFirstFrameTallerThanMaxHeightIsCapped(t *testing.T) {
+	acc := New(Options{MaxHeight: 100})
+	if _, err := acc.Add(tallImage(32, 300)); err != nil {
+		t.Fatalf("Add(first frame) error = %v", err)
+	}
+	height, frames := acc.Size()
+	if frames != 1 {
+		t.Fatalf("frames = %d, want 1", frames)
+	}
+	if height != 100 {
+		t.Fatalf("height = %d, want the capped 100", height)
+	}
+	res := acc.Result()
+	if res.Image == nil {
+		t.Fatal("Result().Image = nil")
+	}
+	if bounds := res.Image.Bounds(); bounds.Dx() != 32 || bounds.Dy() != 100 {
+		t.Fatalf("result image = %v, want 32x100", bounds)
+	}
+	if !res.ReachedMax {
+		t.Fatal("ReachedMax = false for a capped first frame")
+	}
+	if res.Frames != 1 {
+		t.Fatalf("Result().Frames = %d, want 1", res.Frames)
+	}
+
+	// Once capped, later frames cannot grow the canvas either.
+	if _, err := acc.Add(tallImage(32, 300)); err != nil {
+		t.Fatalf("Add(later frame) error = %v", err)
+	}
+	if height, _ := acc.Size(); height != 100 {
+		t.Fatalf("height after another frame = %d, want 100", height)
+	}
+	if bounds := acc.Result().Image.Bounds(); bounds.Dy() != 100 {
+		t.Fatalf("result image height after another frame = %d, want 100", bounds.Dy())
+	}
+}
