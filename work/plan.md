@@ -552,3 +552,13 @@ Windows 真机滚动、横向滚动、视频/动画内容、自动识别页内�
 - `npm run build:web`、`mygo build`（Developer ID 签名）通过；产物 `Pinstill.app` / `pinstill-0.1.0-arm64.dmg`
 - 完整 e2e（隔离 `PINSTILL_DATA_DIR`）19 段 ALL CHECKS PASSED
 - 之后按用户优先级继续：交互/观感打磨 + 稳定性与权限体验
+
+## R6.3 视觉标识收尾（2026-11-10 续）
+
+R6 的完整替换漏了两处旧名首字母 **T** 的图形残留（文字已全换，但字形还是 Tupen 的 T）：
+
+- 主窗口左上角品牌标记：`frontend/index.html` 的 `.brand-mark` `T` → `P`；设计稿快照 `outputs/pinstill-design.html` 同步改正
+- 菜单栏托盘图标：`internal/app/media.go` 原来是「T + 选区角标」点阵图，改为 8× 超采样 + box 降采样的圆体 `P`（菜单栏 16–22pt 下边缘平滑、不再出现像素台阶）；`internal/app/media_test.go` 增加形状探针（茎顶/茎底/碗右/内孔/字形外），防止后续退化成空白或旧字形
+- README 截图重新生成（editor/history/settings 里能看到品牌标记），仍为隔离数据目录下的合成内容
+- 实测：菜单栏状态项渲染为圆体 **P**（模板图标随菜单栏外观着色；截屏证据 `/tmp/pinstill-menubar-sec.png`，状态项出现在副屏菜单栏 x≈2289pt）
+- 验证：`gofmt`/`go vet`/`go test ./...` 全绿；`npm run build:web` + `mygo build`（Developer ID 签名，Developer ID）；完整 `work/e2e.sh --skip-build`（隔离 `PINSTILL_DATA_DIR`）ALL CHECKS PASSED

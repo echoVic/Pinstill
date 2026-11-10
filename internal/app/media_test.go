@@ -167,4 +167,34 @@ func TestTrayIconPNG(t *testing.T) {
 	if config.Width != 32 || config.Height != 32 {
 		t.Fatalf("tray icon = %dx%d, want 32x32", config.Width, config.Height)
 	}
+
+	// The glyph is a "P" now (it used to be the old "T" mark): the stem runs
+	// the full height, a bowl sits on the upper right and its counter is a
+	// hole. These probes catch a blank or stale glyph.
+	img, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("png.Decode(tray icon) error = %v", err)
+	}
+	pixelAlpha := func(x, y int) uint32 {
+		_, _, _, a := img.At(x, y).RGBA()
+		return a
+	}
+	checks := []struct {
+		name   string
+		x, y   int
+		opaque bool
+	}{
+		{"stem top", 10, 6, true},
+		{"stem bottom", 10, 25, true},
+		{"bowl right", 21, 10, true},
+		{"bowl counter is a hole", 16, 11, false},
+		{"right of lower stem", 20, 25, false},
+		{"outside the glyph", 1, 1, false},
+	}
+	for _, c := range checks {
+		got := pixelAlpha(c.x, c.y) > 0x8000
+		if got != c.opaque {
+			t.Errorf("tray icon pixel (%d,%d) opaque=%v, want %v (%s)", c.x, c.y, got, c.opaque, c.name)
+		}
+	}
 }

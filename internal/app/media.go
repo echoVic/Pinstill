@@ -109,29 +109,63 @@ func uniquePath(path string) string {
 	}
 }
 
-// trayIconPNG draws the menu bar icon: a black template "T". macOS tints
-// template icons with the menu bar's appearance; Windows shows them white
-// on its dark taskbar.
+// trayIconPNG draws the menu bar icon: a black template "P" for Pinstill.
+// macOS tints template icons with the menu bar's appearance; Windows shows
+// them white on its dark taskbar.
+//
+// The glyph is rasterised at 8x and box-filtered down, so the rounded stem
+// and bowl stay smooth at menu bar sizes (16-22 pt) instead of looking like
+// stair-stepped pixel art.
 func trayIconPNG() []byte {
 	const size = 32
-	img := image.NewNRGBA(image.Rect(0, 0, size, size))
-	black := color.NRGBA{R: 0, G: 0, B: 0, A: 255}
-	fill := func(x0, y0, x1, y1 int) {
-		for y := y0; y < y1; y++ {
-			for x := x0; x < x1; x++ {
-				if image.Pt(x, y).In(img.Bounds()) {
-					img.SetNRGBA(x, y, black)
+	const ss = 8
+	const s = size * ss
+	// mask[i] reports whether the glyph covers supersampled pixel i.
+	mask := make([]bool, s*s)
+	roundRect := func(x0, y0, x1, y1, r int, on bool) {
+		for y := max(0, y0); y < min(s, y1); y++ {
+			for x := max(0, x0); x < min(s, x1); x++ {
+				dx, dy := 0, 0
+				if x < x0+r {
+					dx = x0 + r - x
+				} else if x >= x1-r {
+					dx = x - (x1 - r - 1)
+				}
+				if y < y0+r {
+					dy = y0 + r - y
+				} else if y >= y1-r {
+					dy = y - (y1 - r - 1)
+				}
+				if dx*dx+dy*dy <= r*r {
+					mask[y*s+x] = on
 				}
 			}
 		}
 	}
-	// Bold T: a crop frame at the top, a stem, and rounded feet.
-	fill(6, 6, 26, 10)
-	fill(13, 10, 19, 25)
-	fill(9, 25, 23, 29)
-	// Tick marks on the T's bar evoke a screenshot selection.
-	fill(4, 4, 8, 8)
-	fill(24, 4, 28, 8)
+	// Bold P: a rounded stem with a bowl on the upper right.
+	roundRect(8*ss, 4*ss, 13*ss, 28*ss, 2*ss, true)   // stem
+	roundRect(8*ss, 4*ss, 24*ss, 20*ss, 7*ss, true)   // bowl
+	roundRect(13*ss, 8*ss, 19*ss, 16*ss, 3*ss, false) // counter
+
+	img := image.NewNRGBA(image.Rect(0, 0, size, size))
+	for y := 0; y < size; y++ {
+		for x := 0; x < size; x++ {
+			covered := 0
+			for sy := 0; sy < ss; sy++ {
+				row := (y*ss + sy) * s
+				for sx := 0; sx < ss; sx++ {
+					if mask[row+x*ss+sx] {
+						covered++
+					}
+				}
+			}
+			if covered == 0 {
+				continue
+			}
+			alpha := uint8((covered*255 + ss*ss/2) / (ss * ss))
+			img.SetNRGBA(x, y, color.NRGBA{R: 0, G: 0, B: 0, A: alpha})
+		}
+	}
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, img); err != nil {
 		return nil
