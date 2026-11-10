@@ -39,10 +39,9 @@ export function blobToBase64(blob: Blob): Promise<string> {
  * The fetched bytes are decoded from a Blob, so the canvas stays origin-clean
  * and mosaicking / export keep working.
  */
-export async function loadCanvasImage(url: string): Promise<ImageBitmap | HTMLImageElement> {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`图片请求失败（HTTP ${response.status}）`);
-  const blob = await response.blob();
+export async function decodeImageBlob(
+  blob: Blob,
+): Promise<ImageBitmap | HTMLImageElement> {
   if (typeof createImageBitmap === "function") {
     try {
       return await createImageBitmap(blob);
@@ -55,6 +54,12 @@ export async function loadCanvasImage(url: string): Promise<ImageBitmap | HTMLIm
   image.src = objectURL;
   await image.decode();
   return image;
+}
+
+export async function loadCanvasImage(url: string): Promise<ImageBitmap | HTMLImageElement> {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`图片请求失败（HTTP ${response.status}）`);
+  return decodeImageBlob(await response.blob());
 }
 
 /** Triggers a browser download; used only by the browser-preview fallback. */

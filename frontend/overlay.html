@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Tupen — 选择截图区域</title>
+<title>Tupen — 选择并标注截图</title>
 <style>
   :root {
     --amber: #f3a24e;
@@ -28,12 +28,12 @@
 
   .dim { position: fixed; inset: 0; background: var(--mask); }
 
+  /* The selection: during annotation it holds the captured image canvas. */
   .selection {
     position: fixed;
     background: transparent;
     border: 1px solid var(--amber);
     box-shadow: 0 0 0 200vmax var(--mask);
-    pointer-events: none;
   }
   .selection::before,
   .selection::after {
@@ -42,9 +42,44 @@
     width: 11px;
     height: 11px;
     border: 0 solid #fffaf0;
+    pointer-events: none;
+    z-index: 2;
   }
   .selection::before { left: -1px; top: -1px; border-width: 2px 0 0 2px; }
   .selection::after { right: -1px; bottom: -1px; border-width: 0 2px 2px 0; }
+
+  #overlayCanvas {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+    cursor: crosshair;
+    touch-action: none;
+  }
+
+  .prepare-state {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    background: rgba(20, 20, 18, 0.42);
+    color: #f2eee4;
+    font-size: 12px;
+    letter-spacing: 0.02em;
+    z-index: 3;
+  }
+  .prepare-spinner {
+    width: 13px;
+    height: 13px;
+    border: 2px solid rgba(242, 238, 228, 0.32);
+    border-top-color: var(--amber);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
 
   .crosshair {
     position: fixed;
@@ -65,6 +100,7 @@
     white-space: nowrap;
     pointer-events: none;
     box-shadow: 0 8px 22px rgba(0, 0, 0, 0.38);
+    z-index: 8;
   }
 
   .hint {
@@ -85,6 +121,7 @@
     pointer-events: none;
     backdrop-filter: blur(8px);
     box-shadow: 0 14px 34px rgba(0, 0, 0, 0.35);
+    z-index: 8;
   }
   .hint-key {
     padding: 2px 7px;
@@ -96,46 +133,142 @@
   }
   .hint-sep { color: #8e8a7e; }
 
-  /* The in-place action bar next to the finished selection. */
-  .action-bar {
+  /* The complete in-place annotation toolbar: two compact rows. */
+  .annotation-toolbar {
     position: fixed;
     display: flex;
-    align-items: center;
-    gap: 2px;
-    padding: 5px;
-    border-radius: 11px;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px;
+    border-radius: 12px;
     background: #faf7f0;
     color: #36332c;
-    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(26, 25, 21, 0.08);
-    z-index: 6;
+    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.42), 0 0 0 1px rgba(26, 25, 21, 0.08);
+    max-width: calc(100vw - 16px);
+    z-index: 9;
     cursor: default;
   }
-  .action-bar button {
+  .at-row { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; max-width: 100%; }
+  .at-tools { row-gap: 2px; }
+  .at-tool-sep { width: 1px; height: 20px; margin: 0 3px; background: rgba(26, 25, 21, 0.14); flex: 0 0 auto; }
+  .at-bottom { gap: 6px; padding-top: 3px; border-top: 1px solid #e4ded2; }
+
+  .tool-btn {
+    position: relative;
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 7px 10px;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
     border: 0;
     border-radius: 7px;
     background: transparent;
     color: inherit;
-    font: 500 12px/1.2 var(--font);
+    cursor: pointer;
+    flex: 0 0 auto;
+  }
+  .tool-btn svg { width: 17px; height: 17px; stroke-width: 1.7; }
+  .tool-btn:hover { background: #eae4d8; }
+  .tool-btn:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+  .tool-btn.active { background: #30362f; color: #fffaf0; }
+  .tool-btn:disabled { opacity: 0.35; cursor: default; background: transparent; }
+  .tool-btn .tip {
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 7px);
+    transform: translateX(-50%);
+    padding: 5px 8px;
+    border-radius: 6px;
+    background: #24251f;
+    color: #fffaf0;
+    font-size: 11px;
+    line-height: 1.2;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.12s ease;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    z-index: 10;
+  }
+  .tool-btn:hover .tip,
+  .tool-btn:focus-visible .tip { opacity: 1; visibility: visible; }
+  .at-tools .tool-btn:nth-child(-n + 2) .tip { left: 0; transform: none; }
+  .at-tools .tool-btn:last-child .tip { left: auto; right: 0; transform: none; }
+
+  .at-props { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+  .at-colors { display: flex; align-items: center; gap: 3px; }
+  .swatch {
+    width: 17px;
+    height: 17px;
+    min-width: 17px;
+    padding: 0;
+    border: 2px solid transparent;
+    border-radius: 50%;
+    background: var(--swatch);
+    box-shadow: inset 0 0 0 1px #ffffff30;
+    cursor: pointer;
+  }
+  .swatch.selected { outline: 1px solid #e9dfd0; outline-offset: 2px; }
+  .swatch:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+
+  .at-width { display: flex; align-items: center; gap: 5px; font-size: 11px; color: #6f6a5e; }
+  #overlayWidth { width: 72px; accent-color: #e8ac64; }
+  #overlayWidthValue { min-width: 13px; text-align: right; font-variant-numeric: tabular-nums; }
+
+  #overlayText {
+    width: 118px;
+    padding: 5px 7px;
+    border: 1px solid #5a554a;
+    border-radius: 5px;
+    background: #302e28;
+    color: #f8f3e9;
+    font: inherit;
+    font-size: 11px;
+  }
+
+  .at-sep { width: 1px; height: 20px; margin: 0 3px; background: rgba(26, 25, 21, 0.14); }
+  .at-actions { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; }
+  .action-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    height: 28px;
+    padding: 0 9px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: inherit;
+    font: 500 12px/1 var(--font);
     white-space: nowrap;
     cursor: pointer;
-    transition: background 0.12s ease;
   }
-  .action-bar button svg { width: 16px; height: 16px; flex-shrink: 0; }
-  .action-bar button:hover { background: #eae4d8; }
-  .action-bar button:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
-  .action-bar button[data-action="annotate"] { background: var(--amber); color: #21170d; font-weight: 700; }
-  .action-bar button[data-action="annotate"]:hover { background: #ffb765; }
-  .action-bar button[data-action="cancel"] { color: #a64136; }
-  .action-bar button[data-action="cancel"]:hover { background: #f3e2dc; }
-  .action-bar button:disabled { opacity: 0.4; cursor: default; background: transparent; color: #6f6a5e; }
-  .action-sep { width: 1px; height: 20px; margin: 0 3px; background: rgba(26, 25, 21, 0.14); }
-  .action-status { padding: 0 8px; font-size: 11px; color: #7a7264; max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .action-status:empty { display: none; }
-  .action-status[data-kind="error"] { color: #a64136; }
+  .action-btn svg { width: 15px; height: 15px; stroke-width: 1.7; }
+  .action-btn:hover { background: #eae4d8; }
+  .action-btn:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+  .action-btn.primary { background: var(--amber); color: #21170d; font-weight: 700; }
+  .action-btn.primary:hover { background: #ffb765; }
+  .action-btn.cancel { color: #a64136; }
+  .action-btn.cancel:hover { background: #f3e2dc; }
+  .action-btn:disabled { opacity: 0.4; cursor: default; background: transparent; color: #6f6a5e; }
+
+  .at-status {
+    font-size: 11px;
+    line-height: 1.3;
+    color: #7a7264;
+    max-width: 190px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .at-status:empty { display: none; }
+  .at-status[data-kind="error"] { color: #a64136; }
+
+  .annotation-toolbar.compact { padding: 4px; gap: 3px; }
+  .annotation-toolbar.compact .tool-btn { width: 27px; height: 27px; }
+  .annotation-toolbar.compact .tool-btn svg { width: 15px; height: 15px; }
+  .annotation-toolbar.compact .action-btn { height: 25px; padding: 0 7px; font-size: 11px; }
 
   /* Browser-preview feedback: native actions are simulated here. */
   .demo-toast {
@@ -151,40 +284,39 @@
     line-height: 1.5;
     pointer-events: none;
     box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
-    z-index: 8;
+    z-index: 12;
   }
 </style>
 </head>
 <body>
   <div class="dim" id="dim"></div>
-  <div class="selection" id="selection" hidden></div>
+  <div class="selection" id="selection" hidden>
+    <canvas id="overlayCanvas" aria-label="截图标注画布" hidden></canvas>
+    <div class="prepare-state" id="prepareState" hidden>
+      <span class="prepare-spinner" aria-hidden="true"></span>
+      <span>正在截取…</span>
+    </div>
+  </div>
   <div class="crosshair v" id="crosshairV" hidden></div>
   <div class="crosshair h" id="crosshairH" hidden></div>
   <div class="size-badge" id="sizeBadge" hidden></div>
 
-  <div class="action-bar" id="actionBar" role="toolbar" aria-label="截图操作" hidden>
-    <button type="button" data-action="annotate" title="进入主窗口标注">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
-      <span>标注</span>
-    </button>
-    <button type="button" data-action="copy" title="复制到剪贴板（Enter）">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-      <span>复制</span>
-    </button>
-    <button type="button" data-action="pin" title="固定到桌面">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>
-      <span>贴图</span>
-    </button>
-    <button type="button" data-action="save" title="保存到文件">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
-      <span>保存</span>
-    </button>
-    <span class="action-sep" aria-hidden="true"></span>
-    <button type="button" data-action="cancel" title="取消截图（Esc）">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-      <span>取消</span>
-    </button>
-    <span class="action-status" id="actionStatus" role="status" aria-live="polite"></span>
+  <div class="annotation-toolbar" id="annotationToolbar" role="toolbar" aria-label="标注工具栏" hidden>
+    <div class="at-row at-tools" id="overlayTools" role="group" aria-label="绘制工具"></div>
+    <div class="at-row at-bottom">
+      <div class="at-props">
+        <div class="at-colors" id="overlayColors" role="group" aria-label="标注颜色"></div>
+        <label class="at-width" for="overlayWidth" id="overlayWidthLabel">
+          <span id="overlayWidthLabelText">粗细</span>
+          <input id="overlayWidth" type="range" min="1" max="10" step="1" value="4" aria-label="粗细" />
+          <output id="overlayWidthValue">4</output>
+        </label>
+        <input id="overlayText" type="text" placeholder="输入内容" maxlength="100" aria-label="标注内容" hidden />
+      </div>
+      <span class="at-sep" aria-hidden="true"></span>
+      <div class="at-actions" id="overlayActions" role="group" aria-label="完成操作"></div>
+      <span class="at-status" id="overlayStatus" role="status" aria-live="polite"></span>
+    </div>
   </div>
 
   <div class="hint" id="hint">

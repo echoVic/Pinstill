@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"image"
@@ -566,76 +567,215 @@ func (a *App) clickOverlayAction(action string) error {
 	return nil
 }
 
-// selftestFlow exercises the round-2 flow end to end: drag a selection on
-// the overlay, then run each action of its toolbar.
+// drawOverlayAnnotation draws a red rectangle on the in-place annotation
+// canvas, so the selftests prove annotations are composited into the result.
+func (a *App) drawOverlayAnnotation() error {
+	a.mu.Lock()
+	overlay := a.overlay
+	a.mu.Unlock()
+	if overlay == nil {
+		return errors.New("overlay window is not available")
+	}
+	js := `(() => {
+		const canvas = document.getElementById('overlayCanvas');
+		if (!canvas) return 'no-canvas';
+		const button = document.querySelector('[data-tool="rect"]');
+		if (button) button.click();
+		const r = canvas.getBoundingClientRect();
+		const fire = (type, x, y) => {
+			canvas.dispatchEvent(new PointerEvent(type, {
+				clientX: r.left + x, clientY: r.top + y, bubbles: true, cancelable: true,
+				pointerId: 3, pointerType: 'mouse', button: 0,
+				buttons: type === 'pointerup' ? 0 : 1,
+			}));
+		};
+		fire('pointerdown', 18, 16);
+		fire('pointermove', 140, 110);
+		fire('pointerup', 140, 110);
+		return 'drawn';
+	})()`
+	value, err := overlay.Page().Eval(js)
+	if err != nil {
+		return err
+	}
+	if value != "drawn" {
+		return fmt.Errorf("annotation canvas not ready (%v)", value)
+	}
+	return nil
+}
+
+// overlayEval evaluates an expression in the overlay page, for selftest
+// diagnostics.
+func (a *App) overlayEval(js string) any {
+	a.mu.Lock()
+	overlay := a.overlay
+	a.mu.Unlock()
+	if overlay == nil {
+		return nil
+	}
+	v, err := overlay.Page().Eval(js)
+	if err != nil {
+		return fmt.Sprintf("error: %v", err)
+	}
+	return v
+}
+
+// overlayVisible reports whether the overlay window currently shows.
+func (a *App) overlayVisible() bool {
+	a.mu.Lock()
+	overlay := a.overlay
+	a.mu.Unlock()
+	return overlay != nil && overlay.IsVisible()
+}
+
+// waitOverlayActionReady waits until the overlay's toolbar button can be
+// clicked (the page disables the actions while it prepares the capture).
+func (a *App) waitOverlayActionReady(action string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		a.mu.Lock()
+		overlay := a.overlay
+		a.mu.Unlock()
+		if overlay != nil {
+			js := fmt.Sprintf(`(() => {
+				const toolbar = document.getElementById('annotationToolbar');
+				const b = document.querySelector('[data-action="%s"]');
+				return !!toolbar && !toolbar.hidden && !!b && !b.disabled && b.offsetParent !== null;
+			})()`, action)
+			if v, err := overlay.Page().Eval(js); err == nil && v == true {
+				return nil
+			}
+		}
+		time.Sleep(120 * time.Millisecond)
+	}
+	return fmt.Errorf("overlay action %q never became ready", action)
+}
+
+// waitOverlayAnnotating waits until the overlay page reports its annotation
+// canvas, which means PrepareSelection finished and the capture is shown.
+func (a *App) waitOverlayAnnotating(timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		a.mu.Lock()
+		overlay := a.overlay
+		a.mu.Unlock()
+		if overlay != nil {
+			js := `(() => {
+				const toolbar = document.getElementById('annotationToolbar');
+				const canvas = document.getElementById('overlayCanvas');
+				return !!toolbar && !toolbar.hidden && !!canvas && !canvas.hidden && canvas.width > 0;
+			})()`
+			if v, err := overlay.Page().Eval(js); err == nil && v == true {
+				return nil
+			}
+		}
+		time.Sleep(120 * time.Millisecond)
+	}
+	return errors.New("overlay never reached the annotation state")
+}
+
+// selftestFlow exercises the round-3 flow end to end: drag a selection on the
+// overlay, annotate the capture in place, then run each toolbar action.
 func (a *App) selftestFlow() {
 	if a.main != nil {
 		a.main.Show()
 	}
 	time.Sleep(1200 * time.Millisecond)
-	run := func(name, action string) {
-		if err := a.beginRegion(); err != nil {
-			fmt.Printf("SELFTEST flow: %s begin error %v\n", name, err)
-			return
+	prepare := func(name string) bool {
+		// The overlay page can miss the first PrepareSelection right after a
+		// launch; retrying once keeps the selftest deterministic.
+		for attempt := 1; attempt <= 2; attempt++ {
+			if err := a.beginRegion(); err != nil {
+				fmt.Printf("SELFTEST flow: %s begin error %v\n", name, err)
+				return false
+			}
+			time.Sleep(1200 * time.Millisecond)
+			if err := a.dragOverlaySelection(80, 90, 400, 300); err != nil {
+				fmt.Printf("SELFTEST flow: %s drag error %v\n", name, err)
+				return false
+			}
+			err := a.waitOverlayAnnotating(10 * time.Second)
+			if err == nil {
+				if err := a.drawOverlayAnnotation(); err != nil {
+					fmt.Printf("SELFTEST flow: %s draw error %v\n", name, err)
+					return false
+				}
+				time.Sleep(400 * time.Millisecond)
+				return true
+			}
+			fmt.Printf("SELFTEST flow: %s prepare attempt %d error %v %v\n", name, attempt, err, a.overlayEval(`(() => { const c=document.getElementById('overlayCanvas'); const t=document.getElementById('annotationToolbar'); return JSON.stringify({canvas: c ? (c.hidden?'hidden':(c.width+'x'+c.height)) : 'missing', toolbar: t ? (t.hidden?'hidden':'shown') : 'missing', status: document.getElementById('overlayStatus')?.textContent, body: document.body.innerText.slice(-120)}); })()`))
+			a.cancelRegion()
+			time.Sleep(800 * time.Millisecond)
 		}
-		time.Sleep(900 * time.Millisecond)
-		if err := a.dragOverlaySelection(80, 90, 320, 250); err != nil {
-			fmt.Printf("SELFTEST flow: %s drag error %v\n", name, err)
-			return
+		return false
+	}
+	click := func(name, action string) bool {
+		if err := a.waitOverlayActionReady(action, 8*time.Second); err != nil {
+			fmt.Printf("SELFTEST flow: %s ready error %v\n", name, err)
+			return false
 		}
-		time.Sleep(500 * time.Millisecond)
 		if err := a.clickOverlayAction(action); err != nil {
 			fmt.Printf("SELFTEST flow: %s click error %v\n", name, err)
-			return
+			return false
 		}
-		time.Sleep(1800 * time.Millisecond)
+		time.Sleep(1900 * time.Millisecond)
 		fmt.Printf("SELFTEST flow: %s clicked %s\n", name, action)
+		return true
 	}
-	// copy
-	run("copy", "copy")
-	if img := mygo.Clipboard.ReadImage(); len(img) > 0 {
-		w, h := imageDimensions(img)
-		fmt.Printf("SELFTEST flow: copy clipboard %dx%d bytes=%d\n", w, h, len(img))
-	} else {
-		fmt.Printf("SELFTEST flow: copy clipboard EMPTY\n")
-	}
-	// pin
-	run("pin", "pin")
-	a.mu.Lock()
-	pins := len(a.pins)
-	a.mu.Unlock()
-	fmt.Printf("SELFTEST flow: pin pins=%d\n", pins)
-	// annotate
-	run("annotate", "annotate")
-	if a.main != nil {
-		if v, err := a.main.Page().Eval("document.getElementById('shotCanvas').width + 'x' + document.getElementById('shotCanvas').height"); err == nil {
-			fmt.Printf("SELFTEST flow: annotate editor canvas=%v\n", v)
+	// copy: annotated image on the clipboard
+	if prepare("copy") {
+		click("copy", "copy")
+		if img := mygo.Clipboard.ReadImage(); len(img) > 0 {
+			w, h := imageDimensions(img)
+			annotated := annotationPresent(img)
+			fmt.Printf("SELFTEST flow: copy clipboard %dx%d bytes=%d annotated=%v\n", w, h, len(img), annotated)
+		} else {
+			fmt.Printf("SELFTEST flow: copy clipboard EMPTY\n")
 		}
 	}
-	// afterCapture=clipboard must run the action without clicking.
+	// pin: annotated image on a desktop pin
+	if prepare("pin") {
+		click("pin", "pin")
+		a.mu.Lock()
+		pins := len(a.pins)
+		a.mu.Unlock()
+		fmt.Printf("SELFTEST flow: pin pins=%d\n", pins)
+	}
+	// editor: annotated image handed to the main window editor
+	if prepare("annotate") {
+		click("annotate", "editor")
+		if a.main != nil {
+			if v, err := a.main.Page().Eval("document.getElementById('shotCanvas').width + 'x' + document.getElementById('shotCanvas').height"); err == nil {
+				fmt.Printf("SELFTEST flow: annotate editor canvas=%v\n", v)
+			}
+		}
+	}
+	// afterCapture=clipboard must run the action without the toolbar.
 	mygo.Clipboard.Clear()
 	auto := DefaultSettings()
 	auto.AfterCapture = "clipboard"
 	a.applySettings(auto)
+	time.Sleep(1000 * time.Millisecond)
 	if err := a.beginRegion(); err == nil {
-		time.Sleep(900 * time.Millisecond)
+		time.Sleep(1500 * time.Millisecond)
 		if err := a.dragOverlaySelection(60, 60, 260, 200); err != nil {
 			fmt.Printf("SELFTEST flow: auto drag error %v\n", err)
 		}
-		time.Sleep(2600 * time.Millisecond)
+		time.Sleep(4000 * time.Millisecond)
 		if img := mygo.Clipboard.ReadImage(); len(img) > 0 {
 			w, h := imageDimensions(img)
 			fmt.Printf("SELFTEST flow: auto clipboard %dx%d\n", w, h)
 		} else {
-			fmt.Printf("SELFTEST flow: auto clipboard EMPTY\n")
+			fmt.Printf("SELFTEST flow: auto clipboard EMPTY status=%v visible=%v\n", a.overlayEval(`document.getElementById('overlayStatus')?.textContent`), a.overlayVisible())
 		}
-		a.cancelRegion()
 	}
 	a.applySettings(DefaultSettings())
 	time.Sleep(300 * time.Millisecond)
 	// cancel: no capture should be delivered
 	before := len(a.historyEntries())
-	run("cancel", "cancel")
+	if prepare("cancel") {
+		click("cancel", "cancel")
+	}
 	time.Sleep(600 * time.Millisecond)
 	after := len(a.historyEntries())
 	fmt.Printf("SELFTEST flow: cancel history before=%d after=%d\n", before, after)
@@ -643,6 +783,31 @@ func (a *App) selftestFlow() {
 		_ = a.closePin(id)
 	}
 	mygo.App.Exit(0)
+}
+
+// annotationPresent reports whether the PNG contains pixels of the default
+// annotation color, proving the drawing was composited into the result.
+func annotationPresent(pngBytes []byte) bool {
+	img, err := png.Decode(bytes.NewReader(pngBytes))
+	if err != nil {
+		return false
+	}
+	b := img.Bounds()
+	stepX := max(1, b.Dx()/300)
+	stepY := max(1, b.Dy()/300)
+	matches := 0
+	for y := b.Min.Y; y < b.Max.Y; y += stepY {
+		for x := b.Min.X; x < b.Max.X; x += stepX {
+			r, g, bl, _ := img.At(x, y).RGBA()
+			if r>>8 > 190 && g>>8 > 70 && g>>8 < 150 && bl>>8 < 110 {
+				matches++
+				if matches > 5 {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // selftestPinUI drives the real pin page: its context menu, wheel scaling and
@@ -867,11 +1032,28 @@ func (a *App) selftestShowcase() {
 	// Overlay with a live selection and its action bar, captured from the
 	// overlay's own page so the desktop behind it stays out of the image.
 	if err := a.beginRegion(); err == nil {
-		time.Sleep(800 * time.Millisecond)
+		time.Sleep(900 * time.Millisecond)
 		if err := a.dragOverlaySelection(120, 140, 620, 420); err != nil {
 			fmt.Printf("SELFTEST showcase: overlay drag error %v\n", err)
 		}
-		time.Sleep(600 * time.Millisecond)
+		if err := a.waitOverlayAnnotating(8 * time.Second); err != nil {
+			fmt.Printf("SELFTEST showcase: overlay prepare error %v\n", err)
+		} else {
+			// The overlay really captured the screen; hand it a generated
+			// image for the canvas base so the README screenshot cannot
+			// contain the user's desktop.
+			if png := syntheticScreenshot(); len(png) > 0 {
+				dataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
+				js := fmt.Sprintf("window.__tupenDemoCapture && window.__tupenDemoCapture(%q)", dataURL)
+				if _, err := a.overlay.Page().Eval(js); err != nil {
+					fmt.Printf("SELFTEST showcase: synthetic base error %v\n", err)
+				}
+			}
+			if err := a.drawOverlayAnnotation(); err != nil {
+				fmt.Printf("SELFTEST showcase: overlay draw error %v\n", err)
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
 		savePage(a.overlay, "overlay")
 		a.cancelRegion()
 		time.Sleep(600 * time.Millisecond)

@@ -54,6 +54,21 @@ export interface PinState {
   opacity: number;
 }
 
+/** A selection captured by `Capture.PrepareSelection`, ready for in-place annotation. */
+export interface OverlayCapture {
+  id: string;
+  /** Go-provided absolute URL of the captured PNG. */
+  url: string;
+  /** Image pixels. */
+  width: number;
+  height: number;
+  /** The selection in overlay-local CSS pixels. */
+  rect: Rect;
+}
+
+/** What `Capture.FinishAnnotated` does with the composited PNG. */
+export type FinishAnnotatedAction = "annotate" | "copy" | "pin" | "save" | "cancel";
+
 /** Payload of the `capture:completed` event. */
 export interface CaptureCompleted {
   id: string;
@@ -71,8 +86,8 @@ export interface Settings {
   captureKey: string;
   pinKey: string;
   ocrKey: string;
-  /** "toolbar" is the desktop-first default: the selection keeps an action bar. */
-  afterCapture: "toolbar" | "editor" | "clipboard" | "pin";
+  /** "inplace" is the default: the selection shows the full annotation toolbar. */
+  afterCapture: "inplace" | "clipboard" | "pin" | "editor";
   format: "PNG" | "JPEG";
   /** 50..100, used for JPEG exports. */
   quality: number;
@@ -183,6 +198,19 @@ export function settings(): Promise<Settings> {
   return call<Settings>("Capture.Settings");
 }
 
+export function prepareSelection(rect: Rect): Promise<OverlayCapture> {
+  if (!hasNative) return Promise.resolve(browserCapture(rect));
+  return call<OverlayCapture>("Capture.PrepareSelection", rect);
+}
+
+export function finishAnnotated(
+  action: FinishAnnotatedAction,
+  dataBase64: string,
+): Promise<void> {
+  if (!hasNative) return Promise.resolve();
+  return call("Capture.FinishAnnotated", action, dataBase64);
+}
+
 export function applySettings(settings: Settings): Promise<Record<string, string>> {
   if (!hasNative) return Promise.resolve({});
   return call<Record<string, string>>("Capture.ApplySettings", settings);
@@ -280,6 +308,10 @@ export function onOverlayShown(cb: (payload: OverlayInfo) => void): () => void {
   return subscribe("overlay:shown", cb);
 }
 
+export function onOverlayCapture(cb: (payload: OverlayCapture) => void): () => void {
+  return subscribe("overlay:capture", cb);
+}
+
 export function onHistoryChanged(cb: () => void): () => void {
   return subscribe("history:changed", cb);
 }
@@ -315,11 +347,23 @@ async function browserDownload(base64: string, suggestedName: string): Promise<s
   return filename;
 }
 
+function browserCapture(rect: Rect): OverlayCapture {
+  // Two device pixels per CSS pixel keeps the demo capture looking like a
+  // Retina screenshot; the canvas stays untainted (data URL from our own canvas).
+  return {
+    id: "browser-capture",
+    url: demoShotDataURL(),
+    width: Math.max(1, Math.round(rect.width * 2)),
+    height: Math.max(1, Math.round(rect.height * 2)),
+    rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+  };
+}
+
 const BROWSER_DEFAULT_SETTINGS: Settings = {
   captureKey: "CmdOrCtrl+Shift+1",
   pinKey: "CmdOrCtrl+Shift+2",
   ocrKey: "CmdOrCtrl+Shift+O",
-  afterCapture: "toolbar",
+  afterCapture: "inplace",
   format: "PNG",
   quality: 90,
   filenamePrefix: "Tupen",

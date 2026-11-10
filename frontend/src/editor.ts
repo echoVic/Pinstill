@@ -6,32 +6,19 @@
 // <img> decoded from a Blob (see util.loadCanvasImage), so mosaic sampling and
 // PNG/JPEG export keep working.
 
+import {
+  drawShape,
+  roundRectPath,
+  type Point,
+  type Shape,
+  type ShapeRenderStyle,
+} from "./annotate";
 import { drawDemoScene } from "./demo";
 import { refreshTupenIcons } from "./icons";
 import type { Preferences } from "./settings";
 import { formatAccelerator } from "./settings";
 import { isDrawTool, TOOLS, TOOL_ICONS, type ToolId } from "./tools";
 import { blobToBase64 } from "./util";
-
-interface Point {
-  x: number;
-  y: number;
-}
-
-interface Shape {
-  kind: string;
-  x: number;
-  y: number;
-  x2: number;
-  y2: number;
-  color: string;
-  width: number;
-  dx?: number;
-  dy?: number;
-  text?: string;
-  points?: Point[];
-  _origin?: Point;
-}
 
 type EditorMode = "empty" | "demo" | "image";
 
@@ -65,29 +52,6 @@ interface ResultAction {
 
 const BASE_WIDTH = 960;
 const BASE_HEIGHT = 480;
-
-function roundRectPath(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  radius: number,
-): void {
-  if (typeof ctx.roundRect === "function") {
-    ctx.beginPath();
-    ctx.roundRect(x, y, width, height, radius);
-    return;
-  }
-  const r = Math.min(radius, width / 2, height / 2);
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + width, y, x + width, y + height, r);
-  ctx.arcTo(x + width, y + height, x, y + height, r);
-  ctx.arcTo(x, y + height, x, y, r);
-  ctx.arcTo(x, y, x + width, y, r);
-  ctx.closePath();
-}
 
 export class Editor {
   readonly canvas: HTMLCanvasElement;
@@ -256,8 +220,8 @@ export class Editor {
     const { width, height } = this.canvas;
     this.ctx.clearRect(0, 0, width, height);
     this.renderBase();
-    for (const shape of this.shapes) this.drawShape(shape);
-    if (this.draft) this.drawShape(this.draft);
+    for (const shape of this.shapes) drawShape(this.ctx, shape, this.shapeStyle(shape));
+    if (this.draft) drawShape(this.ctx, this.draft, this.shapeStyle(this.draft));
     const undoButton = this.toolbar.querySelector<HTMLButtonElement>('[data-tool="undo"]');
     if (undoButton) undoButton.disabled = this.shapes.length === 0;
     this.updateSizeLabel();
@@ -305,148 +269,13 @@ export class Editor {
 
   // ----------------------------------------------------------------- shapes
 
-  private drawShape(shape: Shape): void {
-    const ctx = this.ctx;
-    const scale = this.scale;
-    const lineWidth = Math.max(1, shape.width * scale);
-    ctx.save();
-    ctx.translate(shape.dx ?? 0, shape.dy ?? 0);
-    ctx.strokeStyle = shape.color;
-    ctx.fillStyle = shape.color;
-    ctx.lineWidth = lineWidth;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    const x = Math.min(shape.x, shape.x2);
-    const y = Math.min(shape.y, shape.y2);
-    const w = Math.abs(shape.x2 - shape.x);
-    const h = Math.abs(shape.y2 - shape.y);
-
-    if (shape.kind === "rect") ctx.strokeRect(x, y, w, h);
-    if (shape.kind === "ellipse") {
-      ctx.beginPath();
-      ctx.ellipse(
-        x + w / 2,
-        y + h / 2,
-        Math.max(w / 2, 1),
-        Math.max(h / 2, 1),
-        0,
-        0,
-        Math.PI * 2,
-      );
-      ctx.stroke();
-    }
-    if (shape.kind === "line" || shape.kind === "arrow") {
-      this.strokePath([
-        { x: shape.x, y: shape.y },
-        { x: shape.x2, y: shape.y2 },
-      ]);
-      if (shape.kind === "arrow") {
-        const angle = Math.atan2(shape.y2 - shape.y, shape.x2 - shape.x);
-        const length = (16 + shape.width) * scale;
-        this.strokePath([
-          {
-            x: shape.x2 - length * Math.cos(angle - 0.45),
-            y: shape.y2 - length * Math.sin(angle - 0.45),
-          },
-          { x: shape.x2, y: shape.y2 },
-          {
-            x: shape.x2 - length * Math.cos(angle + 0.45),
-            y: shape.y2 - length * Math.sin(angle + 0.45),
-          },
-        ]);
-      }
-    }
-    if (shape.kind === "brush" && shape.points) this.strokePath(shape.points);
-    if (shape.kind === "highlight") {
-      ctx.globalAlpha = 0.32;
-      ctx.fillRect(x, y, w, h);
-      ctx.globalAlpha = 1;
-    }
-    if (shape.kind === "text") {
-      ctx.font = `500 ${(shape.width * 3 + 16) * scale}px -apple-system, sans-serif`;
-      ctx.fillText(shape.text ?? "", shape.x, shape.y);
-    }
-    if (shape.kind === "tag") {
-      ctx.beginPath();
-      ctx.arc(shape.x, shape.y, (17 + shape.width) * scale, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.font = `bold ${20 * scale}px sans-serif`;
-      ctx.textAlign = "center";
-      ctx.fillStyle = "#fff8ed";
-      ctx.fillText(shape.text ?? "", shape.x, shape.y + 7 * scale);
-      ctx.textAlign = "start";
-    }
-    if (shape.kind === "watermark") {
-      ctx.globalAlpha = this.getPreferences().watermarkOpacity / 100;
-      ctx.font = `bold ${(shape.width * 3 + 18) * scale}px -apple-system, sans-serif`;
-      ctx.fillText(shape.text ?? "", shape.x, shape.y);
-      ctx.globalAlpha = 1;
-    }
-    if (shape.kind === "mosaic") this.drawMosaic(shape, x, y, w, h);
-    ctx.restore();
-  }
-
-  private strokePath(points: Point[]): void {
-    this.ctx.beginPath();
-    points.forEach((point, index) => {
-      if (index === 0) this.ctx.moveTo(point.x, point.y);
-      else this.ctx.lineTo(point.x, point.y);
-    });
-    this.ctx.stroke();
-  }
-
-  private drawMosaic(shape: Shape, x: number, y: number, w: number, h: number): void {
-    const ctx = this.ctx;
-    const cell = Math.max(2, Math.round((shape.width * 2 + 4) * this.scale));
-    const columns = Math.ceil(w / cell);
-    const rows = Math.ceil(h / cell);
-    const isPreview = shape === this.draft;
-    if (isPreview && columns * rows > 24_000) {
-      // Cheap approximation while dragging a huge region; the committed shape
-      // gets the full pixelated render.
-      ctx.globalAlpha = 0.18;
-      ctx.fillStyle = "#3d3a34";
-      ctx.fillRect(x, y, w, h);
-      ctx.globalAlpha = 1;
-      return;
-    }
-    const left = Math.max(0, Math.floor(x));
-    const top = Math.max(0, Math.floor(y));
-    const right = Math.min(this.canvas.width, Math.ceil(x + w));
-    const bottom = Math.min(this.canvas.height, Math.ceil(y + h));
-    if (right <= left || bottom <= top) return;
-
-    const sample = document.createElement("canvas");
-    sample.width = right - left;
-    sample.height = bottom - top;
-    const sampleCtx = sample.getContext("2d", { willReadFrequently: true });
-    if (!sampleCtx) return;
-    sampleCtx.drawImage(
-      this.canvas,
-      left,
-      top,
-      sample.width,
-      sample.height,
-      0,
-      0,
-      sample.width,
-      sample.height,
-    );
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(x, y, w, h);
-    ctx.clip();
-    for (let yy = y; yy < y + h; yy += cell) {
-      for (let xx = x; xx < x + w; xx += cell) {
-        const px = Math.min(sample.width - 1, Math.max(0, Math.floor(xx + cell / 2) - left));
-        const py = Math.min(sample.height - 1, Math.max(0, Math.floor(yy + cell / 2) - top));
-        const data = sampleCtx.getImageData(px, py, 1, 1).data;
-        ctx.fillStyle = `rgb(${data[0]},${data[1]},${data[2]})`;
-        ctx.fillRect(xx, yy, cell, cell);
-      }
-    }
-    ctx.restore();
+  private shapeStyle(shape: Shape): ShapeRenderStyle {
+    return {
+      scale: this.scale,
+      watermarkOpacity: this.getPreferences().watermarkOpacity,
+      canvas: this.canvas,
+      preview: shape === this.draft,
+    };
   }
 
   // --------------------------------------------------------------- pointer
@@ -476,7 +305,12 @@ export class Editor {
     }
     event.preventDefault();
     const point = this.coords(event);
-    this.canvas.setPointerCapture(event.pointerId);
+    try {
+      this.canvas.setPointerCapture(event.pointerId);
+    } catch {
+      // Synthetic events (automation) have no capturable pointer; canvas
+      // listeners still receive the moves.
+    }
     this.start = point;
     if (this.current === "drag") {
       this.dragged = this.shapes.at(-1) ?? null;

@@ -87,6 +87,16 @@ type HistoryEntry struct {
 	ThumbURL  string `json:"thumbUrl"`
 }
 
+// OverlayCapturePayload hands a freshly captured selection back to the
+// overlay page, which annotates it in place on the desktop.
+type OverlayCapturePayload struct {
+	ID     string `json:"id"`
+	URL    string `json:"url"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
+	Rect   Rect   `json:"rect"`
+}
+
 // PinWindowState is the size and opacity the page reports for a pin.
 type PinWindowState struct {
 	Width   int     `json:"width"`
@@ -132,7 +142,7 @@ func DefaultSettings() Settings {
 		CaptureKey:     "CmdOrCtrl+Shift+1",
 		PinKey:         "CmdOrCtrl+Shift+2",
 		OcrKey:         "CmdOrCtrl+Shift+O",
-		AfterCapture:   "toolbar",
+		AfterCapture:   "inplace",
 		Format:         "PNG",
 		Quality:        90,
 		FilenamePrefix: "Tupen",
@@ -160,6 +170,9 @@ var (
 	EventCaptureFailed = mygo.NewEvent[CaptureFailedPayload]("capture:failed")
 	// EventOverlayShown is emitted to the overlay window before it appears.
 	EventOverlayShown = mygo.NewEvent[OverlayInfo]("overlay:shown")
+	// EventOverlayCapture is emitted to the overlay window with the image it
+	// now annotates in place.
+	EventOverlayCapture = mygo.NewEvent[OverlayCapturePayload]("overlay:capture")
 	// EventPinInit is emitted to a pin window to show its image.
 	EventPinInit = mygo.NewEvent[PinInitPayload]("pin:init")
 	// EventHistoryChanged is emitted when the persisted history changed.

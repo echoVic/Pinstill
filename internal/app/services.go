@@ -42,6 +42,18 @@ func (s *CaptureService) CompleteSelection(rect Rect, action string) error {
 	return s.app.completeSelection(rect, action)
 }
 
+// PrepareSelection captures the region the user selected and hands it back
+// to the overlay, so it can annotate the capture in place on the desktop.
+func (s *CaptureService) PrepareSelection(rect Rect) (OverlayCapturePayload, error) {
+	return s.app.prepareSelection(rect)
+}
+
+// FinishAnnotated completes an in-place annotation: it stores the composited
+// image and runs the chosen action.
+func (s *CaptureService) FinishAnnotated(action string, dataBase64 string) error {
+	return s.app.finishAnnotated(action, dataBase64)
+}
+
 // Settings returns the settings currently applied, so pages (the overlay)
 // can honor the user's default action.
 func (s *CaptureService) Settings() Settings { return s.app.settingsSnapshot() }
@@ -199,9 +211,12 @@ func normalizeSettings(s Settings) Settings {
 	s.PinKey = strings.TrimSpace(s.PinKey)
 	s.OcrKey = strings.TrimSpace(s.OcrKey)
 	switch s.AfterCapture {
-	case "toolbar", "clipboard", "pin", "editor":
+	case "inplace", "toolbar", "clipboard", "pin", "editor":
 	default:
-		s.AfterCapture = "toolbar"
+		s.AfterCapture = "inplace"
+	}
+	if s.AfterCapture == "toolbar" {
+		s.AfterCapture = "inplace"
 	}
 	if s.Format != "JPEG" {
 		s.Format = "PNG"

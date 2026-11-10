@@ -569,7 +569,7 @@ func (a *App) captureAction(region capture.Rect, action string) {
 	// Let the overlay leave the compositor before the screen is grabbed.
 	time.Sleep(250 * time.Millisecond)
 	s := a.settingsSnapshot()
-	pngBytes, err := capture.CaptureRegion(region, capture.CaptureOptions{IncludeCursor: s.IncludeCursor})
+	pngBytes, err := a.captureRegion(region, capture.CaptureOptions{IncludeCursor: s.IncludeCursor})
 	if err != nil {
 		a.failCapture(err, false)
 		return
@@ -612,6 +612,162 @@ func (a *App) captureAction(region capture.Rect, action string) {
 	a.mu.Unlock()
 }
 
+// captureRegion wraps the native capture. Selftests can run without the
+// screen recording permission by asking for a generated image instead.
+func (a *App) captureRegion(region capture.Rect, opts capture.CaptureOptions) ([]byte, error) {
+	if os.Getenv("TUPEN_SELFTEST_FAKE_CAPTURE") != "" {
+		if pngBytes := syntheticScreenshot(); len(pngBytes) > 0 {
+			return pngBytes, nil
+		}
+	}
+	return capture.CaptureRegion(region, opts)
+}
+
+// prepareSelection captures the user's selection and hands the image back to
+// the overlay, which then annotates it in place on the desktop. The overlay
+// briefly hides so it is not part of the capture, then shows again.
+func (a *App) prepareSelection(rect Rect) (OverlayCapturePayload, error) {
+	a.mu.Lock()
+	disp := a.overlayDisplay
+	overlay := a.overlay
+	origin := a.overlayRect
+	capturing := a.capturing
+	a.mu.Unlock()
+	if !capturing {
+		return OverlayCapturePayload{}, errors.New("没有进行中的截图")
+	}
+	if overlay != nil {
+		if live := overlay.ContentBounds(); live.Width > 0 && live.Height > 0 {
+			origin = live
+		}
+	}
+	region := capture.Rect{
+		X:      float64(origin.X) + rect.X,
+		Y:      float64(origin.Y) + rect.Y,
+		Width:  rect.Width,
+		Height: rect.Height,
+	}
+	region = clampToDisplay(region, disp.Bounds)
+	if region.Empty() || region.Width < 2 || region.Height < 2 {
+		return OverlayCapturePayload{}, errors.New("选区太小")
+	}
+	if overlay != nil {
+		overlay.Hide()
+	}
+	// Let the overlay leave the compositor, then grab the screen behind it.
+	time.Sleep(250 * time.Millisecond)
+	s := a.settingsSnapshot()
+	pngBytes, err := a.captureRegion(region, capture.CaptureOptions{IncludeCursor: s.IncludeCursor})
+	if err != nil {
+		a.failCapture(err, false)
+		return OverlayCapturePayload{}, err
+	}
+	if blankPNG(pngBytes) {
+		err := errors.New("截图内容为空，可能缺少屏幕录制权限")
+		a.failCapture(err, true)
+		return OverlayCapturePayload{}, err
+	}
+	width, height := imageDimensions(pngBytes)
+	if width == 0 || height == 0 {
+		err := errors.New("截图数据无效")
+		a.failCapture(err, false)
+		return OverlayCapturePayload{}, err
+	}
+	id := captureID(time.Now())
+	sessionFile := id + ".png"
+	if err := os.WriteFile(filepath.Join(a.sessionDir, sessionFile), pngBytes, 0o644); err != nil {
+		err = fmt.Errorf("截图写入失败: %w", err)
+		a.failCapture(err, false)
+		return OverlayCapturePayload{}, err
+	}
+	if overlay != nil {
+		overlay.Show()
+	}
+	payload := OverlayCapturePayload{
+		ID:     id,
+		URL:    a.shotURL("/s/" + sessionFile),
+		Width:  width,
+		Height: height,
+		Rect:   rect,
+	}
+	if overlay != nil {
+		emitToWindow(a, overlay, EventOverlayCapture, payload)
+	}
+	return payload, nil
+}
+
+// finishAnnotated completes the in-place annotation: the page sends the
+// composited PNG and the action the user picked.
+func (a *App) finishAnnotated(action string, dataBase64 string) error {
+	a.mu.Lock()
+	overlay := a.overlay
+	a.mu.Unlock()
+	if overlay != nil {
+		overlay.Hide()
+	}
+	reset := func() {
+		a.mu.Lock()
+		a.capturing = false
+		a.mu.Unlock()
+	}
+	if action == "cancel" {
+		reset()
+		emitToMain(a, EventCaptureCancelled, CaptureCancelledPayload{Reason: "user"})
+		return nil
+	}
+	switch action {
+	case "annotate", "copy", "pin", "save":
+	default:
+		reset()
+		return fmt.Errorf("未知的标注动作 %q", action)
+	}
+	raw, err := decodeImageBase64(dataBase64)
+	if err != nil {
+		log.Printf("tupen: finishAnnotated %s: bad base64 (%d chars): %v", action, len(dataBase64), err)
+		reset()
+		a.toast("标注数据无法解码: "+err.Error(), "error")
+		return err
+	}
+	if _, err := png.Decode(bytes.NewReader(raw)); err != nil {
+		reset()
+		err = errors.New("标注后的图片不是有效 PNG")
+		a.toast(err.Error(), "error")
+		return err
+	}
+	payload, err := a.storeCapture(raw, "region")
+	if err != nil {
+		reset()
+		a.toast(err.Error(), "error")
+		return err
+	}
+	a.playSoundIfEnabled(a.settingsSnapshot())
+	switch action {
+	case "annotate":
+		a.showMain()
+		emitToMain(a, EventCaptureCompleted, payload)
+	case "copy":
+		if err := mygo.Clipboard.WriteImage(raw); err != nil {
+			a.toast("写入剪贴板失败: "+err.Error(), "error")
+		} else {
+			a.toast("截图与标注已复制到剪贴板", "success")
+		}
+	case "pin":
+		if _, err := a.pinPNG(raw, payload.Width, payload.Height); err != nil {
+			a.toast("固定到屏幕失败: "+err.Error(), "error")
+		} else {
+			a.toast("已固定到屏幕", "success")
+		}
+	case "save":
+		if path, err := a.savePNGBytes(raw); err != nil {
+			a.toast("保存失败: "+err.Error(), "error")
+		} else if path != "" {
+			a.toast("已保存到 "+path, "success")
+		}
+	}
+	reset()
+	return nil
+}
+
 // captureFullScreen captures the whole display under the pointer.
 func (a *App) captureFullScreen() {
 	a.mu.Lock()
@@ -642,7 +798,7 @@ func (a *App) captureDeliver(region capture.Rect, source string) {
 	// compositor before the screen is grabbed.
 	time.Sleep(250 * time.Millisecond)
 	s := a.settingsSnapshot()
-	pngBytes, err := capture.CaptureRegion(region, capture.CaptureOptions{IncludeCursor: s.IncludeCursor})
+	pngBytes, err := a.captureRegion(region, capture.CaptureOptions{IncludeCursor: s.IncludeCursor})
 	if err != nil {
 		a.failCapture(err, false)
 		return
@@ -744,6 +900,11 @@ func emitToMain[T any](a *App, event *mygo.Event[T], payload T) {
 	a.mu.Lock()
 	win := a.main
 	a.mu.Unlock()
+	emitToWindow(a, win, event, payload)
+}
+
+// emitToWindow sends an event to one window, if it still exists.
+func emitToWindow[T any](a *App, win *mygo.Window, event *mygo.Event[T], payload T) {
 	if win == nil || win.IsDestroyed() {
 		return
 	}

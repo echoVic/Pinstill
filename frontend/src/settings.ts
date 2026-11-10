@@ -15,7 +15,7 @@ export interface Preferences {
   launch: boolean;
   cursor: boolean;
   sound: boolean;
-  afterCapture: "toolbar" | "editor" | "clipboard" | "pin";
+  afterCapture: "inplace" | "clipboard" | "pin" | "editor";
   tooltip: boolean;
   tooltipDelay: number;
   // 快捷键
@@ -118,10 +118,10 @@ export const SETTINGS_SCHEMA: SettingsCategory[] = [
             description: "选择截取完成后的默认动作。",
             type: "select",
             options: [
-              { value: "toolbar", label: "就地操作条" },
+              { value: "inplace", label: "就地标注" },
               { value: "clipboard", label: "复制到剪贴板" },
               { value: "pin", label: "固定到屏幕" },
-              { value: "editor", label: "进入标注" },
+              { value: "editor", label: "进入编辑器" },
             ],
           },
         ],
@@ -441,7 +441,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   launch: false,
   cursor: false,
   sound: true,
-  afterCapture: "toolbar",
+  afterCapture: "inplace",
   tooltip: true,
   tooltipDelay: 120,
   captureKey: "CmdOrCtrl+Shift+1",
@@ -528,6 +528,12 @@ export function loadPreferences(): Preferences {
   preferences.captureKey = normalizeLegacyAccelerator(preferences.captureKey);
   preferences.pinKey = normalizeLegacyAccelerator(preferences.pinKey);
   preferences.ocrKey = normalizeLegacyAccelerator(preferences.ocrKey);
+  // Round 2 shipped "toolbar" (action bar); Round 3 shows the full toolbar.
+  const afterCapture = preferences.afterCapture as string;
+  if (afterCapture === "toolbar") preferences.afterCapture = "inplace";
+  else if (!["inplace", "clipboard", "pin", "editor"].includes(afterCapture)) {
+    preferences.afterCapture = "inplace";
+  }
   return preferences;
 }
 
@@ -579,7 +585,7 @@ export function toNativeSettings(preferences: Preferences): Settings {
     preferences.afterCapture === "pin" ||
     preferences.afterCapture === "editor"
       ? preferences.afterCapture
-      : "toolbar";
+      : "inplace";
   const format: Settings["format"] = preferences.format === "JPEG" ? "JPEG" : "PNG";
   return {
     captureKey: preferences.captureKey,

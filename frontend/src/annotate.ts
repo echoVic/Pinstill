@@ -1,0 +1,409 @@
+// Shared annotation engine: the drawing primitives of the main editor and a
+// small reusable surface used by the in-place overlay annotation mode.
+//
+// The primitives are pure canvas work: callers own the canvas, its base image
+// (a real capture drawn from a Blob-decoded ImageBitmap, so the canvas stays
+// origin-clean for mosaic sampling and PNG export) and the toolbar UI.
+
+export interface Point {
+  x: number;
+  y: number;
+}
+
+export interface Shape {
+  kind: string;
+  x: number;
+  y: number;
+  x2: number;
+  y2: number;
+  color: string;
+  width: number;
+  dx?: number;
+  dy?: number;
+  text?: string;
+  points?: Point[];
+  _origin?: Point;
+}
+
+export interface ShapeRenderStyle {
+  /** Canvas pixels per logical design pixel (line widths, fonts, mosaic cells). */
+  scale: number;
+  /** 10..90: watermark shapes render with this opacity. */
+  watermarkOpacity: number;
+  canvas: HTMLCanvasElement;
+  /** True while the shape is the in-progress draft (cheap mosaic preview). */
+  preview?: boolean;
+}
+
+export function roundRectPath(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+): void {
+  if (typeof ctx.roundRect === "function") {
+    ctx.beginPath();
+    ctx.roundRect(x, y, width, height, radius);
+    return;
+  }
+  const r = Math.min(radius, width / 2, height / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + width, y, x + width, y + height, r);
+  ctx.arcTo(x + width, y + height, x, y + height, r);
+  ctx.arcTo(x, y + height, x, y, r);
+  ctx.arcTo(x, y, x + width, y, r);
+  ctx.closePath();
+}
+
+export function strokePath(ctx: CanvasRenderingContext2D, points: Point[]): void {
+  ctx.beginPath();
+  points.forEach((point, index) => {
+    if (index === 0) ctx.moveTo(point.x, point.y);
+    else ctx.lineTo(point.x, point.y);
+  });
+  ctx.stroke();
+}
+
+function drawMosaic(
+  ctx: CanvasRenderingContext2D,
+  shape: Shape,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  style: ShapeRenderStyle,
+): void {
+  const cell = Math.max(2, Math.round((shape.width * 2 + 4) * style.scale));
+  const columns = Math.ceil(w / cell);
+  const rows = Math.ceil(h / cell);
+  if (style.preview && columns * rows > 24_000) {
+    // Cheap approximation while dragging a huge region; the committed shape
+    // gets the full pixelated render.
+    ctx.globalAlpha = 0.18;
+    ctx.fillStyle = "#3d3a34";
+    ctx.fillRect(x, y, w, h);
+    ctx.globalAlpha = 1;
+    return;
+  }
+  const left = Math.max(0, Math.floor(x));
+  const top = Math.max(0, Math.floor(y));
+  const right = Math.min(style.canvas.width, Math.ceil(x + w));
+  const bottom = Math.min(style.canvas.height, Math.ceil(y + h));
+  if (right <= left || bottom <= top) return;
+
+  const sample = document.createElement("canvas");
+  sample.width = right - left;
+  sample.height = bottom - top;
+  const sampleCtx = sample.getContext("2d", { willReadFrequently: true });
+  if (!sampleCtx) return;
+  sampleCtx.drawImage(
+    style.canvas,
+    left,
+    top,
+    sample.width,
+    sample.height,
+    0,
+    0,
+    sample.width,
+    sample.height,
+  );
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x, y, w, h);
+  ctx.clip();
+  for (let yy = y; yy < y + h; yy += cell) {
+    for (let xx = x; xx < x + w; xx += cell) {
+      const px = Math.min(sample.width - 1, Math.max(0, Math.floor(xx + cell / 2) - left));
+      const py = Math.min(sample.height - 1, Math.max(0, Math.floor(yy + cell / 2) - top));
+      const data = sampleCtx.getImageData(px, py, 1, 1).data;
+      ctx.fillStyle = `rgb(${data[0]},${data[1]},${data[2]})`;
+      ctx.fillRect(xx, yy, cell, cell);
+    }
+  }
+  ctx.restore();
+}
+
+/** Draws one annotation shape on the canvas. */
+export function drawShape(
+  ctx: CanvasRenderingContext2D,
+  shape: Shape,
+  style: ShapeRenderStyle,
+): void {
+  const scale = style.scale;
+  const lineWidth = Math.max(1, shape.width * scale);
+  ctx.save();
+  ctx.translate(shape.dx ?? 0, shape.dy ?? 0);
+  ctx.strokeStyle = shape.color;
+  ctx.fillStyle = shape.color;
+  ctx.lineWidth = lineWidth;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  const x = Math.min(shape.x, shape.x2);
+  const y = Math.min(shape.y, shape.y2);
+  const w = Math.abs(shape.x2 - shape.x);
+  const h = Math.abs(shape.y2 - shape.y);
+
+  if (shape.kind === "rect") ctx.strokeRect(x, y, w, h);
+  if (shape.kind === "ellipse") {
+    ctx.beginPath();
+    ctx.ellipse(
+      x + w / 2,
+      y + h / 2,
+      Math.max(w / 2, 1),
+      Math.max(h / 2, 1),
+      0,
+      0,
+      Math.PI * 2,
+    );
+    ctx.stroke();
+  }
+  if (shape.kind === "line" || shape.kind === "arrow") {
+    strokePath(ctx, [
+      { x: shape.x, y: shape.y },
+      { x: shape.x2, y: shape.y2 },
+    ]);
+    if (shape.kind === "arrow") {
+      const angle = Math.atan2(shape.y2 - shape.y, shape.x2 - shape.x);
+      const length = (16 + shape.width) * scale;
+      strokePath(ctx, [
+        {
+          x: shape.x2 - length * Math.cos(angle - 0.45),
+          y: shape.y2 - length * Math.sin(angle - 0.45),
+        },
+        { x: shape.x2, y: shape.y2 },
+        {
+          x: shape.x2 - length * Math.cos(angle + 0.45),
+          y: shape.y2 - length * Math.sin(angle + 0.45),
+        },
+      ]);
+    }
+  }
+  if (shape.kind === "brush" && shape.points) strokePath(ctx, shape.points);
+  if (shape.kind === "highlight") {
+    ctx.globalAlpha = 0.32;
+    ctx.fillRect(x, y, w, h);
+    ctx.globalAlpha = 1;
+  }
+  if (shape.kind === "text") {
+    ctx.font = `500 ${(shape.width * 3 + 16) * scale}px -apple-system, sans-serif`;
+    ctx.fillText(shape.text ?? "", shape.x, shape.y);
+  }
+  if (shape.kind === "tag") {
+    ctx.beginPath();
+    ctx.arc(shape.x, shape.y, (17 + shape.width) * scale, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.font = `bold ${20 * scale}px sans-serif`;
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#fff8ed";
+    ctx.fillText(shape.text ?? "", shape.x, shape.y + 7 * scale);
+    ctx.textAlign = "start";
+  }
+  if (shape.kind === "watermark") {
+    ctx.globalAlpha = style.watermarkOpacity / 100;
+    ctx.font = `bold ${(shape.width * 3 + 18) * scale}px -apple-system, sans-serif`;
+    ctx.fillText(shape.text ?? "", shape.x, shape.y);
+    ctx.globalAlpha = 1;
+  }
+  if (shape.kind === "mosaic") drawMosaic(ctx, shape, x, y, w, h, style);
+  ctx.restore();
+}
+
+export interface AnnotationStyle {
+  color: string;
+  /** 1..10: line width / font-size weight, as in the design's slider. */
+  width: number;
+  /** Text used by text / tag / watermark shapes. */
+  entry: string;
+}
+
+export interface AnnotationEngineOptions {
+  canvas: HTMLCanvasElement;
+  getStyle: () => AnnotationStyle;
+  getWatermarkOpacity: () => number;
+  /** Called after every redraw (toolbar undo state, size label, …). */
+  onDraw?: () => void;
+}
+
+/**
+ * A reusable interactive annotation surface: draws shapes over a base image the
+ * caller renders through `setBaseRenderer`. Text/tag/watermark shapes place on
+ * click; brush/rect/ellipse/line/arrow/mosaic/highlight drag; `drag` moves the
+ * most recent shape.
+ */
+export class AnnotationEngine {
+  readonly canvas: HTMLCanvasElement;
+
+  private readonly ctx: CanvasRenderingContext2D;
+  private readonly options: AnnotationEngineOptions;
+  private shapes: Shape[] = [];
+  private draft: Shape | null = null;
+  private start: Point | null = null;
+  private dragged: Shape | null = null;
+  private tool = "rect";
+  private scale = 1;
+  private labelNumber = 1;
+  private baseRenderer: (() => void) | null = null;
+
+  constructor(options: AnnotationEngineOptions) {
+    this.canvas = options.canvas;
+    const ctx = this.canvas.getContext("2d");
+    if (!ctx) throw new Error("2D canvas is not available");
+    this.ctx = ctx;
+    this.options = options;
+  }
+
+  setBaseRenderer(renderer: (() => void) | null): void {
+    this.baseRenderer = renderer;
+  }
+
+  /** canvas pixels per logical design pixel (capture pixels / selection CSS px). */
+  setScale(scale: number): void {
+    this.scale = Number.isFinite(scale) && scale > 0 ? scale : 1;
+  }
+
+  getScale(): number {
+    return this.scale;
+  }
+
+  setTool(tool: string): void {
+    this.tool = tool;
+  }
+
+  getTool(): string {
+    return this.tool;
+  }
+
+  getShapes(): ReadonlyArray<Shape> {
+    return this.shapes;
+  }
+
+  canUndo(): boolean {
+    return this.shapes.length > 0;
+  }
+
+  reset(): void {
+    this.shapes = [];
+    this.draft = null;
+    this.start = null;
+    this.dragged = null;
+    this.labelNumber = 1;
+  }
+
+  undo(): boolean {
+    if (this.shapes.length === 0) return false;
+    this.shapes.pop();
+    this.redraw();
+    return true;
+  }
+
+  redraw(): void {
+    const { width, height } = this.canvas;
+    this.ctx.clearRect(0, 0, width, height);
+    this.baseRenderer?.();
+    for (const shape of this.shapes) {
+      drawShape(this.ctx, shape, {
+        scale: this.scale,
+        watermarkOpacity: this.options.getWatermarkOpacity(),
+        canvas: this.canvas,
+      });
+    }
+    if (this.draft) {
+      drawShape(this.ctx, this.draft, {
+        scale: this.scale,
+        watermarkOpacity: this.options.getWatermarkOpacity(),
+        canvas: this.canvas,
+        preview: true,
+      });
+    }
+    this.options.onDraw?.();
+  }
+
+  /** Starts a drag/draw at a canvas-space point. Returns whether it did. */
+  beginDraw(point: Point): boolean {
+    if (this.tool === "drag") {
+      this.dragged = this.shapes.at(-1) ?? null;
+      if (!this.dragged) return false;
+      this.start = point;
+      this.dragged._origin = { x: this.dragged.dx ?? 0, y: this.dragged.dy ?? 0 };
+      return true;
+    }
+    if (!this.isDrawingTool(this.tool)) return false;
+    const style = this.options.getStyle();
+    this.start = point;
+    this.draft = {
+      kind: this.tool,
+      x: point.x,
+      y: point.y,
+      x2: point.x,
+      y2: point.y,
+      color: style.color,
+      width: style.width,
+      points: [point],
+      text: this.tool === "tag" ? String(this.labelNumber++) : style.entry,
+    };
+    if (this.tool === "text" || this.tool === "tag" || this.tool === "watermark") {
+      this.shapes.push(this.draft);
+      this.draft = null;
+      this.start = null;
+      this.redraw();
+    }
+    return true;
+  }
+
+  moveDraw(point: Point): void {
+    if (this.dragged && this.start) {
+      this.dragged.dx = (this.dragged._origin?.x ?? 0) + point.x - this.start.x;
+      this.dragged.dy = (this.dragged._origin?.y ?? 0) + point.y - this.start.y;
+      this.redraw();
+      return;
+    }
+    if (!this.draft) return;
+    this.draft.x2 = point.x;
+    this.draft.y2 = point.y;
+    if (this.draft.kind === "brush" && this.draft.points) this.draft.points.push(point);
+    this.redraw();
+  }
+
+  endDraw(): void {
+    if (this.draft) {
+      const draft = this.draft;
+      if (Math.abs(draft.x2 - draft.x) + Math.abs(draft.y2 - draft.y) > 3) {
+        this.shapes.push(draft);
+      }
+      this.draft = null;
+    }
+    this.start = null;
+    this.dragged = null;
+    this.redraw();
+  }
+
+  isDrawing(): boolean {
+    return this.start !== null;
+  }
+
+  /** The composited PNG (base image + shapes) as raw base64, no `data:` prefix. */
+  toPNGBase64(): string {
+    const dataURL = this.canvas.toDataURL("image/png");
+    const comma = dataURL.indexOf(",");
+    return comma >= 0 ? dataURL.slice(comma + 1) : dataURL;
+  }
+
+  private isDrawingTool(tool: string): boolean {
+    return (
+      tool === "rect" ||
+      tool === "ellipse" ||
+      tool === "line" ||
+      tool === "arrow" ||
+      tool === "brush" ||
+      tool === "text" ||
+      tool === "tag" ||
+      tool === "mosaic" ||
+      tool === "highlight" ||
+      tool === "watermark"
+    );
+  }
+}

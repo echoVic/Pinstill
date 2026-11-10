@@ -352,3 +352,66 @@ export function onToast(cb: (p: { text: string; kind: string }) => void): () => 
 - 已知测试脆弱点：连续快速启动多个 selftest 实例时（<0.6s），偶发一个 pin 窗口在创建后即被关闭；e2e.sh 已加入 1.0s 间隔规避；真实使用（单实例常驻）不复现。System Events 合成的 Escape 偶发不达，已加重试。
 - 隐私修复（QA round 2 发现）：showcase 生成的 README 截图曾读到真实历史（history 截图泄露用户桌面）。现在 `TUPEN_DATA_DIR` 可把 captures/pins/session 全部隔离到指定目录（默认行为不变，目录自动创建）；`TUPEN_SELFTEST=showcase` 未设置该变量时在 main() 阶段直接失败退出；outputs 五张截图均已在隔离数据目录重生成并逐张确认不含真实内容。
 - QA 修复（round 2 复验）：恢复贴图取**最新** 60 张（此前误取最旧）；`shotBase` 在存储初始化前赋值，历史/贴图存储打开失败只降级对应功能而不再中断启动；非法 CompleteSelection action 会复位 capturing。
+
+---
+
+# Round 3：选区后桌面出现「完整标注工具栏」（2026-11-09 深夜）
+
+用户确认：截图拖选完成后，不要只给 5 个快捷动作，而是**在选区旁直接出现完整标注工具栏**（矩形/圆/直线/箭头/画笔/文字/标签/马赛克/高亮/水印 + 颜色/粗细 + 撤销 等全部能力），在桌面上就地标注，再复制/贴图/保存/进编辑器。
+
+## R3.1 交互流程（冻结）
+
+1. 拖选区域松手 → overlay 调用 `Capture.PrepareSelection(rect)`。
+2. Go 隐藏 overlay → 截取该区域（250ms 让 overlay 淡出）→ 保存到 session → 重新显示 overlay → 向 overlay 页面发 `overlay:capture {id,url,width,height,rect}`（width/height 为像素，rect 为该区域在 overlay 本地 CSS px）。
+3. overlay 进入「标注模式」：选区里显示刚截下的真实图像（fetch url → createImageBitmap → canvas，保持 untainted），其余区域保持遮罩；选区旁显示**完整标注工具栏** + 颜色/粗细属性条 + 尺寸角标。
+4. 用户在选区上直接标注（全部绘制工具与主编辑器一致：矩形/圆/直线/箭头/画笔/文字/标签/马赛克/高亮/水印，撤销，颜色/粗细/文本）。
+5. 工具栏动作（全部把「截图 + 标注」合成后的 PNG 交给 Go）：
+   - `复制` → 剪贴板
+   - `贴图` → 挂到桌面（持久化贴图）
+   - `保存` → 保存对话框
+   - `进入编辑器` → 主窗口编辑器打开合成后的图片（可在编辑器继续精修）
+   - `取消` / Esc → 放弃本次截图
+6. 标注模式内 Esc = 取消整个截图；工具栏可返回「重新框选」？本轮不要求（重新框选仍可再按快捷键）。
+
+## R3.2 新增绑定/事件（冻结）
+
+Capture 服务：
+| 方法 | 参数 | 返回 | 语义 |
+|---|---|---|---|
+| `PrepareSelection` | `rect {x,y,width,height}`（overlay 本地 CSS px） | `{id,width,height,url,rect}`（同时也会发 overlay:capture 事件） | 隐藏 overlay→截图→存 session→显示 overlay→发事件；Go 侧 capturing 保持 true |
+| `FinishAnnotated` | `action string`（annotate/copy/pin/save/cancel）, `dataBase64 string`（合成后的 PNG；cancel 时可为空） | `void` | 隐藏 overlay；把合成 PNG 存历史（cancel 除外）；按 action 执行 |
+
+事件：`overlay:capture` → payload `{id,url,width,height,rect:{x,y,width,height}}`，发给 overlay 窗口。
+
+`afterCapture` 语义更新：`inplace`（默认，完整工具栏）/`copy`/`pin`/`editor`；非 `inplace` 时选区完成后自动跳过工具栏直接完成（用原始截图），`editor` 直接进主窗口。旧值 `toolbar` 兼容映射为 `inplace`。
+
+## R3.3 前端改动
+
+- overlay.ts 增加「标注模式」：状态机 idle → selecting → preparing → annotating；准备阶段显示加载态；拿到 overlay:capture 后渲染真实图像 + 完整工具栏。
+- 新增独立标注引擎模块（可从现有 editor.ts 提取绘制逻辑，或新建 `frontend/src/annotate.ts` 供 overlay 使用；不要重写 editor.ts 用法导致主编辑器回归）。
+- 完整工具栏布局：两行（绘制工具 11 个 + 动作 撤销/复制/贴图/保存/进入编辑器/取消），选中态、颜色 swatch、粗细/字号滑杆、文字输入、悬停标签；工具栏自动贴合选区上下方并 clamp 在窗口内；小选区时可用紧凑布局。
+- 合成导出：canvas = 截图位图 + 标注图形 → `toDataURL('image/png')` → 去掉 data: 前缀 → `FinishAnnotated(action, base64)`。
+- 主窗口编辑器保持现有能力；`进入编辑器` 时 Go 直接把合成图作为新 capture 交付主窗口。
+
+## R3.4 Go 改动（Lead）
+
+- `PrepareSelection`：隐藏 overlay → 250ms → 截区域 → 写 session（不写历史）→ 显示 overlay → Emit overlay:capture；错误时恢复主窗口并报错。
+- `FinishAnnotated`：隐藏 overlay；cancel 直接复位；其它 action 先把合成 PNG 写 session+历史，再分别复制/贴图/保存/交付主窗口（annotate 复用 storeCapture + capture:completed）。
+- `afterCapture` 兼容 inplace/toolbar/copy/pin/editor；overlay 读取 Settings 决定是否跳过完整工具栏（Go 侧不强制）。
+- selftest 新增 `annotateflow`：真实拖选 → 等 overlay:capture → Eval 在画布画一个红色矩形并点「复制」→ 校验剪贴板尺寸与像素；再跑一次点「贴图」与「进入编辑器」；Esc 取消不产生历史。
+
+## R3.5 非目标
+
+文字输入法/富文本、标注旋转/对齐、贴图内再编辑、OCR 等识别能力、Windows 真机。
+
+## R3.6 实测结论（Lead，2026-11-09 深夜）
+
+- 构建 + 完整 `work/e2e.sh`（隔离数据目录）通过；`TUPEN_SELFTEST=flow` 覆盖：
+  - 拖选 → PrepareSelection → 选区内显示真实截图（#overlayCanvas）→ 点工具画红色矩形 → 复制：剪贴板 640×420 PNG 且检测到标注颜色（annotated=true）；
+  - 贴图：pins=1；进入编辑器：主窗口 editor canvas=640×420（合成图）；
+  - afterCapture=clipboard 自动完成复制（400×280，不显示工具栏）；
+  - cancel：历史条数不变。
+- 「完整工具栏」按用户提供的主编辑器工具栏补齐：11 绘制工具 + undo + 翻译/OCR/二维码/滚动截图（待接入，不调用 FinishAnnotated）+ 颜色/粗细/文本 + 复制/贴图/保存/进入编辑器/取消；editor UI 动作在调用 Go 前映射为 annotate。
+- 隐私：overlay 就地图必须显示真实截图，showcase 生成 README 图时通过页面内的 `window.__tupenDemoCapture` 测试钩子把画布底图替换为合成图，仓库的 tuen-overlay.jpg 已确认只有合成内容；showcase 仍强制 TUPEN_DATA_DIR 隔离。
+- 已知测试抖动：首次 PrepareSelection 偶发未进入标注态（overlay 首次显隐时序），flow selftest 已加重试；真实手工操作未复现。
+- 真实截图回归（权限恢复后）：`bash work/e2e.sh` 真实截屏路径连续两轮 ALL CHECKS PASSED；flow 中 copy 为 640×420 且 annotated=true、pin/editor/auto clipboard/cancel 全部符合预期；`TUPEN_DATA_DIR` 隔离下默认用户目录零写入。

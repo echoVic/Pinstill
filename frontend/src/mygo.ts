@@ -61,6 +61,18 @@ export interface HistoryEntry {
   thumbUrl: string;
 }
 
+/**
+ * OverlayCapturePayload hands a freshly captured selection back to the
+ * overlay page, which annotates it in place on the desktop.
+ */
+export interface OverlayCapturePayload {
+  id: string;
+  url: string;
+  width: number;
+  height: number;
+  rect: Rect;
+}
+
 /** OverlayInfo tells the overlay page where the selection surface is. */
 export interface OverlayInfo {
   displayX: number;
@@ -189,6 +201,13 @@ export const Capture = {
     return call("Capture.ExportImage", dataBase64, suggestedName);
   },
   /**
+   * FinishAnnotated completes an in-place annotation: it stores the composited
+   * image and runs the chosen action.
+   */
+  finishAnnotated(action: string, dataBase64: string): Promise<void> {
+    return call("Capture.FinishAnnotated", action, dataBase64);
+  },
+  /**
    * FinishRegion completes the region capture with the selection the user
    * dragged on the overlay, in overlay-local CSS pixels. It is kept for
    * compatibility and opens the editor; the overlay's action bar uses
@@ -216,6 +235,13 @@ export const Capture = {
   /** PinImage opens an always-on-top pin window showing the image. */
   pinImage(dataBase64: string): Promise<string> {
     return call("Capture.PinImage", dataBase64);
+  },
+  /**
+   * PrepareSelection captures the region the user selected and hands it back
+   * to the overlay, so it can annotate the capture in place on the desktop.
+   */
+  prepareSelection(rect: Rect): Promise<OverlayCapturePayload> {
+    return call("Capture.PrepareSelection", rect);
   },
   /** ResizePin sets a desktop pin's size in DIPs. */
   resizePin(id: string, width: number, height: number): Promise<void> {
@@ -288,6 +314,11 @@ export const events = {
   captureFailed: event<CaptureFailedPayload>("capture:failed"),
   /** EventOverlayShown is emitted to the overlay window before it appears. */
   overlayShown: event<OverlayInfo>("overlay:shown"),
+  /**
+   * EventOverlayCapture is emitted to the overlay window with the image it
+   * now annotates in place.
+   */
+  overlayCapture: event<OverlayCapturePayload>("overlay:capture"),
   /** EventPinInit is emitted to a pin window to show its image. */
   pinInit: event<PinInitPayload>("pin:init"),
   /** EventHistoryChanged is emitted when the persisted history changed. */

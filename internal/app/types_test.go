@@ -206,8 +206,8 @@ func TestDefaultSettingsAreUsable(t *testing.T) {
 	if settings.CaptureKey == "" || settings.PinKey == "" {
 		t.Fatalf("default shortcut keys are empty: %+v", settings)
 	}
-	if settings.AfterCapture != "toolbar" || settings.Format != "PNG" {
-		t.Fatalf("default afterCapture/format = %q/%q, want toolbar/PNG", settings.AfterCapture, settings.Format)
+	if settings.AfterCapture != "inplace" || settings.Format != "PNG" {
+		t.Fatalf("default afterCapture/format = %q/%q, want inplace/PNG", settings.AfterCapture, settings.Format)
 	}
 	// normalizeSettings must be a fixed point over the defaults.
 	if normalized := normalizeSettings(settings); !reflect.DeepEqual(normalized, settings) {

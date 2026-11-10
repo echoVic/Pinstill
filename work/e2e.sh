@@ -20,6 +20,15 @@ check() {
   fi
 }
 
+# expect greps a selftest log line and names the failing check.
+expect() {
+  if grep -q "$1" "$2"; then
+    return 0
+  fi
+  printf 'FAIL  missing "%s" in %s\n' "$1" "$2"
+  fail=1
+}
+
 skip_build=0
 if [ "${1:-}" = "--skip-build" ]; then
   skip_build=1
@@ -71,52 +80,52 @@ else
   fi
 fi
 cat /tmp/tupen-selftest-quit.log
-grep -q 'quit sequence finished' /tmp/tupen-selftest-quit.log || fail=1
+expect 'quit sequence finished' /tmp/tupen-selftest-quit.log
 
 step "Selftest: native capture, history and clipboard"
 TUPEN_SELFTEST=capture "$APP" 2>&1 | tee /tmp/tupen-selftest-capture.log
 sleep 1.0
-grep -q 'SELFTEST capture: ok' /tmp/tupen-selftest-capture.log || fail=1
-grep -q 'SELFTEST capture: clipboard ok' /tmp/tupen-selftest-capture.log || fail=1
-grep -q 'SELFTEST capture: history entry' /tmp/tupen-selftest-capture.log || fail=1
+expect 'SELFTEST capture: ok' /tmp/tupen-selftest-capture.log
+expect 'SELFTEST capture: clipboard ok' /tmp/tupen-selftest-capture.log
+expect 'SELFTEST capture: history entry' /tmp/tupen-selftest-capture.log
 
 step "Selftest: overlay rendering"
 TUPEN_SELFTEST=overlay "$APP" 2>&1 | tee /tmp/tupen-selftest-overlay.log
 sleep 1.0
-grep -q 'SELFTEST overlay: ok' /tmp/tupen-selftest-overlay.log || fail=1
+expect 'SELFTEST overlay: ok' /tmp/tupen-selftest-overlay.log
 
 step "Selftest: overlay selection mapping"
 TUPEN_SELFTEST=drag "$APP" 2>&1 | tee /tmp/tupen-selftest-drag.log
 sleep 1.0
-grep -q 'SELFTEST drag: delivered' /tmp/tupen-selftest-drag.log || fail=1
-grep -q 'same=true' /tmp/tupen-selftest-drag.log || fail=1
-grep -q 'editor canvas=' /tmp/tupen-selftest-drag.log || fail=1
+expect 'SELFTEST drag: delivered' /tmp/tupen-selftest-drag.log
+expect 'same=true' /tmp/tupen-selftest-drag.log
+expect 'editor canvas=' /tmp/tupen-selftest-drag.log
 
 step "Selftest: escape cancels the overlay"
 TUPEN_SELFTEST=esc "$APP" 2>&1 | tee /tmp/tupen-selftest-esc.log
 sleep 1.0
-grep -q 'overlay visible=false' /tmp/tupen-selftest-esc.log || fail=1
-grep -q 'main visible=true' /tmp/tupen-selftest-esc.log || fail=1
+expect 'overlay visible=false' /tmp/tupen-selftest-esc.log
+expect 'main visible=true' /tmp/tupen-selftest-esc.log
 
 step "Selftest: desktop action flow (drag + toolbar)"
 TUPEN_SELFTEST=flow "$APP" 2>&1 | tee /tmp/tupen-selftest-flow.log
 sleep 1.0
-grep -q 'SELFTEST flow: copy clipboard' /tmp/tupen-selftest-flow.log || fail=1
+expect 'SELFTEST flow: copy clipboard' /tmp/tupen-selftest-flow.log
 grep -q 'SELFTEST flow: copy clipboard EMPTY' /tmp/tupen-selftest-flow.log && fail=1
-grep -q 'SELFTEST flow: pin pins=1' /tmp/tupen-selftest-flow.log || fail=1
-grep -q 'SELFTEST flow: annotate editor canvas=' /tmp/tupen-selftest-flow.log || fail=1
-grep -q 'SELFTEST flow: cancel history before=.* after=' /tmp/tupen-selftest-flow.log || fail=1
-grep -q 'SELFTEST flow: auto clipboard ' /tmp/tupen-selftest-flow.log || fail=1
+expect 'SELFTEST flow: pin pins=1' /tmp/tupen-selftest-flow.log
+expect 'SELFTEST flow: annotate editor canvas=' /tmp/tupen-selftest-flow.log
+expect 'SELFTEST flow: cancel history before=.* after=' /tmp/tupen-selftest-flow.log
+expect 'SELFTEST flow: auto clipboard ' /tmp/tupen-selftest-flow.log
 
 step "Selftest: desktop pin interactions"
 TUPEN_SELFTEST=pinui "$APP" 2>&1 | tee /tmp/tupen-selftest-pinui.log
 sleep 1.0
-grep -q 'SELFTEST pinui: dblclick clipboard ' /tmp/tupen-selftest-pinui.log || fail=1
-grep -q 'SELFTEST pinui: bounds unchanged=true' /tmp/tupen-selftest-pinui.log || fail=1
-grep -q 'SELFTEST pinui: menu copy=clicked' /tmp/tupen-selftest-pinui.log || fail=1
-grep -q 'SELFTEST pinui: opacity before=100 after=90' /tmp/tupen-selftest-pinui.log || fail=1
-grep -q 'SELFTEST pinui: wheel bounds=.* scaled=true' /tmp/tupen-selftest-pinui.log || fail=1
-grep -q 'SELFTEST pinui: after close pins=0 stored=0' /tmp/tupen-selftest-pinui.log || fail=1
+expect 'SELFTEST pinui: dblclick clipboard ' /tmp/tupen-selftest-pinui.log
+expect 'SELFTEST pinui: bounds unchanged=true' /tmp/tupen-selftest-pinui.log
+expect 'SELFTEST pinui: menu copy=clicked' /tmp/tupen-selftest-pinui.log
+expect 'SELFTEST pinui: opacity before=100 after=90' /tmp/tupen-selftest-pinui.log
+expect 'SELFTEST pinui: wheel bounds=.* scaled=true' /tmp/tupen-selftest-pinui.log
+expect 'SELFTEST pinui: after close pins=0 stored=0' /tmp/tupen-selftest-pinui.log
 
 step "Selftest: desktop pin persistence"
 TUPEN_SELFTEST=pinpersist-setup "$APP" > /tmp/tupen-selftest-pinpersist-setup.log 2>&1 &
@@ -133,50 +142,50 @@ if kill -0 "$ppid_setup" 2>/dev/null; then
 fi
 wait "$ppid_setup" 2>/dev/null
 cat /tmp/tupen-selftest-pinpersist-setup.log
-grep -q 'SELFTEST pinpersist: setup created' /tmp/tupen-selftest-pinpersist-setup.log || fail=1
+expect 'SELFTEST pinpersist: setup created' /tmp/tupen-selftest-pinpersist-setup.log
 TUPEN_SELFTEST=pinpersist-check "$APP" 2>&1 | tee /tmp/tupen-selftest-pinpersist-check.log
 sleep 1.0
-grep -q 'SELFTEST pinpersist: check restored=[1-9]' /tmp/tupen-selftest-pinpersist-check.log || fail=1
-grep -q 'SELFTEST pinpersist: check after close stored=0' /tmp/tupen-selftest-pinpersist-check.log || fail=1
+expect 'SELFTEST pinpersist: check restored=[1-9]' /tmp/tupen-selftest-pinpersist-check.log
+expect 'SELFTEST pinpersist: check after close stored=0' /tmp/tupen-selftest-pinpersist-check.log
 
 step "Selftest: editor delivery"
 TUPEN_SELFTEST=deliver "$APP" 2>&1 | tee /tmp/tupen-selftest-deliver.log
 sleep 1.0
-grep -q 'SELFTEST deliver: screenshot' /tmp/tupen-selftest-deliver.log || fail=1
-grep -q 'editor page capture' /tmp/tupen-selftest-deliver.log || fail=1
+expect 'SELFTEST deliver: screenshot' /tmp/tupen-selftest-deliver.log
+expect 'editor page capture' /tmp/tupen-selftest-deliver.log
 
 step "Selftest: toolbar actions through the page"
 TUPEN_SELFTEST=uiactions "$APP" 2>&1 | tee /tmp/tupen-selftest-uiactions.log
 sleep 1.0
-grep -q 'clipboard png' /tmp/tupen-selftest-uiactions.log || fail=1
-grep -q 'pins=1' /tmp/tupen-selftest-uiactions.log || fail=1
-grep -q 'history cards=' /tmp/tupen-selftest-uiactions.log || fail=1
+expect 'clipboard png' /tmp/tupen-selftest-uiactions.log
+expect 'pins=1' /tmp/tupen-selftest-uiactions.log
+expect 'history cards=' /tmp/tupen-selftest-uiactions.log
 
 step "Selftest: main window views"
 TUPEN_SELFTEST=uicapture "$APP" 2>&1 | tee /tmp/tupen-selftest-uicapture.log
 sleep 1.0
-grep -q 'rack ' /tmp/tupen-selftest-uicapture.log || fail=1
-grep -q 'history ' /tmp/tupen-selftest-uicapture.log || fail=1
-grep -q 'settings ' /tmp/tupen-selftest-uicapture.log || fail=1
+expect 'rack ' /tmp/tupen-selftest-uicapture.log
+expect 'history ' /tmp/tupen-selftest-uicapture.log
+expect 'settings ' /tmp/tupen-selftest-uicapture.log
 
 step "Selftest: pin window"
 TUPEN_SELFTEST=pin "$APP" 2>&1 | tee /tmp/tupen-selftest-pin.log
 sleep 1.0
-grep -q 'SELFTEST pin: window' /tmp/tupen-selftest-pin.log || fail=1
+expect 'SELFTEST pin: window' /tmp/tupen-selftest-pin.log
 
 step "Selftest: global shortcuts"
 TUPEN_SELFTEST=hotkeys "$APP" 2>&1 | tee /tmp/tupen-selftest-hotkeys.log
 sleep 1.0
-grep -q 'captureKey .* registered=true' /tmp/tupen-selftest-hotkeys.log || fail=1
+expect 'captureKey .* registered=true' /tmp/tupen-selftest-hotkeys.log
 
 step "Selftest: settings"
 TUPEN_SELFTEST=settings "$APP" 2>&1 | tee /tmp/tupen-selftest-settings.log
 sleep 1.0
 # apply errors are expected for launchAtLogin when the app is not in /Applications;
 # what matters is that the three shortcuts registered with the new defaults.
-grep -q 'SELFTEST settings: captureKey=CmdOrCtrl+Shift+1' /tmp/tupen-selftest-settings.log || fail=1
-grep -q 'SELFTEST settings: pinKey=CmdOrCtrl+Shift+2' /tmp/tupen-selftest-settings.log || fail=1
-grep -q 'SELFTEST settings: ocrKey=CmdOrCtrl+Shift+O' /tmp/tupen-selftest-settings.log || fail=1
+expect 'SELFTEST settings: captureKey=CmdOrCtrl+Shift+1' /tmp/tupen-selftest-settings.log
+expect 'SELFTEST settings: pinKey=CmdOrCtrl+Shift+2' /tmp/tupen-selftest-settings.log
+expect 'SELFTEST settings: ocrKey=CmdOrCtrl+Shift+O' /tmp/tupen-selftest-settings.log
 
 printf '\n'
 if [ "$fail" -eq 0 ]; then
