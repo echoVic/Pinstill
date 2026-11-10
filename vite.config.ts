@@ -21,6 +21,7 @@ export default defineConfig({
         index: page("index.html"),
         overlay: page("overlay.html"),
         pin: page("pin.html"),
+        scroll: page("scroll.html"),
       },
     },
   },

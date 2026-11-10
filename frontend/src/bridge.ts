@@ -54,6 +54,26 @@ export interface PinState {
   opacity: number;
 }
 
+/** Payload of `scroll:init`: sent to the scroll control bar window. */
+export interface ScrollInit {
+  /** The selection, in overlay-local CSS pixels (for reference text only). */
+  rect: Rect;
+  /** Whether the session started in automatic mode. */
+  auto: boolean;
+  /** Whether macOS Accessibility is granted (needed for automatic scrolling). */
+  accessibilityGranted: boolean;
+}
+
+/** One `scroll:progress` event of a scrolling-capture session. */
+export interface ScrollProgress {
+  frames: number;
+  /** Total stitched height in image pixels. */
+  height: number;
+  status: "running" | "done" | "stalled" | "max" | "stopped";
+  /** Current automatic-scrolling state, when Go reports it. */
+  auto?: boolean;
+}
+
 /** A selection captured by `Capture.PrepareSelection`, ready for in-place annotation. */
 export interface OverlayCapture {
   id: string;
@@ -77,7 +97,7 @@ export interface CaptureCompleted {
   url: string;
   /** Present when the capture was written to history. */
   thumbUrl?: string;
-  source: "region" | "screen" | "clipboard";
+  source: "region" | "screen" | "clipboard" | "scroll";
 }
 
 /** Settings object pushed to `Capture.ApplySettings` (plan §3.4). */
@@ -211,6 +231,33 @@ export function finishAnnotated(
   return call("Capture.FinishAnnotated", action, dataBase64);
 }
 
+// ------------------------------------------------- scrolling capture (R4.2)
+
+export function startScroll(rect: Rect, autoScroll: boolean): Promise<void> {
+  if (!hasNative) return Promise.resolve();
+  return call("Capture.StartScroll", rect, autoScroll);
+}
+
+export function finishScroll(action: FinishAnnotatedAction): Promise<void> {
+  if (!hasNative) return Promise.resolve();
+  return call("Capture.FinishScroll", action);
+}
+
+export function setScrollAuto(enabled: boolean): Promise<void> {
+  if (!hasNative) return Promise.resolve();
+  return call("Capture.SetScrollAuto", enabled);
+}
+
+export function scrollAccessibilityGranted(): Promise<boolean> {
+  if (!hasNative) return Promise.resolve(false);
+  return call<boolean>("Capture.ScrollAccessibilityGranted");
+}
+
+export function openScrollAccessibilitySettings(): Promise<void> {
+  if (!hasNative) return Promise.resolve();
+  return call("Capture.OpenScrollAccessibilitySettings");
+}
+
 export function applySettings(settings: Settings): Promise<Record<string, string>> {
   if (!hasNative) return Promise.resolve({});
   return call<Record<string, string>>("Capture.ApplySettings", settings);
@@ -310,6 +357,14 @@ export function onOverlayShown(cb: (payload: OverlayInfo) => void): () => void {
 
 export function onOverlayCapture(cb: (payload: OverlayCapture) => void): () => void {
   return subscribe("overlay:capture", cb);
+}
+
+export function onScrollInit(cb: (payload: ScrollInit) => void): () => void {
+  return subscribe("scroll:init", cb);
+}
+
+export function onScrollProgress(cb: (payload: ScrollProgress) => void): () => void {
+  return subscribe("scroll:progress", cb);
 }
 
 export function onHistoryChanged(cb: () => void): () => void {

@@ -24,6 +24,7 @@ import {
   overlayInfo,
   prepareSelection,
   settings,
+  startScroll,
   type FinishAnnotatedAction,
   type OverlayCapture,
   type OverlayInfo,
@@ -75,14 +76,22 @@ const ACTION_DEFS: Array<{
 ];
 
 /** Editor actions Tupen does not implement yet: honest "待接入" placeholders. */
-const RECOGNITION_DEFS: Array<{ tool: string; label: string; icon: string }> = [
-  { tool: "translate", label: "翻译", icon: "languages" },
-  { tool: "ocr", label: "提取文字", icon: "scan-text" },
-  { tool: "qr", label: "识别二维码", icon: "qr-code" },
-  { tool: "scroll", label: "滚动截图", icon: "scroll-text" },
+const EXTRA_TOOL_DEFS: Array<{
+  tool: string;
+  label: string;
+  icon: string;
+  placeholder: boolean;
+}> = [
+  { tool: "translate", label: "翻译", icon: "languages", placeholder: true },
+  { tool: "ocr", label: "提取文字", icon: "scan-text", placeholder: true },
+  { tool: "qr", label: "识别二维码", icon: "qr-code", placeholder: true },
+  // Real Round 4 action: hands the selection to the scrolling-capture session.
+  { tool: "scroll", label: "滚动截图", icon: "scroll-text", placeholder: false },
 ];
 
-const RECOGNITION_TOOLS = new Set(RECOGNITION_DEFS.map((def) => def.tool));
+const PLACEHOLDER_TOOLS = new Set(
+  EXTRA_TOOL_DEFS.filter((def) => def.placeholder).map((def) => def.tool),
+);
 
 // Lucide-style inline icons (the overlay page does not pull in the icon set).
 const SVG_PATHS: Record<string, string> = {
@@ -342,13 +351,13 @@ function buildToolbar(): void {
   actionSeparator.className = "at-tool-sep";
   actionSeparator.setAttribute("aria-hidden", "true");
   toolsHost.append(actionSeparator);
-  for (const def of RECOGNITION_DEFS) {
+  for (const def of EXTRA_TOOL_DEFS) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "tool-btn";
     button.dataset.tool = def.tool;
     button.setAttribute("aria-label", def.label);
-    button.title = `${def.label}（待接入）`;
+    button.title = def.placeholder ? `${def.label}（待接入）` : def.label;
     button.innerHTML = `${svgIcon(def.icon)}<span class="tip">${def.label}</span>`;
     toolsHost.append(button);
   }
@@ -398,7 +407,8 @@ function onToolbarClick(event: Event): void {
   if (toolButton) {
     const tool = toolButton.dataset.tool;
     if (tool === "undo") undo();
-    else if (tool && RECOGNITION_TOOLS.has(tool)) showRecognitionPlaceholder(tool);
+    else if (tool === "scroll") void startScrollFromToolbar();
+    else if (tool && PLACEHOLDER_TOOLS.has(tool)) showRecognitionPlaceholder(tool);
     else if (tool) selectTool(tool as ToolId);
     return;
   }
@@ -412,11 +422,35 @@ function onToolbarClick(event: Event): void {
   if (swatchButton?.dataset.color) setColor(swatchButton.dataset.color);
 }
 
+/** Scrolling capture: hand the selection to Go. Go hides this overlay, shows
+ * the small control-bar window (`/scroll.html`) and starts the capture loop;
+ * the next BeginRegion's overlay:shown resets this page. */
+async function startScrollFromToolbar(): Promise<void> {
+  if (phase !== "annotating" || !committedRect) return;
+  if (!hasNative) {
+    setToolbarStatus("滚动截图 · 浏览器预览", "info");
+    showTransient(
+      "浏览器预览 · 桌面应用中会隐藏选区并弹出滚动截图控制条（可手动滚动，或授权辅助功能后自动滚动）",
+      3400,
+    );
+    return;
+  }
+  setToolbarPending(true, "正在进入滚动截图…");
+  try {
+    await startScroll(committedRect, false);
+    phase = "finishing";
+    setToolbarStatus("滚动截图进行中…");
+  } catch (error) {
+    setToolbarPending(false);
+    setToolbarStatus(`无法开始滚动截图：${errorMessage(error)}`, "error");
+  }
+}
+
 /** Honest "待接入" feedback for editor capabilities Tupen does not implement
  * yet (translate/OCR/QR/scroll capture). Never calls FinishAnnotated and never
  * touches the annotations. */
 function showRecognitionPlaceholder(tool: string): void {
-  const def = RECOGNITION_DEFS.find((entry) => entry.tool === tool);
+  const def = EXTRA_TOOL_DEFS.find((entry) => entry.tool === tool);
   if (!def || phase !== "annotating") return;
   setToolbarStatus(`${def.label} · 待接入`, "info");
   showTransient(`${def.label} · 待接入：桌面版接入前，可先复制/保存当前截图，或进入编辑器继续标注`, 3200);

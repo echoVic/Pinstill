@@ -32,6 +32,7 @@ type App struct {
 
 	main           *mygo.Window
 	overlay        *mygo.Window
+	control        *mygo.Window
 	overlayDisplay mygo.Display
 	overlayRect    mygo.Rectangle
 
@@ -39,6 +40,9 @@ type App struct {
 	pinStates map[string]pin.State
 	pinTimers map[string]*time.Timer
 	pinSeq    int
+
+	scroll   *scrollSession
+	scrollMu sync.Mutex
 
 	tray         *mygo.Tray
 	hotkeysFired int
@@ -75,6 +79,7 @@ func (a *App) Start() {
 	a.registerProtocol()
 	a.createOverlay()
 	a.createMainWindow()
+	a.createScrollControl()
 	a.setMenu()
 	a.createTray()
 	if errs := a.registerShortcuts(DefaultSettings()); len(errs) > 0 {
@@ -87,7 +92,16 @@ func (a *App) Start() {
 	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) {
 		a.mu.Lock()
 		a.quitting = true
+		session := a.scroll
 		a.mu.Unlock()
+		if session != nil {
+			session.mu.Lock()
+			if !session.stopped {
+				session.stopped = true
+				close(session.stop)
+			}
+			session.mu.Unlock()
+		}
 		a.snapshotAllPins()
 	})
 	mygo.App.OnActivate(func(hasVisibleWindows bool) {
@@ -615,6 +629,11 @@ func (a *App) captureAction(region capture.Rect, action string) {
 // captureRegion wraps the native capture. Selftests can run without the
 // screen recording permission by asking for a generated image instead.
 func (a *App) captureRegion(region capture.Rect, opts capture.CaptureOptions) ([]byte, error) {
+	if os.Getenv("TUPEN_SELFTEST_SCROLL_SIM") != "" {
+		if pngBytes := simulatedScrollFrame(); len(pngBytes) > 0 {
+			return pngBytes, nil
+		}
+	}
 	if os.Getenv("TUPEN_SELFTEST_FAKE_CAPTURE") != "" {
 		if pngBytes := syntheticScreenshot(); len(pngBytes) > 0 {
 			return pngBytes, nil
@@ -740,30 +759,7 @@ func (a *App) finishAnnotated(action string, dataBase64 string) error {
 		a.toast(err.Error(), "error")
 		return err
 	}
-	a.playSoundIfEnabled(a.settingsSnapshot())
-	switch action {
-	case "annotate":
-		a.showMain()
-		emitToMain(a, EventCaptureCompleted, payload)
-	case "copy":
-		if err := mygo.Clipboard.WriteImage(raw); err != nil {
-			a.toast("写入剪贴板失败: "+err.Error(), "error")
-		} else {
-			a.toast("截图与标注已复制到剪贴板", "success")
-		}
-	case "pin":
-		if _, err := a.pinPNG(raw, payload.Width, payload.Height); err != nil {
-			a.toast("固定到屏幕失败: "+err.Error(), "error")
-		} else {
-			a.toast("已固定到屏幕", "success")
-		}
-	case "save":
-		if path, err := a.savePNGBytes(raw); err != nil {
-			a.toast("保存失败: "+err.Error(), "error")
-		} else if path != "" {
-			a.toast("已保存到 "+path, "success")
-		}
-	}
+	a.applyCaptureAction(action, raw, payload)
 	reset()
 	return nil
 }

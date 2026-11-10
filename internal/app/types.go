@@ -104,6 +104,21 @@ type PinWindowState struct {
 	Opacity float64 `json:"opacity"`
 }
 
+// ScrollInitPayload configures the scroll control window for one session.
+type ScrollInitPayload struct {
+	Rect                 Rect `json:"rect"`
+	Auto                 bool `json:"auto"`
+	AccessibilityGranted bool `json:"accessibilityGranted"`
+}
+
+// ScrollProgressPayload reports how a scrolling capture is going.
+type ScrollProgressPayload struct {
+	Frames int    `json:"frames"`
+	Height int    `json:"height"`
+	Status string `json:"status"`
+	Auto   bool   `json:"auto"`
+}
+
 // HistoryCapture is a persisted capture loaded into the editor.
 type HistoryCapture struct {
 	ID     string `json:"id"`
@@ -170,6 +185,11 @@ var (
 	EventCaptureFailed = mygo.NewEvent[CaptureFailedPayload]("capture:failed")
 	// EventOverlayShown is emitted to the overlay window before it appears.
 	EventOverlayShown = mygo.NewEvent[OverlayInfo]("overlay:shown")
+	// EventScrollInit is emitted to the scroll control window when a session
+	// starts.
+	EventScrollInit = mygo.NewEvent[ScrollInitPayload]("scroll:init")
+	// EventScrollProgress reports the state of a scrolling capture.
+	EventScrollProgress = mygo.NewEvent[ScrollProgressPayload]("scroll:progress")
 	// EventOverlayCapture is emitted to the overlay window with the image it
 	// now annotates in place.
 	EventOverlayCapture = mygo.NewEvent[OverlayCapturePayload]("overlay:capture")

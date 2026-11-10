@@ -165,6 +165,19 @@ sleep 1.0
 expect 'SELFTEST pinpersist: check restored=[1-9]' /tmp/tupen-selftest-pinpersist-check.log
 expect 'SELFTEST pinpersist: check after close stored=0' /tmp/tupen-selftest-pinpersist-check.log
 
+step "Selftest: scrolling capture"
+TUPEN_SELFTEST=scroll TUPEN_SELFTEST_SCROLL_SIM=1 "$APP" 2>&1 | tee /tmp/tupen-selftest-scroll.log
+sleep 1.0
+expect 'SELFTEST scroll: frames=' /tmp/tupen-selftest-scroll.log
+expect 'SELFTEST scroll: editor=1280x' /tmp/tupen-selftest-scroll.log
+grep -q 'SELFTEST scroll: auto denied ok' /tmp/tupen-selftest-scroll.log || grep -q 'SELFTEST scroll: auto start err=' /tmp/tupen-selftest-scroll.log || { echo "FAIL  scroll accessibility check missing"; fail=1; }
+
+step "Selftest: scrolling capture through the page"
+TUPEN_SELFTEST=scrollflow TUPEN_SELFTEST_SCROLL_SIM=1 "$APP" 2>&1 | tee /tmp/tupen-selftest-scrollflow.log
+sleep 1.0
+expect 'SELFTEST scrollflow: frames=' /tmp/tupen-selftest-scrollflow.log
+expect 'SELFTEST scrollflow: editor=1280x' /tmp/tupen-selftest-scrollflow.log
+
 step "Selftest: editor delivery"
 TUPEN_SELFTEST=deliver "$APP" 2>&1 | tee /tmp/tupen-selftest-deliver.log
 sleep 1.0

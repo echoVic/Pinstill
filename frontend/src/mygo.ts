@@ -110,6 +110,21 @@ export interface Rect {
   height: number;
 }
 
+/** ScrollInitPayload configures the scroll control window for one session. */
+export interface ScrollInitPayload {
+  rect: Rect;
+  auto: boolean;
+  accessibilityGranted: boolean;
+}
+
+/** ScrollProgressPayload reports how a scrolling capture is going. */
+export interface ScrollProgressPayload {
+  frames: number;
+  height: number;
+  status: string;
+  auto: boolean;
+}
+
 /**
  * Settings configures the capture workflow. The frontend owns the persisted
  * values and pushes them to Go whenever they change.
@@ -216,9 +231,17 @@ export const Capture = {
   finishRegion(rect: Rect): Promise<CaptureResult> {
     return call("Capture.FinishRegion", rect);
   },
+  /** FinishScroll stops the scrolling capture and runs the chosen action. */
+  finishScroll(action: string): Promise<void> {
+    return call("Capture.FinishScroll", action);
+  },
   /** OpenPermissionSettings opens the OS privacy pane for screen recording. */
   openPermissionSettings(): Promise<void> {
     return call("Capture.OpenPermissionSettings");
+  },
+  /** OpenScrollAccessibilitySettings opens the Accessibility privacy pane. */
+  openScrollAccessibilitySettings(): Promise<void> {
+    return call("Capture.OpenScrollAccessibilitySettings");
   },
   /** OverlayInfo describes the display the overlay covers. */
   overlayInfo(): Promise<OverlayInfo> {
@@ -258,9 +281,17 @@ export const Capture = {
   savePin(id: string): Promise<string> {
     return call("Capture.SavePin", id);
   },
+  /** ScrollAccessibilityGranted reports whether automatic scrolling is allowed. */
+  scrollAccessibilityGranted(): Promise<boolean> {
+    return call("Capture.ScrollAccessibilityGranted");
+  },
   /** SetPinOpacity sets a desktop pin's opacity (10..100). */
   setPinOpacity(id: string, opacity: number): Promise<void> {
     return call("Capture.SetPinOpacity", id, opacity);
+  },
+  /** SetScrollAuto switches a running scroll capture to automatic scrolling. */
+  setScrollAuto(enabled: boolean): Promise<void> {
+    return call("Capture.SetScrollAuto", enabled);
   },
   /**
    * Settings returns the settings currently applied, so pages (the overlay)
@@ -272,6 +303,10 @@ export const Capture = {
   /** ShowMainWindow reveals and focuses the main window. */
   showMainWindow(): Promise<void> {
     return call("Capture.ShowMainWindow");
+  },
+  /** StartScroll begins a scrolling capture for the current selection. */
+  startScroll(rect: Rect, autoScroll: boolean): Promise<void> {
+    return call("Capture.StartScroll", rect, autoScroll);
   },
   /** UpdatePinState persists the size and opacity the page reports. */
   updatePinState(id: string, state: PinWindowState): Promise<void> {
@@ -314,6 +349,13 @@ export const events = {
   captureFailed: event<CaptureFailedPayload>("capture:failed"),
   /** EventOverlayShown is emitted to the overlay window before it appears. */
   overlayShown: event<OverlayInfo>("overlay:shown"),
+  /**
+   * EventScrollInit is emitted to the scroll control window when a session
+   * starts.
+   */
+  scrollInit: event<ScrollInitPayload>("scroll:init"),
+  /** EventScrollProgress reports the state of a scrolling capture. */
+  scrollProgress: event<ScrollProgressPayload>("scroll:progress"),
   /**
    * EventOverlayCapture is emitted to the overlay window with the image it
    * now annotates in place.

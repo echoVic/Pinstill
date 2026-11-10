@@ -415,3 +415,71 @@ Capture 服务：
 - 隐私：overlay 就地图必须显示真实截图，showcase 生成 README 图时通过页面内的 `window.__tupenDemoCapture` 测试钩子把画布底图替换为合成图，仓库的 tuen-overlay.jpg 已确认只有合成内容；showcase 仍强制 TUPEN_DATA_DIR 隔离。
 - 已知测试抖动：首次 PrepareSelection 偶发未进入标注态（overlay 首次显隐时序），flow selftest 已加重试；真实手工操作未复现。
 - 真实截图回归（权限恢复后）：`bash work/e2e.sh` 真实截屏路径连续两轮 ALL CHECKS PASSED；flow 中 copy 为 640×420 且 annotated=true、pin/editor/auto clipboard/cancel 全部符合预期；`TUPEN_DATA_DIR` 隔离下默认用户目录零写入。
+
+---
+
+# Round 4：滚动截图（手动默认 + 自动可选）（2026-11-10）
+
+用户选择：手动滚动拼接为默认，自动滚动作为可选（需要 macOS「辅助功能」权限）。
+
+## R4.1 交互（冻结，2026-11-10 修正：独立控制条窗口）
+
+> 修正原因：overlay 是全屏窗口，即使选区透明仍会拦截滚轮事件，用户手动滚动无法到达下层 App。因此滚动模式改为：Go 隐藏 overlay，另开一个小控制条窗口。
+
+1. 选区标注入驻后，工具栏点「滚动截图」→ overlay 调用 `StartScroll(rect,false)`；Go 隐藏 overlay、在选区附近显示独立控制条窗口（`/scroll.html`，约 420×70，Panel/Frameless），用户可以直接滚动下层目标窗口。
+   - 控制条：自动滚动开关（需辅助功能授权，未授权时点击引导去系统设置）、进度「已拼接 N 帧 · H px」、动作：复制 / 保存 / 贴图 / 进编辑器 / 取消；控制条 470×84、可拖动、Esc 取消、放置时避开选区以免截进自己。停顿检测到「stalled」后不结束会话，继续滚动会重新开始抓帧。
+2. 手动模式（默认）：用户自己滚动，Go 每 ~340ms 抓一帧，检测到连续 2 帧几乎相同（到底/停顿）→ 标记 done 但仍停留等动作；用户点动作即完成。
+3. 自动模式：Go 每 ~420ms 向选区中心发送滚轮事件，再抓帧；需要 `AXIsProcessTrusted()` 为 true，否则 `StartScroll` 返回错误，前端引导开「辅助功能」。
+4. 到达上限（120 帧 / 总高 30000px）→ 状态 max，停止抓帧等动作。
+5. 完成动作：把拼接后的长图存 session+历史，然后复制/保存/贴图/进入编辑器（annotate）。
+
+## R4.2 绑定/事件（冻结）
+
+Capture 服务：
+| 方法 | 参数 | 返回 | 语义 |
+|---|---|---|---|
+| `StartScroll` | `rect`（overlay 本地 CSS px）, `autoScroll bool` | `error` | 开始滚动截图会话；auto 但无辅助功能权限 → 返回错误 |
+| `FinishScroll` | `action string`（annotate/copy/pin/save/cancel） | `void` | 停止会话、拼接完成、存历史并按 action 执行（cancel 丢弃） |
+| `SetScrollAuto` | `enabled bool` | `error` | 会话中切换自动滚动；授权缺失返回错误 |
+| `ScrollAccessibilityGranted` | — | `bool` | 是否具备辅助功能权限（自动滚动） |
+| `OpenScrollAccessibilitySettings` | — | `void` | 打开「辅助功能」设置页 |
+
+事件：
+- `scroll:init` → `{rect, auto, accessibilityGranted}`（发给控制条窗口）
+- `scroll:progress` → `{frames int, height int, status string, auto bool}`；status ∈ `running|done|stalled|max|stopped`。
+
+## R4.3 Go 实现（Lead）
+
+- `internal/stitch`：垂直拼接。输入多帧 RGBA，找相邻帧重叠高度（搜索 overlap 范围，行/列抽样计算平均绝对差，取最小且低于阈值），返回合并图；支持结束判断（两帧差异极低视为到底）。单测：合成滚动帧拼接、无重叠回退、固定表头（保留策略）、最大高度限制。
+- `internal/capture` 新文件（darwin）：滚轮事件 `ScrollWheel(x,y,deltaY)`（CGEventCreateScrollWheelEvent2 + CGEventSetLocation + CGEventPost，purego）、`AccessibilityGranted()`（AXIsProcessTrusted，ApplicationServices）、`OpenAccessibilitySettings()`；其他平台返回 ErrUnsupported。
+- `internal/app`：滚动会话状态机 goroutine：抓帧→拼接→进度事件；自动模式先滚后抓；完成动作复用存储/复制/贴图/保存/编辑器路径。
+- 抓帧不隐藏 overlay：选区内部必须透明，Go 直接截选区（截到的是真实下方内容）。前端负责在滚动模式隐藏画布/边框。若实测透明截取失败，则回退「每帧隐藏 overlay + 延时」方案（慢但有闪烁）。
+- selftest：`scroll`（fake capture 下跑 StartScroll→FinishScroll(annotate)，校验长图与历史）；`scroll-auto-noperm`（无权限时 StartScroll(auto) 返回错误）。
+
+## R4.4 前端改动
+
+- overlay.ts：工具栏「滚动截图」按钮（data-tool="scroll"）只调用 StartScroll(rect,false)，成功后 Go 隐藏 overlay；失败在工具栏提示。
+- 新增 frontend/scroll.html + src/scroll.ts：独立控制条窗口 UI（拖动区、#scrollProgress、#scrollAuto、data-scroll-action 按钮、scroll:init/scroll:progress 监听、自动滚动授权引导、Esc 取消、浏览器降级 demo），vite 多页加 scroll 入口。
+- 其余保持不变。
+
+## R4.5 非目标
+
+Windows 真机滚动、横向滚动、视频/动画内容、自动识别页内滚动容器、超长图预览优化。
+
+## R4.6 实测结论（Lead，2026-11-10）
+
+- Go 侧新增：`internal/stitch`（重叠匹配拼接，反向搜索最大重叠 + 早停加速，单测覆盖拼接重建/无重叠/停止检测/最大高度）、`internal/capture` 滚动事件与辅助功能检测（purego CoreGraphics/ApplicationServices）、`internal/app` 滚动会话（独立控制条窗口，隐藏 overlay，手动/自动两种节奏）。
+- `TUPEN_SELFTEST=scroll`（模拟帧）：accessibility 检测、自动模式会话切换、手动会话拼接出 6 帧 2300px 长图并交付编辑器 1280×2300。
+- `TUPEN_SELFTEST=scrollflow`（真实页面驱动）：选区标注态点「滚动截图」→ Go 隐藏 overlay、显示控制条 → 页面收到 scroll:init/progress → 点「进编辑器」→ 编辑器载入 1280×1700 长图。
+- 自动滚动真实滚轮事件需要「辅助功能」权限（本机已具备），selftest 用模拟帧时不会真的发送滚轮事件（环境变量 guard），避免影响桌面；**真实自动滚动效果仍建议人工确认一次**。
+- 控制条截图（outputs/tupen-scroll.jpg）：正在拼接 · 4 帧 · 1700 px / 自动滚动开关 / 复制保存贴图进编辑器取消。
+
+## R4.7 QA round 4 修复（Lead）
+
+独立验收 PASS（0 BLOCKER/0 MAJOR）。已修：
+- 手动模式停顿检测不再结束会话：连续静帧置 `stalled` 并暂停自动滚动，继续滚动会恢复抓帧（此前 done 后永久停止，UI 提示误导）。
+- `StartScroll(auto)` 先检查 `ScrollSupported()`，Windows 上自动滚动显示明确错误；README 措辞修正（Windows 手动拼接可编译、未真机验证）。
+- `FinishScroll` 先校验/收尾成功后才隐藏控制条；失败路径隐藏控制条 + 显示主窗口 + capture:failed/toast，用户不再「窗口突然消失」。
+- `StartScroll/FinishScroll/SetScrollAuto` 加 `scrollMu` 串行化，避免并发会话泄漏/重复收尾。
+- plan 契约数字对齐实现（120 帧 / 340ms / 420ms / 470×84）；删除未用的 stitch `ReachedEnd`；bridge 的 source 联合类型补 "scroll"。
+- 修复后：`go test ./...` 全绿；`TUPEN_SELFTEST=scroll/scrollflow` 结果不变（1280×2300 / 1280×1700）；完整 e2e 19 段 ALL CHECKS PASSED。

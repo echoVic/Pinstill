@@ -54,6 +54,29 @@ func (s *CaptureService) FinishAnnotated(action string, dataBase64 string) error
 	return s.app.finishAnnotated(action, dataBase64)
 }
 
+// StartScroll begins a scrolling capture for the current selection.
+func (s *CaptureService) StartScroll(rect Rect, autoScroll bool) error {
+	return s.app.startScroll(rect, autoScroll)
+}
+
+// FinishScroll stops the scrolling capture and runs the chosen action.
+func (s *CaptureService) FinishScroll(action string) error {
+	return s.app.finishScroll(action)
+}
+
+// SetScrollAuto switches a running scroll capture to automatic scrolling.
+func (s *CaptureService) SetScrollAuto(enabled bool) error {
+	return s.app.setScrollAuto(enabled)
+}
+
+// ScrollAccessibilityGranted reports whether automatic scrolling is allowed.
+func (s *CaptureService) ScrollAccessibilityGranted() bool { return capture.AccessibilityGranted() }
+
+// OpenScrollAccessibilitySettings opens the Accessibility privacy pane.
+func (s *CaptureService) OpenScrollAccessibilitySettings() error {
+	return capture.OpenAccessibilitySettings()
+}
+
 // Settings returns the settings currently applied, so pages (the overlay)
 // can honor the user's default action.
 func (s *CaptureService) Settings() Settings { return s.app.settingsSnapshot() }
