@@ -268,7 +268,7 @@ func (a *App) createTray() {
 			}()
 		}},
 		{Type: mygo.MenuItemSeparator},
-		{Label: "显示主窗口", Click: func(*mygo.MenuItem, *mygo.Window) { go a.showMain() }},
+		{Label: "历史与设置", Click: func(*mygo.MenuItem, *mygo.Window) { go a.showMain() }},
 		{Type: mygo.MenuItemSeparator},
 		{Role: mygo.RoleQuit},
 	})
@@ -502,130 +502,6 @@ func (a *App) cancelRegion() {
 	emitToMain(a, EventCaptureCancelled, CaptureCancelledPayload{Reason: "user"})
 }
 
-// finishRegion maps an overlay-local selection to screen coordinates and
-// starts the capture.
-func (a *App) finishRegion(rect Rect) error {
-	a.mu.Lock()
-	disp := a.overlayDisplay
-	overlay := a.overlay
-	origin := a.overlayRect
-	a.mu.Unlock()
-	// The overlay's real frame, not the one asked for: AppKit may constrain
-	// a panel to the screen's visible frame. Read it while the window still
-	// shows, since it is the page's coordinate origin.
-	if overlay != nil {
-		if live := overlay.ContentBounds(); live.Width > 0 && live.Height > 0 {
-			origin = live
-		}
-		overlay.Hide()
-	}
-	region := capture.Rect{
-		X:      float64(origin.X) + rect.X,
-		Y:      float64(origin.Y) + rect.Y,
-		Width:  rect.Width,
-		Height: rect.Height,
-	}
-	region = clampToDisplay(region, disp.Bounds)
-	if region.Empty() || region.Width < 2 || region.Height < 2 {
-		a.cancelRegion()
-		return nil
-	}
-	go a.captureDeliver(region, "region")
-	return nil
-}
-
-// completeSelection is what the overlay's action bar calls: it hides the
-// overlay, grabs the selected region and runs one action on it. Actions
-// happen on the desktop; only "annotate" opens the main window.
-func (a *App) completeSelection(rect Rect, action string) error {
-	switch action {
-	case "annotate", "copy", "pin", "save":
-	default:
-		a.mu.Lock()
-		a.capturing = false
-		a.mu.Unlock()
-		return fmt.Errorf("未知的截图动作 %q", action)
-	}
-	a.mu.Lock()
-	disp := a.overlayDisplay
-	overlay := a.overlay
-	origin := a.overlayRect
-	a.mu.Unlock()
-	if overlay != nil {
-		if live := overlay.ContentBounds(); live.Width > 0 && live.Height > 0 {
-			origin = live
-		}
-	}
-	region := capture.Rect{
-		X:      float64(origin.X) + rect.X,
-		Y:      float64(origin.Y) + rect.Y,
-		Width:  rect.Width,
-		Height: rect.Height,
-	}
-	region = clampToDisplay(region, disp.Bounds)
-	if overlay != nil {
-		overlay.Hide()
-	}
-	if region.Empty() || region.Width < 2 || region.Height < 2 {
-		a.mu.Lock()
-		a.capturing = false
-		a.mu.Unlock()
-		a.showMain()
-		return nil
-	}
-	go a.captureAction(region, action)
-	return nil
-}
-
-// captureAction grabs the region and runs the action the user picked in the
-// overlay's toolbar. It runs on its own goroutine.
-func (a *App) captureAction(region capture.Rect, action string) {
-	// Let the overlay leave the compositor before the screen is grabbed.
-	time.Sleep(250 * time.Millisecond)
-	s := a.settingsSnapshot()
-	pngBytes, err := a.captureRegion(region, capture.CaptureOptions{IncludeCursor: s.IncludeCursor})
-	if err != nil {
-		a.failCapture(err, false)
-		return
-	}
-	if blankPNG(pngBytes) {
-		a.failCapture(errors.New("截图内容为空，可能缺少屏幕录制权限"), true)
-		return
-	}
-	payload, err := a.storeCapture(pngBytes, "region")
-	if err != nil {
-		a.failCapture(err, false)
-		return
-	}
-	a.playSoundIfEnabled(s)
-	switch action {
-	case "annotate":
-		a.showMain()
-		emitToMain(a, EventCaptureCompleted, payload)
-	case "copy":
-		if err := mygo.Clipboard.WriteImage(pngBytes); err != nil {
-			a.toast("写入剪贴板失败: "+err.Error(), "error")
-		} else {
-			a.toast("截图已复制到剪贴板", "success")
-		}
-	case "pin":
-		if _, err := a.pinPNG(pngBytes, payload.Width, payload.Height); err != nil {
-			a.toast("固定到屏幕失败: "+err.Error(), "error")
-		} else {
-			a.toast("已固定到屏幕", "success")
-		}
-	case "save":
-		if path, err := a.savePNGBytes(pngBytes); err != nil {
-			a.toast("保存失败: "+err.Error(), "error")
-		} else if path != "" {
-			a.toast("已保存到 "+path, "success")
-		}
-	}
-	a.mu.Lock()
-	a.capturing = false
-	a.mu.Unlock()
-}
-
 // captureRegion wraps the native capture. Selftests can run without the
 // screen recording permission by asking for a generated image instead.
 func (a *App) captureRegion(region capture.Rect, opts capture.CaptureOptions) ([]byte, error) {
@@ -750,7 +626,7 @@ func (a *App) finishAnnotated(action string, dataBase64 string) error {
 		return nil
 	}
 	switch action {
-	case "annotate", "copy", "pin", "save":
+	case "copy", "pin", "save":
 	default:
 		reset()
 		return fmt.Errorf("未知的标注动作 %q", action)
@@ -768,7 +644,7 @@ func (a *App) finishAnnotated(action string, dataBase64 string) error {
 		a.toast(err.Error(), "error")
 		return err
 	}
-	payload, err := a.storeCapture(raw, "region")
+	payload, err := a.storeCapture(raw)
 	if err != nil {
 		reset()
 		a.toast(err.Error(), "error")
@@ -779,7 +655,9 @@ func (a *App) finishAnnotated(action string, dataBase64 string) error {
 	return nil
 }
 
-// captureFullScreen captures the whole display under the pointer.
+// captureFullScreen captures the whole display under the pointer, stores it
+// in history and runs the configured after-capture action. There is no
+// overlay and no editor, so "inplace" falls back to the clipboard.
 func (a *App) captureFullScreen() {
 	a.mu.Lock()
 	if a.capturing {
@@ -793,20 +671,21 @@ func (a *App) captureFullScreen() {
 		a.failCapture(capture.ErrUnsupported, false)
 		return
 	}
-	if mainWin != nil {
+	// Keep the app's own windows out of the shot; reopening the window is
+	// only for the case it was visible when the user asked for the capture.
+	mainVisible := mainWin != nil && mainWin.IsVisible()
+	if mainVisible {
 		mainWin.Hide()
 	}
 	disp := mygo.Screen.DisplayNearestPoint(mygo.Screen.CursorScreenPoint())
 	b := disp.Bounds
 	region := capture.Rect{X: float64(b.X), Y: float64(b.Y), Width: float64(b.Width), Height: float64(b.Height)}
-	go a.captureDeliver(region, "screen")
+	go a.captureFullScreenAction(region, mainVisible)
 }
 
-// captureDeliver captures the region, stores it, and hands it to the
-// editor. It runs on its own goroutine.
-func (a *App) captureDeliver(region capture.Rect, source string) {
-	// Let the overlay, the tray menu and the main window leave the
-	// compositor before the screen is grabbed.
+// captureFullScreenAction grabs the display after the app windows left the
+// compositor, stores the capture and runs the after-capture action.
+func (a *App) captureFullScreenAction(region capture.Rect, restoreMain bool) {
 	time.Sleep(250 * time.Millisecond)
 	s := a.settingsSnapshot()
 	pngBytes, err := a.captureRegion(region, capture.CaptureOptions{IncludeCursor: s.IncludeCursor})
@@ -818,57 +697,62 @@ func (a *App) captureDeliver(region capture.Rect, source string) {
 		a.failCapture(errors.New("截图内容为空，可能缺少屏幕录制权限"), true)
 		return
 	}
-	a.deliverPNG(pngBytes, source)
-}
-
-// deliverPNG stores an image and hands it to the editor. It runs after the
-// capture itself, and selftests reuse it to deliver generated images.
-func (a *App) deliverPNG(pngBytes []byte, source string) {
-	payload, err := a.storeCapture(pngBytes, source)
+	payload, err := a.storeCapture(pngBytes)
+	if restoreMain {
+		a.showMain()
+	}
 	if err != nil {
 		a.failCapture(err, false)
 		return
 	}
-	s := a.settingsSnapshot()
 	a.playSoundIfEnabled(s)
-	a.showMain()
-	emitToMain(a, EventCaptureCompleted, payload)
+	if s.AfterCapture == "pin" {
+		if _, err := a.pinPNG(pngBytes, payload.Width, payload.Height); err != nil {
+			a.toast("固定到屏幕失败: "+err.Error(), "error")
+		} else {
+			a.toast("整屏截图已固定到屏幕", "success")
+		}
+	} else if err := mygo.Clipboard.WriteImage(pngBytes); err != nil {
+		a.toast("写入剪贴板失败: "+err.Error(), "error")
+	} else {
+		a.toast("整屏截图已复制到剪贴板", "success")
+	}
 	a.mu.Lock()
 	a.capturing = false
 	a.mu.Unlock()
 }
 
 // storeCapture writes a capture to the session cache and, when the user
-// keeps history, to the persistent history. It is shared by the editor
-// flow, the overlay actions and the selftests.
-func (a *App) storeCapture(pngBytes []byte, source string) (CaptureCompletedPayload, error) {
+// keeps history, to the persistent history. It is shared by the overlay
+// actions, full-screen captures and the selftests.
+func (a *App) storeCapture(pngBytes []byte) (capturePayload, error) {
 	s := a.settingsSnapshot()
 	width, height := imageDimensions(pngBytes)
 	if width == 0 || height == 0 {
-		return CaptureCompletedPayload{}, errors.New("截图数据无效")
+		return capturePayload{}, errors.New("截图数据无效")
 	}
 	id := captureID(time.Now())
 	sessionFile := id + ".png"
 	if err := os.WriteFile(filepath.Join(a.sessionDir, sessionFile), pngBytes, 0o644); err != nil {
-		return CaptureCompletedPayload{}, fmt.Errorf("截图写入失败: %w", err)
+		return capturePayload{}, fmt.Errorf("截图写入失败: %w", err)
 	}
-	payload := CaptureCompletedPayload{
-		ID:     id,
-		URL:    a.shotURL("/s/" + sessionFile),
-		Width:  width,
-		Height: height,
-		Source: source,
-	}
+	payload := capturePayload{ID: id, Width: width, Height: height}
 	if s.KeepHistory && a.store != nil {
-		if entry, err := a.store.Save(pngBytes, time.Now()); err != nil {
+		if _, err := a.store.Save(pngBytes, time.Now()); err != nil {
 			log.Printf("pinstill: save history: %v", err)
 		} else {
-			payload.HistoryID = entry.ID
-			payload.ThumbURL = a.shotURL("/h/" + entry.Thumb)
 			a.emitHistoryChanged()
 		}
 	}
 	return payload, nil
+}
+
+// historyPNG loads a stored capture's original PNG for the history actions.
+func (a *App) historyPNG(id string) ([]byte, error) {
+	if a.store == nil {
+		return nil, errors.New("历史记录不可用")
+	}
+	return a.store.ReadPNG(id)
 }
 
 func (a *App) playSoundIfEnabled(s Settings) {

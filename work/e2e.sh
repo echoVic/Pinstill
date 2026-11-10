@@ -116,7 +116,6 @@ PINSTILL_SELFTEST=drag "$APP" 2>&1 | tee /tmp/pinstill-selftest-drag.log
 sleep 1.0
 expect 'SELFTEST drag: delivered' /tmp/pinstill-selftest-drag.log
 expect 'same=true' /tmp/pinstill-selftest-drag.log
-expect 'editor canvas=' /tmp/pinstill-selftest-drag.log
 
 step "Selftest: escape cancels the overlay"
 PINSTILL_SELFTEST=esc "$APP" 2>&1 | tee /tmp/pinstill-selftest-esc.log
@@ -130,7 +129,6 @@ sleep 1.0
 expect 'SELFTEST flow: copy clipboard' /tmp/pinstill-selftest-flow.log
 grep -q 'SELFTEST flow: copy clipboard EMPTY' /tmp/pinstill-selftest-flow.log && fail=1
 expect 'SELFTEST flow: pin pins=1' /tmp/pinstill-selftest-flow.log
-expect 'SELFTEST flow: annotate editor canvas=' /tmp/pinstill-selftest-flow.log
 expect 'SELFTEST flow: cancel history before=.* after=' /tmp/pinstill-selftest-flow.log
 expect 'SELFTEST flow: auto clipboard ' /tmp/pinstill-selftest-flow.log
 
@@ -169,34 +167,39 @@ step "Selftest: scrolling capture"
 PINSTILL_SELFTEST=scroll PINSTILL_SELFTEST_SCROLL_SIM=1 "$APP" 2>&1 | tee /tmp/pinstill-selftest-scroll.log
 sleep 1.0
 expect 'SELFTEST scroll: frames=' /tmp/pinstill-selftest-scroll.log
-expect 'SELFTEST scroll: editor=1280x' /tmp/pinstill-selftest-scroll.log
+expect 'SELFTEST scroll: clipboard=1280x' /tmp/pinstill-selftest-scroll.log
 grep -q 'SELFTEST scroll: auto denied ok' /tmp/pinstill-selftest-scroll.log || grep -q 'SELFTEST scroll: auto start err=' /tmp/pinstill-selftest-scroll.log || { echo "FAIL  scroll accessibility check missing"; fail=1; }
 
 step "Selftest: scrolling capture through the page"
 PINSTILL_SELFTEST=scrollflow PINSTILL_SELFTEST_SCROLL_SIM=1 "$APP" 2>&1 | tee /tmp/pinstill-selftest-scrollflow.log
 sleep 1.0
 expect 'SELFTEST scrollflow: frames=' /tmp/pinstill-selftest-scrollflow.log
-expect 'SELFTEST scrollflow: editor=1280x' /tmp/pinstill-selftest-scrollflow.log
+expect 'SELFTEST scrollflow: clipboard=1280x' /tmp/pinstill-selftest-scrollflow.log
 
-step "Selftest: editor delivery"
-PINSTILL_SELFTEST=deliver "$APP" 2>&1 | tee /tmp/pinstill-selftest-deliver.log
+step "Selftest: whole-display capture"
+PINSTILL_SELFTEST=fullscreen "$APP" 2>&1 | tee /tmp/pinstill-selftest-fullscreen.log
 sleep 1.0
-expect 'SELFTEST deliver: screenshot' /tmp/pinstill-selftest-deliver.log
-expect 'editor page capture' /tmp/pinstill-selftest-deliver.log
+expect 'SELFTEST fullscreen: clipboard=[0-9][0-9]*x[0-9][0-9]*' /tmp/pinstill-selftest-fullscreen.log
+grep -q 'SELFTEST fullscreen: clipboard=0x0' /tmp/pinstill-selftest-fullscreen.log && fail=1
+expect 'history before=[0-9][0-9]* after=[0-9][0-9]*' /tmp/pinstill-selftest-fullscreen.log
+expect 'SELFTEST fullscreen: checks=ok' /tmp/pinstill-selftest-fullscreen.log
 
-step "Selftest: toolbar actions through the page"
-PINSTILL_SELFTEST=uiactions "$APP" 2>&1 | tee /tmp/pinstill-selftest-uiactions.log
+step "Selftest: history actions (copy/pin/remove)"
+PINSTILL_SELFTEST=historyactions "$APP" 2>&1 | tee /tmp/pinstill-selftest-historyactions.log
 sleep 1.0
-expect 'clipboard png' /tmp/pinstill-selftest-uiactions.log
-expect 'pins=1' /tmp/pinstill-selftest-uiactions.log
-expect 'history cards=' /tmp/pinstill-selftest-uiactions.log
+expect 'historyactions: clipboard=[0-9][0-9]*x[0-9][0-9]*' /tmp/pinstill-selftest-historyactions.log
+expect 'pins=1' /tmp/pinstill-selftest-historyactions.log
+expect 'remove .*delta=1' /tmp/pinstill-selftest-historyactions.log
+expect 'SELFTEST historyactions: checks=ok' /tmp/pinstill-selftest-historyactions.log
 
 step "Selftest: main window views"
 PINSTILL_SELFTEST=uicapture "$APP" 2>&1 | tee /tmp/pinstill-selftest-uicapture.log
 sleep 1.0
-expect 'rack ' /tmp/pinstill-selftest-uicapture.log
-expect 'history ' /tmp/pinstill-selftest-uicapture.log
-expect 'settings ' /tmp/pinstill-selftest-uicapture.log
+expect 'SELFTEST uicapture: views=history,settings' /tmp/pinstill-selftest-uicapture.log
+expect 'SELFTEST uicapture: editor_dom=false' /tmp/pinstill-selftest-uicapture.log
+expect 'SELFTEST uicapture: preview=true' /tmp/pinstill-selftest-uicapture.log
+expect 'SELFTEST uicapture: preview_closed=false' /tmp/pinstill-selftest-uicapture.log
+expect 'SELFTEST uicapture: settings ' /tmp/pinstill-selftest-uicapture.log
 
 step "Selftest: pin window"
 PINSTILL_SELFTEST=pin "$APP" 2>&1 | tee /tmp/pinstill-selftest-pin.log
@@ -233,7 +236,7 @@ PINSTILL_SELFTEST=palette "$APP" 2>&1 | tee /tmp/pinstill-selftest-palette.log
 sleep 1.0
 expect 'SELFTEST palette: open=true' /tmp/pinstill-selftest-palette.log
 expect 'esc_kept_annotating=true' /tmp/pinstill-selftest-palette.log
-expect 'editor_panel=true' /tmp/pinstill-selftest-palette.log
+expect 'SELFTEST palette: main_toggles=0' /tmp/pinstill-selftest-palette.log
 expect 'SELFTEST palette: checks=ok' /tmp/pinstill-selftest-palette.log
 
 printf '\n'

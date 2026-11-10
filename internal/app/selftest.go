@@ -44,20 +44,18 @@ func (a *App) runSelfTest(mode string) {
 		a.selftestPerms()
 	case "palette":
 		a.selftestPalette()
-	case "deliver":
-		a.selftestDeliver()
 	case "uicapture":
 		a.selftestUICapture()
 	case "drag":
 		a.selftestDrag()
 	case "esc":
 		a.selftestEscape()
-	case "uiactions":
-		a.selftestUIActions()
+	case "fullscreen":
+		a.selftestFullScreen()
+	case "historyactions":
+		a.selftestHistoryActions()
 	case "hotkeypress":
 		a.selftestHotkeyPress()
-	case "demo":
-		a.selftestDemo()
 	case "showcase":
 		a.selftestShowcase()
 	case "scroll":
@@ -237,43 +235,22 @@ func (a *App) selftestPin() {
 	mygo.App.Exit(0)
 }
 
-// selftestDeliver runs a real capture through the app's delivery path and
-// screenshots the main window, proving the editor shows a real image.
-func (a *App) selftestDeliver() {
-	disp := mygo.Screen.PrimaryDisplay()
-	b := disp.Bounds
-	region := capture.Rect{X: float64(b.X) + 140, Y: float64(b.Y) + 140, Width: 640, Height: 420}
-	if a.main != nil {
-		a.main.Hide()
-	}
-	go a.captureDeliver(region, "region")
-	time.Sleep(4500 * time.Millisecond)
-	mux := virtualDesktopRect()
-	snap, err := capture.CaptureRegion(mux, capture.CaptureOptions{})
-	if err != nil {
-		fmt.Printf("SELFTEST deliver: verify capture error %v\n", err)
-	} else {
-		_ = os.WriteFile("/tmp/pinstill-selftest-deliver.png", snap, 0o644)
-		fmt.Printf("SELFTEST deliver: screenshot /tmp/pinstill-selftest-deliver.png\n")
-	}
-	if a.main != nil {
-		if pagePNG, err := a.main.CapturePage(); err == nil {
-			_ = os.WriteFile("/tmp/pinstill-selftest-editor-page.png", pagePNG, 0o644)
-			fmt.Printf("SELFTEST deliver: editor page capture %d bytes -> /tmp/pinstill-selftest-editor-page.png\n", len(pagePNG))
-		} else {
-			fmt.Printf("SELFTEST deliver: editor page capture error %v\n", err)
-		}
-	}
-	mygo.App.Exit(0)
-}
-
-// selftestUICapture walks the main window's views and saves a clean
-// screenshot of each, for UI review without manual clicking.
+// selftestUICapture walks the main window's views (history, settings), checks
+// the editor is really gone and saves a clean screenshot of each view, for UI
+// review without manual clicking. History is seeded with generated images so
+// the user's real captures never appear.
 func (a *App) selftestUICapture() {
 	if a.main == nil {
 		fmt.Printf("SELFTEST uicapture: no main window\n")
 		mygo.App.Exit(1)
 		return
+	}
+	for i := 0; i < 2; i++ {
+		if png := syntheticScreenshot(); len(png) > 0 {
+			if _, err := a.storeCapture(png); err != nil {
+				fmt.Printf("SELFTEST uicapture: seed error %v\n", err)
+			}
+		}
 	}
 	a.showMain()
 	time.Sleep(1500 * time.Millisecond)
@@ -288,6 +265,14 @@ func (a *App) selftestUICapture() {
 	trayOK := a.tray != nil
 	a.mu.Unlock()
 	fmt.Printf("SELFTEST uicapture: tray=%v\n", trayOK)
+	eval := func(js string) string {
+		v, err := a.main.Page().Eval(js)
+		if err != nil {
+			fmt.Printf("SELFTEST uicapture: eval error %v\n", err)
+			return ""
+		}
+		return strings.TrimSpace(fmt.Sprint(v))
+	}
 	save := func(name string) {
 		png, err := a.main.CapturePage()
 		if err != nil {
@@ -298,37 +283,70 @@ func (a *App) selftestUICapture() {
 		width, height := imageDimensions(png)
 		fmt.Printf("SELFTEST uicapture: %s %dx%d -> /tmp/pinstill-ui-%s.png\n", name, width, height, name)
 	}
-	save("rack")
-	for _, view := range []string{"history", "settings"} {
-		if _, err := a.main.Page().Eval(`document.querySelector('[data-view="` + view + `"]').click()`); err != nil {
-			fmt.Printf("SELFTEST uicapture: switch %s error %v\n", view, err)
-		}
-		time.Sleep(800 * time.Millisecond)
-		save(view)
+	views := eval(`[...document.querySelectorAll('button[data-view]')].map((b) => b.dataset.view).join(',')`)
+	editorDOM := eval(`String(!!document.getElementById('shotCanvas') || !!document.getElementById('captureToolbar'))`)
+	cards := eval(`String(document.querySelectorAll('#historyGrid .history-card').length)`)
+	empty := eval(`String(document.getElementById('historyEmpty')?.hidden ?? false)`)
+	fmt.Printf("SELFTEST uicapture: views=%s\n", views)
+	fmt.Printf("SELFTEST uicapture: editor_dom=%s history_cards=%s history_empty_hidden=%s\n", editorDOM, cards, empty)
+	if !strings.Contains(views, "history") || !strings.Contains(views, "settings") || strings.Contains(views, "rack") {
+		fmt.Printf("SELFTEST uicapture: views_wrong=1\n")
 	}
+	if editorDOM == "true" {
+		fmt.Printf("SELFTEST uicapture: editor_dom_present=1\n")
+	}
+	save("history")
+	// The history preview sheet: click the first card, check the original
+	// image and actions, then close it with Escape.
+	eval(`document.querySelector('#historyGrid .history-card')?.click(), 'ok'`)
+	time.Sleep(700 * time.Millisecond)
+	preview := eval(`String(!!document.getElementById('historyPreview') && !document.getElementById('historyPreview').hidden)`)
+	previewImage := eval(`String(!!document.getElementById('historyPreviewImage'))`)
+	previewActions := eval(`[...document.querySelectorAll('[data-history-action]')].map((b) => b.dataset.historyAction).join(',')`)
+	fmt.Printf("SELFTEST uicapture: preview=%s preview_image=%s preview_actions=%s\n", preview, previewImage, previewActions)
+	save("preview")
+	eval(`document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })), 'ok'`)
+	time.Sleep(400 * time.Millisecond)
+	previewClosed := eval(`String(!!document.getElementById('historyPreview') && !document.getElementById('historyPreview').hidden)`)
+	fmt.Printf("SELFTEST uicapture: preview_closed=%s\n", previewClosed)
+	eval(`document.querySelector('[data-view="settings"]')?.click(), 'ok'`)
+	time.Sleep(800 * time.Millisecond)
+	save("settings")
 	mygo.App.Exit(0)
 }
 
-// selftestDrag finishes a region capture with a known overlay-local rect and
-// proves the mapping: the delivered image must match a direct capture of the
-// screen rect the overlay says the selection is on. It also checks that the
-// editor loaded the image.
+// selftestDrag drags a known selection on the overlay and proves the
+// mapping: the image the overlay captured in place must match a direct
+// capture of the screen rect the selection is on.
 func (a *App) selftestDrag() {
 	if err := a.beginRegion(); err != nil {
 		fmt.Printf("SELFTEST drag: begin error %v\n", err)
 		mygo.App.Exit(1)
 		return
 	}
-	time.Sleep(900 * time.Millisecond)
+	time.Sleep(1000 * time.Millisecond)
 	origin := a.overlayRect
 	if a.overlay != nil {
 		if live := a.overlay.ContentBounds(); live.Width > 0 {
 			origin = live
 		}
 	}
+	// The page's own drag flow hides the selection chrome before asking Go for
+	// the capture, so the image it gets is the clean screen behind it.
+	if err := a.dragOverlaySelection(10, 10, 130, 110); err != nil {
+		fmt.Printf("SELFTEST drag: drag error %v\n", err)
+		a.cancelRegion()
+		mygo.App.Exit(1)
+		return
+	}
+	if err := a.waitOverlayAnnotating(10 * time.Second); err != nil {
+		fmt.Printf("SELFTEST drag: prepare error %v\n", err)
+		a.cancelRegion()
+		mygo.App.Exit(1)
+		return
+	}
+	time.Sleep(300 * time.Millisecond)
 	local := Rect{X: 10, Y: 10, Width: 120, Height: 100}
-	a.finishRegion(local)
-	time.Sleep(2600 * time.Millisecond)
 	expected := capture.Rect{X: float64(origin.X) + local.X, Y: float64(origin.Y) + local.Y, Width: local.Width, Height: local.Height}
 	fmt.Printf("SELFTEST drag: overlay origin=%+v expected screen rect=%+v\n", origin, expected)
 	delivered, err := newestSessionPNG(a.sessionDir)
@@ -338,6 +356,13 @@ func (a *App) selftestDrag() {
 		dw, dh := imageDimensions(delivered)
 		_ = os.WriteFile("/tmp/pinstill-selftest-drag-delivered.png", delivered, 0o644)
 		fmt.Printf("SELFTEST drag: delivered %dx%d px -> /tmp/pinstill-selftest-drag-delivered.png\n", dw, dh)
+		// Compare with the screen behind the overlay: hide the overlay first so
+		// the direct capture sees exactly what the in-place capture saw through
+		// the transparent selection.
+		if a.overlay != nil {
+			a.overlay.Hide()
+		}
+		time.Sleep(350 * time.Millisecond)
 		direct, derr := capture.CaptureRegion(expected, capture.CaptureOptions{})
 		if derr != nil {
 			fmt.Printf("SELFTEST drag: direct capture error %v\n", derr)
@@ -348,11 +373,8 @@ func (a *App) selftestDrag() {
 			fmt.Printf("SELFTEST drag: direct %dx%d px, mean abs diff=%.2f same=%v\n", dw2, dh2, diff, same)
 		}
 	}
-	if a.main != nil {
-		if v, err := a.main.Page().Eval("document.getElementById('shotCanvas').width + 'x' + document.getElementById('shotCanvas').height"); err == nil {
-			fmt.Printf("SELFTEST drag: editor canvas=%v\n", v)
-		}
-	}
+	a.cancelRegion()
+	time.Sleep(300 * time.Millisecond)
 	mygo.App.Exit(0)
 }
 
@@ -507,31 +529,6 @@ func syntheticScreenshot() []byte {
 		return nil
 	}
 	return buf.Bytes()
-}
-
-// selftestDemo delivers a generated screenshot, so UI screenshots for the
-// repository show no content from the user's desktop.
-func (a *App) selftestDemo() {
-	pngBytes := syntheticScreenshot()
-	if len(pngBytes) == 0 {
-		fmt.Printf("SELFTEST demo: could not render the synthetic screenshot\n")
-		mygo.App.Exit(1)
-		return
-	}
-	if a.main != nil {
-		a.main.Hide()
-	}
-	a.deliverPNG(pngBytes, "demo")
-	time.Sleep(2500 * time.Millisecond)
-	if a.main != nil {
-		if pagePNG, err := a.main.CapturePage(); err == nil {
-			_ = os.WriteFile("/tmp/pinstill-selftest-demo-editor.png", pagePNG, 0o644)
-			fmt.Printf("SELFTEST demo: editor page capture %d bytes -> /tmp/pinstill-selftest-demo-editor.png\n", len(pagePNG))
-		} else {
-			fmt.Printf("SELFTEST demo: editor page capture error %v\n", err)
-		}
-	}
-	mygo.App.Exit(0)
 }
 
 // dragOverlaySelection drives a pointer drag on the overlay page, so the
@@ -758,15 +755,6 @@ func (a *App) selftestFlow() {
 		pins := len(a.pins)
 		a.mu.Unlock()
 		fmt.Printf("SELFTEST flow: pin pins=%d\n", pins)
-	}
-	// editor: annotated image handed to the main window editor
-	if prepare("annotate") {
-		click("annotate", "editor")
-		if a.main != nil {
-			if v, err := a.main.Page().Eval("document.getElementById('shotCanvas').width + 'x' + document.getElementById('shotCanvas').height"); err == nil {
-				fmt.Printf("SELFTEST flow: annotate editor canvas=%v\n", v)
-			}
-		}
 	}
 	// afterCapture=clipboard must run the action without the toolbar.
 	mygo.Clipboard.Clear()
@@ -1123,15 +1111,17 @@ func (a *App) selftestScrollFlow() {
 	if err := a.waitControlReady(8 * time.Second); err != nil {
 		fmt.Printf("SELFTEST scrollflow: control error %v\n", err)
 	} else {
-		if _, err := a.control.Page().Eval(`(() => { const b = document.querySelector('[data-scroll-action="editor"]'); if (!b) return 'missing'; b.click(); return 'clicked'; })()`); err != nil {
-			fmt.Printf("SELFTEST scrollflow: editor click error %v\n", err)
+		mygo.Clipboard.Clear()
+		if _, err := a.control.Page().Eval(`(() => { const b = document.querySelector('[data-scroll-action="copy"]'); if (!b) return 'missing'; b.click(); return 'clicked'; })()`); err != nil {
+			fmt.Printf("SELFTEST scrollflow: copy click error %v\n", err)
 		}
 	}
 	time.Sleep(2800 * time.Millisecond)
-	if a.main != nil {
-		if v, err := a.main.Page().Eval("document.getElementById('shotCanvas').width + 'x' + document.getElementById('shotCanvas').height"); err == nil {
-			fmt.Printf("SELFTEST scrollflow: editor=%v\n", v)
-		}
+	if img := mygo.Clipboard.ReadImage(); len(img) > 0 {
+		width, height := imageDimensions(img)
+		fmt.Printf("SELFTEST scrollflow: clipboard=%dx%d\n", width, height)
+	} else {
+		fmt.Printf("SELFTEST scrollflow: clipboard EMPTY\n")
 	}
 	mygo.App.Exit(0)
 }
@@ -1208,16 +1198,18 @@ func (a *App) selftestScroll() {
 			_ = a.setScrollAuto(false)
 		}
 	}
-	if err := a.finishScroll("annotate"); err != nil {
+	mygo.Clipboard.Clear()
+	if err := a.finishScroll("copy"); err != nil {
 		fmt.Printf("SELFTEST scroll: finish error %v\n", err)
 		mygo.App.Exit(1)
 		return
 	}
-	time.Sleep(2600 * time.Millisecond)
-	if a.main != nil {
-		if v, err := a.main.Page().Eval("document.getElementById('shotCanvas').width + 'x' + document.getElementById('shotCanvas').height"); err == nil {
-			fmt.Printf("SELFTEST scroll: editor=%v\n", v)
-		}
+	time.Sleep(900 * time.Millisecond)
+	if img := mygo.Clipboard.ReadImage(); len(img) > 0 {
+		width, height := imageDimensions(img)
+		fmt.Printf("SELFTEST scroll: clipboard=%dx%d\n", width, height)
+	} else {
+		fmt.Printf("SELFTEST scroll: clipboard EMPTY\n")
 	}
 	mygo.App.Exit(0)
 }
@@ -1240,8 +1232,14 @@ func (a *App) selftestShowcase() {
 	if a.main != nil {
 		a.main.Hide()
 	}
-	a.deliverPNG(pngBytes, "demo")
-	time.Sleep(2200 * time.Millisecond)
+	// Seed the history grid with generated captures only.
+	for i := 0; i < 3; i++ {
+		if _, err := a.storeCapture(pngBytes); err != nil {
+			fmt.Printf("SELFTEST showcase: seed error %v\n", err)
+		}
+	}
+	a.showMain()
+	time.Sleep(1600 * time.Millisecond)
 	savePage := func(win *mygo.Window, name string) {
 		if win == nil {
 			return
@@ -1256,19 +1254,20 @@ func (a *App) selftestShowcase() {
 		w, h := imageDimensions(pagePNG)
 		fmt.Printf("SELFTEST showcase: %s %dx%d -> %s\n", name, w, h, path)
 	}
-	savePage(a.main, "editor")
-	for _, view := range []string{"history", "settings"} {
-		if a.main != nil {
-			_, _ = a.main.Page().Eval(`document.querySelector('[data-view="` + view + `"]').click()`)
-			time.Sleep(700 * time.Millisecond)
-			savePage(a.main, view)
-		}
-	}
+	savePage(a.main, "history")
 	if a.main != nil {
-		_, _ = a.main.Page().Eval(`document.querySelector('[data-view="rack"]').click()`)
+		if _, err := a.main.Page().Eval(`document.querySelector('#historyGrid .history-card')?.click()`); err == nil {
+			time.Sleep(800 * time.Millisecond)
+			savePage(a.main, "preview")
+			_, _ = a.main.Page().Eval(`document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))`)
+			time.Sleep(400 * time.Millisecond)
+		}
+		_, _ = a.main.Page().Eval(`document.querySelector('[data-view="settings"]').click()`)
+		time.Sleep(800 * time.Millisecond)
+		savePage(a.main, "settings")
 	}
-	// Overlay with a live selection and its action bar, captured from the
-	// overlay's own page so the desktop behind it stays out of the image.
+	// Overlay with a live selection and its annotation toolbar, captured from
+	// the overlay's own page so the desktop behind it stays out of the image.
 	if err := a.beginRegion(); err == nil {
 		time.Sleep(900 * time.Millisecond)
 		if err := a.dragOverlaySelection(120, 140, 620, 420); err != nil {
@@ -1277,9 +1276,6 @@ func (a *App) selftestShowcase() {
 		if err := a.waitOverlayAnnotating(8 * time.Second); err != nil {
 			fmt.Printf("SELFTEST showcase: overlay prepare error %v\n", err)
 		} else {
-			// The overlay really captured the screen; hand it a generated
-			// image for the canvas base so the README screenshot cannot
-			// contain the user's desktop.
 			if png := syntheticScreenshot(); len(png) > 0 {
 				dataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
 				js := fmt.Sprintf("window.__pinstillDemoCapture && window.__pinstillDemoCapture(%q)", dataURL)
@@ -1291,10 +1287,10 @@ func (a *App) selftestShowcase() {
 				fmt.Printf("SELFTEST showcase: overlay draw error %v\n", err)
 			}
 		}
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(600 * time.Millisecond)
 		savePage(a.overlay, "overlay")
 		a.cancelRegion()
-		time.Sleep(600 * time.Millisecond)
+		time.Sleep(700 * time.Millisecond)
 	}
 	// A desktop pin showing the generated image.
 	if id, err := a.pinPNG(pngBytes, 1280, 800); err == nil {
@@ -1335,74 +1331,107 @@ func (a *App) selftestQuit() {
 	time.Sleep(500 * time.Millisecond)
 }
 
+// selftestFullScreen exercises the whole-display capture from the tray: it
+// stores the capture in history and copies it to the clipboard, without
+// opening an editor.
+func (a *App) selftestFullScreen() {
+	if a.main != nil {
+		a.main.Hide()
+	}
+	s := DefaultSettings()
+	s.AfterCapture = "clipboard"
+	a.applySettings(s)
+	time.Sleep(600 * time.Millisecond)
+	mygo.Clipboard.Clear()
+	before := len(a.historyEntries())
+	a.captureFullScreen()
+	deadline := time.Now().Add(12 * time.Second)
+	var img []byte
+	for time.Now().Before(deadline) {
+		if img = mygo.Clipboard.ReadImage(); len(img) > 0 {
+			break
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	after := len(a.historyEntries())
+	width, height := imageDimensions(img)
+	fmt.Printf("SELFTEST fullscreen: clipboard=%dx%d history before=%d after=%d\n", width, height, before, after)
+	if len(img) == 0 {
+		fmt.Printf("SELFTEST fullscreen: checks=FAILED\n")
+		mygo.App.Exit(1)
+		return
+	}
+	fmt.Printf("SELFTEST fullscreen: checks=ok\n")
+	mygo.App.Exit(0)
+}
+
+// selftestHistoryActions exercises the history preview actions that do not
+// need a dialog (copy / pin / remove) through the History service bindings.
+func (a *App) selftestHistoryActions() {
+	pngBytes := syntheticScreenshot()
+	if len(pngBytes) == 0 {
+		fmt.Printf("SELFTEST historyactions: no synthetic image\n")
+		mygo.App.Exit(1)
+		return
+	}
+	if _, err := a.storeCapture(pngBytes); err != nil {
+		fmt.Printf("SELFTEST historyactions: seed error %v\n", err)
+		mygo.App.Exit(1)
+		return
+	}
+	entries := a.historyEntries()
+	if len(entries) == 0 {
+		fmt.Printf("SELFTEST historyactions: no history entries\n")
+		mygo.App.Exit(1)
+		return
+	}
+	id := entries[0].ID
+	history := &HistoryService{app: a}
+	ok := true
+	mygo.Clipboard.Clear()
+	if err := history.Copy(id); err != nil {
+		ok = false
+		fmt.Printf("SELFTEST historyactions: copy error %v\n", err)
+	}
+	copiedW, copiedH := imageDimensions(mygo.Clipboard.ReadImage())
+	pinID, pinErr := history.Pin(id)
+	a.mu.Lock()
+	pinCount := len(a.pins)
+	a.mu.Unlock()
+	if pinErr != nil {
+		ok = false
+		fmt.Printf("SELFTEST historyactions: pin error %v\n", pinErr)
+	} else if pinCount == 0 {
+		ok = false
+		fmt.Printf("SELFTEST historyactions: pin did not open a window\n")
+	}
+	if pinID != "" {
+		_ = a.closePin(pinID)
+	}
+	before := len(a.historyEntries())
+	if err := history.Remove(id); err != nil {
+		ok = false
+		fmt.Printf("SELFTEST historyactions: remove error %v\n", err)
+	}
+	after := len(a.historyEntries())
+	fmt.Printf("SELFTEST historyactions: clipboard=%dx%d pins=%d remove before=%d after=%d delta=%d\n", copiedW, copiedH, pinCount, before, after, before-after)
+	if copiedW == 0 {
+		ok = false
+	}
+	if ok {
+		fmt.Printf("SELFTEST historyactions: checks=ok\n")
+		mygo.App.Exit(0)
+		return
+	}
+	fmt.Printf("SELFTEST historyactions: checks=FAILED\n")
+	mygo.App.Exit(1)
+}
+
 // selftestHold keeps the app running so its native shell can be inspected
 // from outside (menu bar icon, status item menus).
 func (a *App) selftestHold() {
 	fmt.Printf("SELFTEST hold: READY pid=%d\n", os.Getpid())
 	time.Sleep(25 * time.Second)
-	mygo.App.Exit(0)
-}
-
-// selftestUIActions drives the real page: capture, then click the toolbar's
-// clipboard and pin tools and the history view like a user would.
-func (a *App) selftestUIActions() {
-	disp := mygo.Screen.PrimaryDisplay()
-	b := disp.Bounds
-	region := capture.Rect{X: float64(b.X) + 160, Y: float64(b.Y) + 160, Width: 560, Height: 360}
-	if a.main != nil {
-		a.main.Hide()
-	}
-	go a.captureDeliver(region, "region")
-	time.Sleep(3200 * time.Millisecond)
-	eval := func(js string) any {
-		if a.main == nil {
-			return nil
-		}
-		v, err := a.main.Page().Eval(js)
-		if err != nil {
-			fmt.Printf("SELFTEST uiactions: eval %q error %v\n", js, err)
-			return nil
-		}
-		return v
-	}
-	fmt.Printf("SELFTEST uiactions: canvas=%v\n", eval("document.getElementById('shotCanvas').width + 'x' + document.getElementById('shotCanvas').height"))
-	fmt.Printf("SELFTEST uiactions: rack pins=%v history cards=%v\n",
-		eval("document.querySelectorAll('#rack .pin').length"),
-		eval("document.querySelectorAll('#historyGrid .history-card').length"))
-
-	// Clipboard tool: the page turns the canvas into a PNG and Go writes it.
-	fmt.Printf("SELFTEST uiactions: copy click=%v\n", eval("document.querySelector('[data-tool=\"clipboard\"]').click(), 'clicked'"))
-	time.Sleep(1200 * time.Millisecond)
-	if img := mygo.Clipboard.ReadImage(); len(img) > 0 {
-		width, height := imageDimensions(img)
-		fmt.Printf("SELFTEST uiactions: clipboard png %dx%d bytes=%d\n", width, height, len(img))
-	} else {
-		fmt.Printf("SELFTEST uiactions: clipboard EMPTY\n")
-	}
-
-	// Pin tool: the page sends the canvas PNG and Go opens a pin window.
-	fmt.Printf("SELFTEST uiactions: pin click=%v\n", eval("document.querySelector('[data-tool=\"pin\"]').click(), 'clicked'"))
-	time.Sleep(1200 * time.Millisecond)
-	a.mu.Lock()
-	pinCount := len(a.pins)
-	a.mu.Unlock()
-	fmt.Printf("SELFTEST uiactions: pins=%d\n", pinCount)
-	snap, err := capture.CaptureRegion(virtualDesktopRect(), capture.CaptureOptions{})
-	if err == nil {
-		_ = os.WriteFile("/tmp/pinstill-selftest-uiactions.png", snap, 0o644)
-		fmt.Printf("SELFTEST uiactions: screenshot /tmp/pinstill-selftest-uiactions.png\n")
-	}
-
-	// History view: switch, then load the first card into the editor.
-	fmt.Printf("SELFTEST uiactions: history view=%v\n", eval("document.querySelector('[data-view=\"history\"]').click(), 'clicked'"))
-	time.Sleep(900 * time.Millisecond)
-	fmt.Printf("SELFTEST uiactions: history cards=%v\n", eval("document.querySelectorAll('#historyGrid .history-card').length"))
-	fmt.Printf("SELFTEST uiactions: open first=%v\n", eval("document.querySelector('#historyGrid .history-card button, #historyGrid .history-card')?.click(), 'clicked'"))
-	time.Sleep(1600 * time.Millisecond)
-	fmt.Printf("SELFTEST uiactions: canvas after history=%v\n", eval("document.getElementById('shotCanvas').width + 'x' + document.getElementById('shotCanvas').height"))
-	for id := range a.pins {
-		_ = a.closePin(id)
-	}
 	mygo.App.Exit(0)
 }
 
@@ -1711,32 +1740,19 @@ func (a *App) selftestPalette() {
 	a.cancelRegion()
 	time.Sleep(900 * time.Millisecond)
 
-	// 6. Main editor: deliver a capture, then the same panel from the property bar.
-	disp := mygo.Screen.PrimaryDisplay()
-	b := disp.Bounds
-	region := capture.Rect{X: float64(b.X) + 160, Y: float64(b.Y) + 160, Width: 520, Height: 340}
-	go a.captureDeliver(region, "region")
-	time.Sleep(3200 * time.Millisecond)
-	editorToggle := evalMain(`String(!!document.querySelector('[data-palette-toggle]'))`)
-	evalMain(`document.querySelector('[data-palette-toggle]')?.click(), 'ok'`)
-	time.Sleep(500 * time.Millisecond)
-	editorPanel := evalMain(`String((() => { const p = document.getElementById('colorPalettePanel'); return !!p && !p.hidden && p.offsetParent !== null; })())`)
-	editorPresets := evalMain(`String(document.querySelectorAll('#colorPalettePanel button[data-palette-color]').length)`)
-	evalMain(`document.querySelector('[data-palette-close]')?.click(), 'ok'`)
-	time.Sleep(300 * time.Millisecond)
-	editorClosed := evalMain(`String(!!document.getElementById('colorPalettePanel') && !document.getElementById('colorPalettePanel').hidden)`)
-	fmt.Printf("SELFTEST palette: editor_toggle=%s editor_panel=%s editor_presets=%s editor_closed=%s\n", editorToggle, editorPanel, editorPresets, editorClosed)
-	if editorToggle != "true" {
-		failCheck("main editor has no [data-palette-toggle]")
-	}
-	if editorPanel != "true" {
-		failCheck("main editor palette panel did not open")
-	}
-	if n, err := strconv.Atoi(editorPresets); err != nil || n < 32 {
-		failCheck("main editor palette has %q presets, want >= 32", editorPresets)
-	}
-	if editorClosed != "false" {
-		failCheck("main editor palette panel did not close")
+	// 6. The main window no longer has an editor, so it must not expose a
+	// palette toggle or panel: the palette lives on the overlay only.
+	if a.main == nil {
+		failCheck("no main window")
+	} else {
+		a.showMain()
+		time.Sleep(1200 * time.Millisecond)
+		toggles := evalMain(`String(document.querySelectorAll('[data-palette-toggle]').length)`)
+		panels := evalMain(`String(document.querySelectorAll('#colorPalettePanel').length)`)
+		fmt.Printf("SELFTEST palette: main_toggles=%s main_panels=%s\n", toggles, panels)
+		if toggles != "0" || panels != "0" {
+			failCheck("main window still exposes the palette; the editor should be gone")
+		}
 	}
 
 	if ok {

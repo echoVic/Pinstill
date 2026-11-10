@@ -1,4 +1,4 @@
-// Shared annotation engine: the drawing primitives of the main editor and a
+// Shared annotation engine: the drawing primitives of the selection overlay and a
 // small reusable surface used by the in-place overlay annotation mode.
 //
 // The primitives are pure canvas work: callers own the canvas, its base image

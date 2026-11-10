@@ -10,20 +10,6 @@ export interface CaptureCancelledPayload {
 }
 
 /**
- * CaptureCompletedPayload is sent to the main window when a capture was
- * written and is ready to show in the editor.
- */
-export interface CaptureCompletedPayload {
-  id: string;
-  url: string;
-  thumbUrl?: string;
-  historyId?: string;
-  width: number;
-  height: number;
-  source: string;
-}
-
-/**
  * CaptureFailedPayload reports a failed capture. Permission is true when the
  * failure is most likely the missing screen recording permission.
  */
@@ -101,7 +87,7 @@ export interface PinWindowState {
 
 /**
  * Rect is a rectangle sent from a page: overlay-local CSS pixels for
- * FinishRegion, screen coordinates elsewhere.
+ * PrepareSelection, screen coordinates elsewhere.
  */
 export interface Rect {
   x: number;
@@ -181,8 +167,8 @@ export const Capture = {
     return call("Capture.CancelRegion");
   },
   /**
-   * CaptureFullScreen captures the whole display under the pointer. Like
-   * FinishRegion it delivers the capture through capture:completed.
+   * CaptureFullScreen captures the whole display under the pointer, stores it
+   * in history and runs the configured after-capture action.
    */
   captureFullScreen(): Promise<CaptureResult> {
     return call("Capture.CaptureFullScreen");
@@ -190,14 +176,6 @@ export const Capture = {
   /** ClosePin closes a pin window. */
   closePin(id: string): Promise<void> {
     return call("Capture.ClosePin", id);
-  },
-  /**
-   * CompleteSelection runs one action on the region the user selected in the
-   * overlay: annotate, copy, pin or save. The work happens on the desktop;
-   * only annotate brings the main window back.
-   */
-  completeSelection(rect: Rect, action: string): Promise<void> {
-    return call("Capture.CompleteSelection", rect, action);
   },
   /** CopyImage puts a PNG on the system clipboard. */
   copyImage(dataBase64: string): Promise<void> {
@@ -217,19 +195,10 @@ export const Capture = {
   },
   /**
    * FinishAnnotated completes an in-place annotation: it stores the composited
-   * image and runs the chosen action.
+   * image and runs the chosen action (copy, pin, save or cancel).
    */
   finishAnnotated(action: string, dataBase64: string): Promise<void> {
     return call("Capture.FinishAnnotated", action, dataBase64);
-  },
-  /**
-   * FinishRegion completes the region capture with the selection the user
-   * dragged on the overlay, in overlay-local CSS pixels. It is kept for
-   * compatibility and opens the editor; the overlay's action bar uses
-   * CompleteSelection instead.
-   */
-  finishRegion(rect: Rect): Promise<CaptureResult> {
-    return call("Capture.FinishRegion", rect);
   },
   /** FinishScroll stops the scrolling capture and runs the chosen action. */
   finishScroll(action: string): Promise<void> {
@@ -343,7 +312,14 @@ export const History = {
   clear(): Promise<void> {
     return call("History.Clear");
   },
-  /** Get loads one persisted capture for the editor. */
+  /** Copy puts a persisted capture on the clipboard. */
+  copy(id: string): Promise<void> {
+    return call("History.Copy", id);
+  },
+  /**
+   * Get loads one persisted capture's preview metadata (the pages show the
+   * original through its URL; the type kept for compatibility).
+   */
   get(id: string): Promise<HistoryCapture> {
     return call("History.Get", id);
   },
@@ -351,9 +327,20 @@ export const History = {
   list(): Promise<HistoryEntry[]> {
     return call("History.List");
   },
+  /** Pin opens a desktop pin showing a persisted capture. */
+  pin(id: string): Promise<string> {
+    return call("History.Pin", id);
+  },
   /** Remove deletes one persisted capture. */
   remove(id: string): Promise<void> {
     return call("History.Remove", id);
+  },
+  /**
+   * Save saves a persisted capture through the system save dialog and returns
+   * the chosen path (empty when the user cancelled).
+   */
+  save(id: string): Promise<string> {
+    return call("History.Save", id);
   },
 } as const;
 
@@ -361,11 +348,6 @@ export const History = {
 
 /** Events sent by the Go side. Subscribe with `events.name.on(listener)`. */
 export const events = {
-  /**
-   * EventCaptureCompleted is emitted to the main window with the new
-   * capture, ready to be drawn in the editor.
-   */
-  captureCompleted: event<CaptureCompletedPayload>("capture:completed"),
   /** EventCaptureCancelled is emitted when the user cancels a capture. */
   captureCancelled: event<CaptureCancelledPayload>("capture:cancelled"),
   /** EventCaptureFailed is emitted when capturing failed. */

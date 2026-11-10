@@ -24,7 +24,7 @@ export type ToolId =
   | "cancel"
   | "clipboard";
 
-/** The editor toolbar, drawing tools first, actions second. */
+/** The overlay annotation toolbar, drawing tools first, actions second. */
 export const TOOLS: ReadonlyArray<readonly [ToolId, string]> = [
   ["drag", "拖拽"],
   ["rect", "矩形"],

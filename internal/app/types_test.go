@@ -72,7 +72,6 @@ func TestEventNamesMatchContract(t *testing.T) {
 		name  string
 		event interface{ Name() string }
 	}{
-		{name: "capture:completed", event: EventCaptureCompleted},
 		{name: "capture:cancelled", event: EventCaptureCancelled},
 		{name: "capture:failed", event: EventCaptureFailed},
 		{name: "overlay:shown", event: EventOverlayShown},
@@ -159,15 +158,6 @@ func TestPayloadJSONContract(t *testing.T) {
 		value any
 		want  []string
 	}{
-		{
-			name: "capture completed",
-			value: CaptureCompletedPayload{
-				ID: "20261109-120000-abcd", URL: "shot://localhost/s/x.png",
-				ThumbURL: "shot://localhost/h/x.thumb.jpg", HistoryID: "20261109-120000-abcd",
-				Width: 400, Height: 300, Source: "region",
-			},
-			want: []string{"height", "historyId", "id", "source", "thumbUrl", "url", "width"},
-		},
 		{name: "capture cancelled", value: CaptureCancelledPayload{Reason: "user"}, want: []string{"reason"}},
 		{name: "capture failed", value: CaptureFailedPayload{Message: "boom", Permission: true}, want: []string{"message", "permission"}},
 		{

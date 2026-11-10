@@ -710,3 +710,67 @@ R6 的完整替换漏了两处旧名首字母 **T** 的图形残留（文字已�
 - **验证**：`PINSTILL_SELFTEST=palette` 连过——open=true / presets=40 / picked=#e56e48 → hex 回读一致 / preview=rgb(229,110,72) / esc_kept_annotating=true / close 按钮与重开正常 / 主编辑器 editor_toggle=true、editor_panel=true、editor_presets=40 且可关闭；`work/e2e.sh` 新增 palette 步骤后完整 e2e（隔离数据目录）**21 步 ALL CHECKS PASSED**；flow/annotate/pin 等既有步骤无回归。
 - README 调色板描述与 README 截图已更新；未桥接的浏览器预览同样可开关/选色/拖动/输入/持久化。
 - 非目标（沿用 R7.8 契约）：颜色透明度/渐变、屏幕吸管取色、自定义色板保存命名。
+
+---
+
+# Round 8：移除编辑器，主窗口只做历史与配置（2026-11-10 深夜，用户拍板）
+
+用户试用后拍板：「压根不需要编辑器这个了，一切都是在窗口里操作了；历史和配置都要在。」
+即：**删除主窗口编辑器与「进入编辑器」整条链路**；标注只发生在选区工具栏（overlay）；主窗口 = 历史 + 偏好设置。
+
+## R8.1 产品行为（冻结）
+
+1. 主窗口导航：**历史（默认）/ 偏好设置**；不再有「截图」页、编辑画布、主窗口标注工具栏。
+2. overlay 完成动作：**复制 / 贴图 / 保存 / 取消**（删「进入编辑器」）；Enter 复制、Esc 取消不变；`afterCapture` 仅 `inplace|clipboard|pin`。
+3. 滚动截图控制条：**复制 / 保存 / 贴图 / 取消**（删「进编辑器」）。
+4. 整屏截图（托盘/菜单）：静默截当前显示器 → 存历史 → 按 afterCapture 执行（`inplace`/`clipboard` 视为复制剪贴板，`pin` 贴图）→ toast；不打开主窗口。
+5. 历史页：网格卡片（缩略图/时间/尺寸）；点击卡片打开**预览弹层**（原图 + 复制 / 保存 / 贴图 / 删除 / 关闭；Esc 关闭；←/→ 切换相邻）；卡片 hover 删除保留（两次点击确认）；顶部「截一张」、快捷键提示、清空历史；空状态引导。
+6. 设置「截图后」去掉「进入编辑器」；其余设置不变。
+7. 托盘菜单「显示主窗口」改名「历史与设置」，行为不变（打开主窗口，落在历史）。
+8. 启动仍显示主窗口（落到历史页）。
+
+## R8.2 Go 绑定（History 服务，名字冻结）
+
+| 方法 | 返回 | 语义 |
+|---|---|---|
+| `Copy(id string)` | `error` | 历史原图写入剪贴板 |
+| `Save(id string)` | `string`（路径） | 系统保存对话框保存历史原图 |
+| `Pin(id string)` | `string`（贴图 id） | 历史原图固定到屏幕 |
+
+预览图片用既有 `HistoryEntry.url`（`shot://` 原图），不新增取图接口。
+
+移除：`capture:completed` 事件与主窗口交付路径（`captureDeliver`/`deliverPNG`）；`FinishAnnotated` 不再接受 `annotate`；`FinishScroll` 不再接受 `annotate`。
+
+## R8.3 前端（frontend/）
+
+- `index.html`：删除编辑器区域（`shotCanvas`/`captureToolbar`/`toolProperties`/`resultPanel`/`pinnedPreview`/右侧说明栏）与相关 CSS；主窗口改为「历史为主内容 + 设置视图」；新增预览弹层 `#historyPreview`。
+- 冻结 DOM hooks（e2e/headless 用）：
+  - 主导航：`button[data-view="history"|"settings"]`（不再有 `rack`；`#shotCanvas`/`#captureToolbar` 必须不存在）
+  - 历史：`#historyGrid`、`.history-card`、`#historyEmpty`、`#historyPreview`、`#historyPreviewImage`、`[data-history-action="copy|save|pin|delete|close"]`
+  - 保留：`#permissionBanner`/`#permScreenStatus` 等 R7.1 hooks、`#settingsNav button[data-settings-cat]`
+- `main.ts`：删除 Editor 集成、`capture:completed` 处理、主窗口截图视图；历史预览接线新绑定；默认 view=history。
+- `bridge.ts`：新增 `historyCopy/historySave/historyPin`；移除 `onCaptureCompleted`/`CaptureCompletedPayload`；`FinishAnnotatedAction` 去掉 `annotate`。
+- `overlay.ts`/`scroll.ts`：移除 editor 动作、`afterCapture="editor"` 分支（旧 localStorage 值读取时映射为 `inplace`）。
+- `settings.ts`：afterCapture 去掉 editor 选项。
+- 删除主窗口编辑器相关模块 `editor.ts`、`demo.ts`；调色板面板保留给 overlay（主窗口不再有调色板）。
+
+## R8.4 Go 清理（Lead）
+
+- `internal/app`：删 `captureDeliver`、`EventCaptureCompleted` 及其 emit、`applyCaptureAction` 的 annotate 分支；`captureFullScreen` 走 R8.1-4 新流程；`FinishAnnotated`/`FinishScroll` 动作集合收敛；History 新绑定；托盘文案。
+- selftest 重构：删除 `deliver`/`uiactions`/`demo`；改写 `drag`（PrepareSelection 后比较 session PNG 与直接截屏，不依赖编辑器）、`flow`（去掉 annotate 步骤）、`scroll`/`scrollflow`（长图尺寸改从 clipboard/history 校验）、`showcase`（去掉 editor 截图，历史用 storeCapture 播种，新增 preview 截图）、`uicapture`（断言无编辑器 DOM，拍历史/设置）；新增 `fullscreen`（整屏截图→剪贴板+历史）与 `historyactions`（Copy/Pin/Delete 经由 HistoryService）。
+- `work/e2e.sh` 按新 selftest 列表重写；README 全量更新（删除编辑器相关描述与截图，补历史预览/整屏行为）；截图再生。
+- 新增/修订单测：`FinishAnnotated` 动作校验、历史动作（可在 selftest 覆盖，不做模态保存的自动化）。
+
+## R8.5 非目标
+
+主窗口内标注、历史重新编辑、编辑窗口/独立编辑器（已按用户要求删除）、云同步。
+
+## R8.6 实测结论（Lead，2026-11-10 深夜）
+
+- **编辑器链路已彻底移除**：主窗口只剩「历史（默认）+ 偏好设置」；`#shotCanvas`/`#captureToolbar`/`toolProperties`/`resultPanel`/`pinnedPreview` 全部不存在；overlay 完成动作只剩复制 / 贴图 / 保存 / 取消（Enter 复制、Esc 取消不变）；滚动控制条动作同为复制 / 保存 / 贴图 / 取消；设置「截图后」只剩就地 / 复制 / 贴图；`editor.ts`/`demo.ts` 删除。
+- **历史与预览**：点历史卡片打开 `#historyPreview` 大图弹层（复制 / 保存 / 贴图 / 删除 / 关闭，Esc 关闭、←/→ 切换、点 backdrop 关闭）；卡片 hover 删除（二次确认）与清空历史保留；空状态引导。新增 Go 绑定 `History.Copy/Save/Pin`（Save 走系统对话框，未自动化）。
+- **整屏截图**：托盘「截取整个屏幕」改为静默截当前显示器 → 存历史 → 按「截图后」执行（inplace/clipboard → 复制剪贴板，pin → 贴图）→ toast，不打开主窗口、无编辑器。
+- **Go 清理**：删 `captureDeliver`/`deliverPNG`/`capture:completed` 事件/`applyCaptureAction` annotate 分支/`FinishRegion`/`CompleteSelection` 旧绑定；`FinishAnnotated` 只接受 copy|pin|save|cancel；`FinishScroll` 同样；托盘菜单「显示主窗口」→「历史与设置」；types_test/事件契约同步。
+- **验证**：`work/e2e.sh --skip-build`（隔离数据目录）**23 步 ALL CHECKS PASSED**；其中 drag 改为「页面拖选 → PrepareSelection 后与直接截屏比较」same=true；scroll/scrollflow 长图经剪贴板校验 1280×2300 / 1280×1700；新增 fullscreen（整屏 3840×2160 进剪贴板 + 历史 +1）与 historyactions（Copy/Pin/Remove，delta=1）；uicapture 断言 `views=history,settings`、`editor_dom=false`、预览打开/关闭，并截取 history/preview/settings；permissions/palette 回归通过（palette 断言主窗口无调色板）。
+- README 与结构说明已更新（删除编辑器截图，新增历史预览截图），签名构建通过（Developer ID）。
+- 已知：设置里少数原本只影响主窗口编辑器的项（图标文字提示、Enter 保存等）暂为惰性项；预览保存对话框未自动化。

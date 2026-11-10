@@ -400,7 +400,7 @@ func (a *App) finishScroll(action string) error {
 		return err
 	}
 	switch action {
-	case "annotate", "copy", "pin", "save":
+	case "copy", "pin", "save":
 	default:
 		return fail(fmt.Errorf("未知的滚动截图动作 %q", action))
 	}
@@ -412,7 +412,7 @@ func (a *App) finishScroll(action string) error {
 	if err := png.Encode(&buf, res.Image); err != nil {
 		return fail(fmt.Errorf("长图编码失败: %w", err))
 	}
-	payload, err := a.storeCapture(buf.Bytes(), "scroll")
+	payload, err := a.storeCapture(buf.Bytes())
 	if err != nil {
 		return fail(err)
 	}
@@ -428,12 +428,9 @@ func (a *App) finishScroll(action string) error {
 }
 
 // applyCaptureAction performs one of the capture actions on finished pixels.
-func (a *App) applyCaptureAction(action string, pngBytes []byte, payload CaptureCompletedPayload) {
+func (a *App) applyCaptureAction(action string, pngBytes []byte, payload capturePayload) {
 	a.playSoundIfEnabled(a.settingsSnapshot())
 	switch action {
-	case "annotate":
-		a.showMain()
-		emitToMain(a, EventCaptureCompleted, payload)
 	case "copy":
 		if err := mygo.Clipboard.WriteImage(pngBytes); err != nil {
 			a.toast("写入剪贴板失败: "+err.Error(), "error")

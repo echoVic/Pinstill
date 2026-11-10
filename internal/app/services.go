@@ -27,21 +27,6 @@ func (s *CaptureService) BeginRegion() error { return s.app.beginRegion() }
 // CancelRegion cancels the running region capture.
 func (s *CaptureService) CancelRegion() { s.app.cancelRegion() }
 
-// FinishRegion completes the region capture with the selection the user
-// dragged on the overlay, in overlay-local CSS pixels. It is kept for
-// compatibility and opens the editor; the overlay's action bar uses
-// CompleteSelection instead.
-func (s *CaptureService) FinishRegion(rect Rect) (CaptureResult, error) {
-	return CaptureResult{}, s.app.completeSelection(rect, "annotate")
-}
-
-// CompleteSelection runs one action on the region the user selected in the
-// overlay: annotate, copy, pin or save. The work happens on the desktop;
-// only annotate brings the main window back.
-func (s *CaptureService) CompleteSelection(rect Rect, action string) error {
-	return s.app.completeSelection(rect, action)
-}
-
 // PrepareSelection captures the region the user selected and hands it back
 // to the overlay, so it can annotate the capture in place on the desktop.
 func (s *CaptureService) PrepareSelection(rect Rect) (OverlayCapturePayload, error) {
@@ -49,7 +34,7 @@ func (s *CaptureService) PrepareSelection(rect Rect) (OverlayCapturePayload, err
 }
 
 // FinishAnnotated completes an in-place annotation: it stores the composited
-// image and runs the chosen action.
+// image and runs the chosen action (copy, pin, save or cancel).
 func (s *CaptureService) FinishAnnotated(action string, dataBase64 string) error {
 	return s.app.finishAnnotated(action, dataBase64)
 }
@@ -102,8 +87,8 @@ func (s *CaptureService) UpdatePinState(id string, state PinWindowState) error {
 	return s.app.updatePinState(id, state)
 }
 
-// CaptureFullScreen captures the whole display under the pointer. Like
-// FinishRegion it delivers the capture through capture:completed.
+// CaptureFullScreen captures the whole display under the pointer, stores it
+// in history and runs the configured after-capture action.
 func (s *CaptureService) CaptureFullScreen() CaptureResult {
 	s.app.captureFullScreen()
 	return CaptureResult{}
@@ -235,8 +220,38 @@ type HistoryService struct{ app *App }
 // List returns persisted captures, newest first.
 func (s *HistoryService) List() []HistoryEntry { return s.app.historyEntries() }
 
-// Get loads one persisted capture for the editor.
+// Get loads one persisted capture's preview metadata (the pages show the
+// original through its URL; the type kept for compatibility).
 func (s *HistoryService) Get(id string) (HistoryCapture, error) { return s.app.historyCapture(id) }
+
+// Copy puts a persisted capture on the clipboard.
+func (s *HistoryService) Copy(id string) error {
+	pngBytes, err := s.app.historyPNG(id)
+	if err != nil {
+		return err
+	}
+	return s.app.copyImagePNG(pngBytes)
+}
+
+// Save saves a persisted capture through the system save dialog and returns
+// the chosen path (empty when the user cancelled).
+func (s *HistoryService) Save(id string) (string, error) {
+	pngBytes, err := s.app.historyPNG(id)
+	if err != nil {
+		return "", err
+	}
+	return s.app.savePNGBytes(pngBytes)
+}
+
+// Pin opens a desktop pin showing a persisted capture.
+func (s *HistoryService) Pin(id string) (string, error) {
+	pngBytes, err := s.app.historyPNG(id)
+	if err != nil {
+		return "", err
+	}
+	width, height := imageDimensions(pngBytes)
+	return s.app.pinPNG(pngBytes, width, height)
+}
 
 // Remove deletes one persisted capture.
 func (s *HistoryService) Remove(id string) error { return s.app.removeHistory(id) }

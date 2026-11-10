@@ -15,7 +15,7 @@ export interface Preferences {
   launch: boolean;
   cursor: boolean;
   sound: boolean;
-  afterCapture: "inplace" | "clipboard" | "pin" | "editor";
+  afterCapture: "inplace" | "clipboard" | "pin";
   tooltip: boolean;
   tooltipDelay: number;
   // 快捷键
@@ -125,7 +125,6 @@ export const SETTINGS_SCHEMA: SettingsCategory[] = [
               { value: "inplace", label: "就地标注" },
               { value: "clipboard", label: "复制到剪贴板" },
               { value: "pin", label: "固定到屏幕" },
-              { value: "editor", label: "进入编辑器" },
             ],
           },
         ],
@@ -569,7 +568,9 @@ export function loadPreferences(): Preferences {
   // Round 2 shipped "toolbar" (action bar); Round 3 shows the full toolbar.
   const afterCapture = preferences.afterCapture as string;
   if (afterCapture === "toolbar") preferences.afterCapture = "inplace";
-  else if (!["inplace", "clipboard", "pin", "editor"].includes(afterCapture)) {
+  else if (!["inplace", "clipboard", "pin"].includes(afterCapture)) {
+    // R8 removed the main-window editor; older "editor" values fall back to
+    // the in-place toolbar.
     preferences.afterCapture = "inplace";
   }
   return preferences;
@@ -619,9 +620,7 @@ function numberIn(value: unknown, fallback: number, min: number, max: number): n
 /** Maps the UI preferences to the frozen `Settings` object of plan §3.4. */
 export function toNativeSettings(preferences: Preferences): Settings {
   const afterCapture: Settings["afterCapture"] =
-    preferences.afterCapture === "clipboard" ||
-    preferences.afterCapture === "pin" ||
-    preferences.afterCapture === "editor"
+    preferences.afterCapture === "clipboard" || preferences.afterCapture === "pin"
       ? preferences.afterCapture
       : "inplace";
   const format: Settings["format"] = preferences.format === "JPEG" ? "JPEG" : "PNG";

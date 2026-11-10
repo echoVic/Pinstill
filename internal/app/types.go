@@ -9,7 +9,7 @@ import (
 )
 
 // Rect is a rectangle sent from a page: overlay-local CSS pixels for
-// FinishRegion, screen coordinates elsewhere.
+// PrepareSelection, screen coordinates elsewhere.
 type Rect struct {
 	X      float64 `json:"x"`
 	Y      float64 `json:"y"`
@@ -29,18 +29,6 @@ type OverlayInfo struct {
 	Width    int     `json:"width"`
 	Height   int     `json:"height"`
 	Scale    float64 `json:"scale"`
-}
-
-// CaptureCompletedPayload is sent to the main window when a capture was
-// written and is ready to show in the editor.
-type CaptureCompletedPayload struct {
-	ID        string `json:"id"`
-	URL       string `json:"url"`
-	ThumbURL  string `json:"thumbUrl,omitempty"`
-	HistoryID string `json:"historyId,omitempty"`
-	Width     int    `json:"width"`
-	Height    int    `json:"height"`
-	Source    string `json:"source"`
 }
 
 // CaptureCancelledPayload reports a capture the user backed out of.
@@ -74,6 +62,15 @@ type HistoryChangedPayload struct {
 type ToastPayload struct {
 	Text string `json:"text"`
 	Kind string `json:"kind"`
+}
+
+// capturePayload describes a capture written to the session cache: the
+// identity and pixel size the actions need. It is internal to the app (the
+// pages no longer receive captured images).
+type capturePayload struct {
+	ID     string
+	Width  int
+	Height int
 }
 
 // HistoryEntry is one persisted capture shown in the history view.
@@ -176,9 +173,6 @@ func DefaultSettings() Settings {
 
 // Events the pages listen to with the untyped mygo-runtime API.
 var (
-	// EventCaptureCompleted is emitted to the main window with the new
-	// capture, ready to be drawn in the editor.
-	EventCaptureCompleted = mygo.NewEvent[CaptureCompletedPayload]("capture:completed")
 	// EventCaptureCancelled is emitted when the user cancels a capture.
 	EventCaptureCancelled = mygo.NewEvent[CaptureCancelledPayload]("capture:cancelled")
 	// EventCaptureFailed is emitted when capturing failed.

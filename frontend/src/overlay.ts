@@ -6,7 +6,7 @@
 // `overlay:capture` → the page renders the captured PNG into
 // `#overlayCanvas` inside the selection and shows the COMPLETE annotation
 // toolbar (tools, color swatches, width/font slider, text entry, undo,
-// 复制/贴图/保存/进入编辑器/取消). Actions send the composited PNG through
+// 复制/贴图/保存/取消). Actions send the composited PNG through
 // `Capture.FinishAnnotated(action, base64)`; Go performs them.
 //
 // When `afterCapture` is not "inplace" the toolbar is skipped: the raw captured
@@ -48,22 +48,19 @@ const TOOLBAR_GAP = 10;
 const EDGE_MARGIN = 8;
 
 type Phase = "idle" | "selecting" | "preparing" | "annotating" | "finishing";
-type AfterCapture = "inplace" | "clipboard" | "pin" | "editor";
+type AfterCapture = "inplace" | "clipboard" | "pin";
 
-/** Toolbar actions as exposed to the page/E2E (data-action); "editor" maps to
- * the Go action "annotate" only when calling Capture.FinishAnnotated. */
-type ToolbarAction = "copy" | "pin" | "save" | "editor" | "cancel";
+/** Toolbar actions as exposed to the page/E2E (data-action). */
+type ToolbarAction = "copy" | "pin" | "save" | "cancel";
 
 const PENDING_LABELS: Record<ToolbarAction, string> = {
   copy: "正在复制…",
   pin: "正在固定到桌面…",
   save: "正在保存…",
-  editor: "正在打开编辑器…",
   cancel: "正在取消…",
 };
 
 const DEMO_MESSAGES: Record<ToolbarAction, string> = {
-  editor: "进入编辑器：桌面应用中会把合成图交给主窗口编辑器",
   copy: "复制：桌面应用中会把合成图写入系统剪贴板",
   pin: "贴图：桌面应用中会创建置顶的桌面贴图窗口",
   save: "保存：桌面应用中会打开保存对话框",
@@ -79,7 +76,6 @@ const ACTION_DEFS: Array<{
   { action: "copy", label: "复制", icon: "copy", className: "primary" },
   { action: "pin", label: "贴图", icon: "pin" },
   { action: "save", label: "保存", icon: "download" },
-  { action: "editor", label: "进入编辑器", icon: "square-pen" },
   { action: "cancel", label: "取消", icon: "x", className: "cancel" },
 ];
 
@@ -477,7 +473,7 @@ function showRecognitionPlaceholder(tool: string): void {
   const def = EXTRA_TOOL_DEFS.find((entry) => entry.tool === tool);
   if (!def || phase !== "annotating") return;
   setToolbarStatus(`${def.label} · 待接入`, "info");
-  showTransient(`${def.label} · 待接入：桌面版接入前，可先复制/保存当前截图，或进入编辑器继续标注`, 3200);
+  showTransient(`${def.label} · 待接入：桌面版接入前，可先复制/保存当前截图`, 3200);
   window.setTimeout(() => {
     if (phase === "annotating" && toolbarStatus.textContent === `${def.label} · 待接入`) {
       setToolbarStatus("");
@@ -663,7 +659,9 @@ function undo(): void {
 // ---------------------------------------------------------------------------
 
 function normalizeAfterCapture(value: unknown): AfterCapture {
-  if (value === "clipboard" || value === "pin" || value === "editor") return value;
+  // R8 removed the main-window editor: older "editor" values fall back to the
+  // in-place annotation toolbar.
+  if (value === "clipboard" || value === "pin") return value;
   return "inplace";
 }
 
@@ -680,14 +678,7 @@ function loadSettings(): Promise<void> {
 function mappedAfterCapture(): { go: FinishAnnotatedAction; ui: ToolbarAction } | null {
   if (afterCapture === "clipboard") return { go: "copy", ui: "copy" };
   if (afterCapture === "pin") return { go: "pin", ui: "pin" };
-  if (afterCapture === "editor") return { go: "annotate", ui: "editor" };
   return null;
-}
-
-/** Maps the toolbar action to the Go action: the 进入编辑器 button keeps
- * data-action="editor" for E2E but Capture.FinishAnnotated expects "annotate". */
-function goActionFor(action: ToolbarAction): FinishAnnotatedAction {
-  return action === "editor" ? "annotate" : action;
 }
 
 // ---------------------------------------------------------------------------
@@ -751,7 +742,7 @@ async function beginAnnotation(payload: OverlayCapture): Promise<void> {
     const blob = await fetchCaptureBlob(payload.url);
     const autoAction = mappedAfterCapture();
     if (autoAction) {
-      // afterCapture copy/pin/editor: skip the toolbar, finish with the raw PNG.
+      // afterCapture copy/pin: skip the toolbar, finish with the raw PNG.
       const rawBase64 = await blobToBase64(blob);
       phase = "annotating";
       setToolbarStatus(PENDING_LABELS[autoAction.ui]);
@@ -933,13 +924,12 @@ async function finishWith(
 
 async function runAction(action: ToolbarAction): Promise<void> {
   if (phase !== "annotating") return;
-  const goAction = goActionFor(action);
-  if (goAction === "cancel") {
+  if (action === "cancel") {
     await finishWith("cancel", "", "cancel");
     return;
   }
   if (!engine) return;
-  await finishWith(goAction, engine.toPNGBase64(), action);
+  await finishWith(action, engine.toPNGBase64(), action);
 }
 
 // Showcase/test hook: render a generated image as the captured base, so the

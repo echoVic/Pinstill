@@ -1,21 +1,25 @@
-// The main Pinstill window: the design prototype's single-page UI, wired to the
-// native capture/history/settings bindings through bridge.ts.
+// The main Pinstill window (R8): history + preferences only.
 //
-// Views: 截图 (editor) · 历史 (stored captures) · 偏好设置 (seven categories).
-// When the page runs in a plain browser the bridge degrades to the prototype
-// simulation and the design still demos without errors.
+// The main-window editor was removed by product decision: annotation happens
+// only in the region-selection overlay toolbar. This window lists stored
+// captures ("历史") and opens an in-app preview modal with copy / save / pin /
+// delete. Preferences are unchanged (permission centre included).
+//
+// When the page runs in a plain browser the bridge degrades to demo history
+// entries, so the static preview stays clickable without console errors.
 
 import {
-  copyImage,
-  exportImage,
-  historyClear,
-  historyGet,
-  historyList,
-  historyRemove,
+  applySettings,
+  beginRegion,
   hasNative,
+  historyClear,
+  historyCopy,
+  historyList,
+  historyPin,
+  historyRemove,
+  historySave,
   launchAtLogin,
   onCaptureCancelled,
-  onCaptureCompleted,
   onCaptureFailed,
   onHistoryChanged,
   onToast,
@@ -25,16 +29,10 @@ import {
   permissionGranted,
   requestScreenPermission,
   scrollAccessibilityGranted,
-  pinImage,
-  beginRegion,
-  applySettings,
   showMainWindow,
-  type CaptureCompleted,
   type HistoryEntry,
 } from "./bridge";
-import { Editor } from "./editor";
 import { refreshPinstillIcons } from "./icons";
-import { ColorPalettePanel } from "./palette";
 import {
   DEFAULT_PREFERENCES,
   SETTINGS_KEY_LABELS,
@@ -56,9 +54,7 @@ import { TOOL_ICONS } from "./tools";
 import {
   flashButtonSuccess,
   formatBytes,
-  loadCanvasImage,
   setButtonPending,
-  withButtonFeedback,
 } from "./util";
 
 const el = <T extends HTMLElement = HTMLElement>(id: string): T => {
@@ -67,11 +63,11 @@ const el = <T extends HTMLElement = HTMLElement>(id: string): T => {
   return element as T;
 };
 
-type View = "rack" | "history" | "settings";
+type View = "history" | "settings";
 type ShortcutKey = (typeof SHORTCUT_KEYS)[number];
 
 const preferences: Preferences = loadPreferences();
-let activeView: View = "rack";
+let activeView: View = "history";
 let settingsCategory = SETTINGS_SCHEMA[0]!.id;
 let recordingShortcut: ShortcutKey | null = null;
 let historyEntries: HistoryEntry[] = [];
@@ -86,54 +82,14 @@ let permissionClickBound = false;
 let bannerDismissed = false;
 let permissionRefreshSequence = 0;
 
-// ---------------------------------------------------------------------------
-// Editor
-// ---------------------------------------------------------------------------
+interface PreviewState {
+  index: number;
+  trigger: HTMLElement | null;
+  deleteArmed: boolean;
+  deleteTimer: number | undefined;
+}
 
-// The shared in-app palette panel (R7.8); the editor's trigger closes over it.
-let palettePanel: ColorPalettePanel | null = null;
-
-const editor = new Editor({
-  canvas: el<HTMLCanvasElement>("shotCanvas"),
-  toolbar: el("captureToolbar"),
-  properties: el("toolProperties"),
-  resultPanel: el("resultPanel"),
-  status: el("editorStatus"),
-  captureSize: el("captureSize"),
-  captureHint: el("captureHint"),
-  getPreferences: () => preferences,
-  actions: {
-    pin: () => pinCurrent(),
-    translate: () =>
-      editor.showResult(
-        "翻译 · 待接入",
-        "翻译服务尚未接入。当前截图只在本机处理，接入后可在结果面板查看译文。",
-      ),
-    ocr: () =>
-      editor.showResult(
-        "提取文字 · 待接入",
-        "文字识别服务尚未接入。当前截图不会上传到任何服务器。",
-      ),
-    qr: () =>
-      editor.showResult(
-        "识别二维码 · 待接入",
-        "二维码识别尚未接入。接入后会在结果面板展示识别出的链接或文本。",
-      ),
-    scroll: () =>
-      editor.showResult(
-        "滚动截图 · 待接入",
-        "屏幕滚动采集尚未接入。当前仍可对普通截图继续标注与导出。",
-      ),
-    download: () => exportCurrent(),
-    clipboard: () => copyCurrent(),
-  },
-  paletteToggle: (anchor) => palettePanel?.toggle(anchor),
-});
-
-palettePanel = new ColorPalettePanel({
-  getColor: () => editor.currentColor(),
-  onColor: (color, options) => editor.applyPaletteColor(color, options.remember),
-});
+let preview: PreviewState = { index: -1, trigger: null, deleteArmed: false, deleteTimer: undefined };
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -152,20 +108,6 @@ function showToast(text: string, kind: "info" | "success" | "error" = "info"): v
   toast.classList.add("show");
   if (toastTimer) window.clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => toast.classList.remove("show"), 2800);
-}
-
-function dateStamp(): string {
-  const now = new Date();
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-}
-
-function safeFilenamePrefix(value: string): string {
-  const cleaned = value
-    .trim()
-    .replace(/[\\/:*?"<>|\s]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return cleaned || "Pinstill";
 }
 
 function formatHistoryTime(iso: string): string {
@@ -194,127 +136,19 @@ function updateShortcutButton(): void {
   el("shortcut").textContent = `${formatAccelerator(preferences.captureKey)}　快捷键`;
 }
 
-/** Toolbar button by tool id, used for pending/✓ feedback (R7.3). */
-function toolbarButton(tool: string): HTMLButtonElement | null {
-  return document.querySelector<HTMLButtonElement>(`#captureToolbar button[data-tool="${tool}"]`);
-}
-
 // ---------------------------------------------------------------------------
-// Editor actions (toolbar)
-// ---------------------------------------------------------------------------
-
-async function copyCurrent(): Promise<void> {
-  if (!editor.hasCapture()) {
-    showToast("先截取一张图片，再保存到剪贴板", "info");
-    return;
-  }
-  const button = toolbarButton("clipboard");
-  try {
-    await withButtonFeedback(button, async () => {
-      const base64 = await editor.toPNGBase64();
-      await copyImage(base64);
-    });
-    showToast("截图与标注已保存到剪贴板", "success");
-  } catch (error) {
-    if (!hasNative) {
-      editor.showResult(
-        "保存到剪贴板",
-        "当前浏览器预览未开放图片剪贴板写入。桌面应用中会直接写入系统剪贴板，也可先使用「下载」保存 PNG。",
-      );
-      return;
-    }
-    showToast(`复制失败：${errorMessage(error)}`, "error");
-  }
-}
-
-async function exportCurrent(): Promise<void> {
-  if (!editor.hasCapture()) {
-    showToast("先截取一张图片，再导出", "info");
-    return;
-  }
-  const button = toolbarButton("download");
-  setButtonPending(button, true);
-  try {
-    const base64 = await editor.toPNGBase64();
-    const suggestedName = `${safeFilenamePrefix(preferences.filenamePrefix)}-${dateStamp()}`;
-    const path = await exportImage(base64, suggestedName);
-    setButtonPending(button, false);
-    if (path) {
-      flashButtonSuccess(button);
-      showToast(`已导出：${path}`, "success");
-    } else {
-      showToast("已取消导出", "info");
-    }
-  } catch (error) {
-    setButtonPending(button, false);
-    showToast(`导出失败：${errorMessage(error)}`, "error");
-  }
-}
-
-async function pinCurrent(): Promise<void> {
-  if (!editor.hasCapture()) {
-    showToast("先截取一张图片，再固定到屏幕", "info");
-    return;
-  }
-  const button = toolbarButton("pin");
-  setButtonPending(button, true);
-  try {
-    const base64 = await editor.toPNGBase64();
-    if (!hasNative) {
-      showPinnedPreview(editor.getCanvas().toDataURL("image/png"));
-      setButtonPending(button, false);
-      flashButtonSuccess(button);
-      showToast("浏览器预览 · 桌面应用中会创建置顶贴图窗口", "info");
-      return;
-    }
-    await pinImage(base64);
-    setButtonPending(button, false);
-    flashButtonSuccess(button);
-    showToast("已固定到屏幕", "success");
-  } catch (error) {
-    setButtonPending(button, false);
-    showToast(`固定到屏幕失败：${errorMessage(error)}`, "error");
-  }
-}
-
-function showPinnedPreview(dataURL: string): void {
-  const preview = el("pinnedPreview");
-  const image = el<HTMLImageElement>("pinnedImage");
-  image.src = dataURL;
-  preview.style.opacity = String(preferences.pinOpacity / 100);
-  preview.style.outline = preferences.pinBorder ? "1px solid #ffffff45" : "none";
-  preview.hidden = false;
-}
-
-// ---------------------------------------------------------------------------
-// Capture flow
+// Capture entry (the overlay does the actual selection + annotation)
 // ---------------------------------------------------------------------------
 
 async function startCapture(): Promise<void> {
-  palettePanel?.close();
   try {
     if (!hasNative) {
-      showView("rack");
-      // A simulated capture replaces the canvas like a real one would.
-      editor.setDemo();
-      showToast("浏览器预览 · 已模拟一次截取（桌面应用中会打开区域选择覆盖层）", "info");
+      showToast("浏览器预览 · 桌面应用中会打开区域选择覆盖层", "info");
       return;
     }
     await beginRegion();
   } catch (error) {
     showToast(`无法开始截取：${errorMessage(error)}`, "error");
-  }
-}
-
-async function handleCaptureCompleted(payload: CaptureCompleted): Promise<void> {
-  try {
-    const image = await loadCanvasImage(payload.url);
-    editor.setBase(image);
-    showView("rack");
-    showToast("已截取一张截图", "success");
-    scheduleHistoryRefresh();
-  } catch (error) {
-    showToast(`截图已保存，但载入画布失败：${errorMessage(error)}`, "error");
   }
 }
 
@@ -336,18 +170,24 @@ async function refreshHistory(): Promise<void> {
   }
   renderHistory();
   updateCounts();
+  if (previewVisible()) {
+    if (historyEntries.length === 0) {
+      closeHistoryPreview();
+    } else {
+      preview.index = Math.min(Math.max(0, preview.index), historyEntries.length - 1);
+      renderHistoryPreview();
+    }
+  }
 }
 
 function updateCounts(): void {
-  const historyCount = document.getElementById("historyCount");
-  if (historyCount) historyCount.textContent = String(historyEntries.length);
   const historyTotal = document.getElementById("historyTotal");
   if (historyTotal) historyTotal.textContent = `· ${historyEntries.length} 张`;
 }
 
 const HISTORY_RENDER_LIMIT = 60;
 
-/** Restores the delete button after a confirm timeout / category switch. */
+/** Restores the delete button after a confirm timeout / grid re-render. */
 function disarmHistoryDelete(): void {
   if (!armedDelete) return;
   if (armedDelete.timer) window.clearTimeout(armedDelete.timer);
@@ -381,6 +221,7 @@ function renderHistory(): void {
   )} 开始`;
   empty.hidden = historyEntries.length > 0;
   grid.hidden = historyEntries.length === 0;
+
   for (const entry of historyEntries.slice(0, HISTORY_RENDER_LIMIT)) {
     const card = document.createElement("article");
     card.className = "history-card";
@@ -390,7 +231,7 @@ function renderHistory(): void {
     open.className = "history-open";
     open.setAttribute(
       "aria-label",
-      `打开 ${formatHistoryTime(entry.createdAt)} 的截图（${entry.width} × ${entry.height}）`,
+      `预览 ${formatHistoryTime(entry.createdAt)} 的截图（${entry.width} × ${entry.height}）`,
     );
     const thumb = document.createElement("span");
     thumb.className = "thumb";
@@ -413,7 +254,15 @@ function renderHistory(): void {
     const caption = document.createElement("p");
     caption.textContent = `${formatHistoryTime(entry.createdAt)} · ${entry.width} × ${entry.height} · ${formatBytes(entry.size)}`;
     open.append(thumb, caption);
-    open.addEventListener("click", () => void openHistoryEntry(entry.id));
+    open.addEventListener("click", () => openHistoryPreview(entry.id, open));
+    // The whole card is clickable (selftests and the design both click the card
+    // itself, not only the inner button).
+    card.addEventListener("click", (event) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest(".history-delete")) return;
+      if (target instanceof Element && target.closest(".history-open")) return;
+      openHistoryPreview(entry.id, open);
+    });
 
     const remove = document.createElement("button");
     remove.type = "button";
@@ -433,30 +282,19 @@ function renderHistory(): void {
     card.append(open, remove);
     grid.append(card);
   }
+
   let note = document.getElementById("historyNote");
   if (historyEntries.length > HISTORY_RENDER_LIMIT) {
     if (!note) {
       note = document.createElement("p");
       note.id = "historyNote";
-      note.className = "history-empty";
+      note.className = "history-note";
       grid.after(note);
     }
     note.textContent = `仅显示最近 ${HISTORY_RENDER_LIMIT} 张截图，共 ${historyEntries.length} 张。`;
     note.hidden = false;
   } else if (note) {
     note.hidden = true;
-  }
-}
-
-async function openHistoryEntry(id: string): Promise<void> {
-  try {
-    const item = await historyGet(id);
-    const image = await loadCanvasImage(item.url);
-    editor.setBase(image, { width: item.width, height: item.height });
-    showView("rack");
-    showToast("已载入历史截图", "success");
-  } catch (error) {
-    showToast(`打开截图失败：${errorMessage(error)}`, "error");
   }
 }
 
@@ -486,6 +324,7 @@ async function clearHistory(): Promise<void> {
     setButtonPending(button, false);
     flashButtonSuccess(button);
     showToast("已清空截图历史", "success");
+    if (previewVisible()) closeHistoryPreview();
   } catch (error) {
     setButtonPending(button, false);
     showToast(`清空失败：${errorMessage(error)}`, "error");
@@ -494,25 +333,166 @@ async function clearHistory(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// History preview modal
+// ---------------------------------------------------------------------------
+
+function previewVisible(): boolean {
+  const modal = document.getElementById("historyPreview");
+  return !!modal && !modal.hidden;
+}
+
+function currentPreviewEntry(): HistoryEntry | null {
+  return historyEntries[preview.index] ?? null;
+}
+
+function resetPreviewDeleteConfirm(): void {
+  if (preview.deleteTimer) window.clearTimeout(preview.deleteTimer);
+  preview.deleteTimer = undefined;
+  preview.deleteArmed = false;
+  const button = document.querySelector<HTMLButtonElement>(
+    '#historyPreview [data-history-action="delete"]',
+  );
+  if (button) {
+    button.classList.remove("armed");
+    button.textContent = "删除";
+    button.setAttribute("aria-label", "删除这张截图");
+  }
+}
+
+function renderHistoryPreview(): void {
+  const modal = document.getElementById("historyPreview");
+  if (!modal) return;
+  const entry = currentPreviewEntry();
+  if (!entry) {
+    closeHistoryPreview();
+    return;
+  }
+  const image = el<HTMLImageElement>("historyPreviewImage");
+  if (image.getAttribute("src") !== entry.url) image.src = entry.url;
+  el("historyPreviewTitle").textContent = `历史截图 · ${formatHistoryTime(entry.createdAt)}`;
+  el("historyPreviewMeta").textContent = `${entry.width} × ${entry.height} px · ${formatBytes(entry.size)} · 第 ${preview.index + 1} / ${historyEntries.length} 张`;
+  resetPreviewDeleteConfirm();
+}
+
+function openHistoryPreview(id: string, trigger: HTMLElement | null): void {
+  const index = historyEntries.findIndex((entry) => entry.id === id);
+  if (index < 0) {
+    showToast("找不到这张截图", "error");
+    return;
+  }
+  preview = { index, trigger, deleteArmed: false, deleteTimer: undefined };
+  renderHistoryPreview();
+  const modal = el("historyPreview");
+  modal.hidden = false;
+  document.body.classList.add("preview-open");
+  const close = modal.querySelector<HTMLButtonElement>('[data-history-action="close"]');
+  close?.focus();
+}
+
+function closeHistoryPreview(): void {
+  const modal = document.getElementById("historyPreview");
+  if (!modal || modal.hidden) return;
+  modal.hidden = true;
+  document.body.classList.remove("preview-open");
+  resetPreviewDeleteConfirm();
+  const trigger = preview.trigger;
+  preview = { index: -1, trigger: null, deleteArmed: false, deleteTimer: undefined };
+  if (trigger && trigger.isConnected) trigger.focus();
+}
+
+/** ←/→ step through adjacent history entries while the preview is open. */
+function stepHistoryPreview(delta: number): void {
+  if (!previewVisible() || historyEntries.length === 0) return;
+  const next = Math.min(historyEntries.length - 1, Math.max(0, preview.index + delta));
+  if (next === preview.index) return;
+  preview.index = next;
+  renderHistoryPreview();
+}
+
+async function runPreviewAction(action: string, button: HTMLButtonElement): Promise<void> {
+  const entry = currentPreviewEntry();
+  if (!entry) return;
+  if (action === "close") {
+    closeHistoryPreview();
+    return;
+  }
+  if (action === "delete") {
+    if (!preview.deleteArmed) {
+      preview.deleteArmed = true;
+      button.classList.add("armed");
+      button.textContent = "确认删除?";
+      button.setAttribute("aria-label", "再次点击确认删除这张截图");
+      preview.deleteTimer = window.setTimeout(() => resetPreviewDeleteConfirm(), 3200);
+      return;
+    }
+    resetPreviewDeleteConfirm();
+    setButtonPending(button, true);
+    try {
+      await historyRemove(entry.id);
+      setButtonPending(button, false);
+      showToast("已删除这张截图", "success");
+      await refreshHistory();
+    } catch (error) {
+      setButtonPending(button, false);
+      showToast(`删除失败：${errorMessage(error)}`, "error");
+    }
+    return;
+  }
+
+  setButtonPending(button, true);
+  try {
+    if (action === "copy") {
+      await historyCopy(entry.id);
+      setButtonPending(button, false);
+      flashButtonSuccess(button);
+      showToast("已复制到剪贴板", "success");
+    } else if (action === "save") {
+      const path = await historySave(entry.id);
+      setButtonPending(button, false);
+      if (path) {
+        flashButtonSuccess(button);
+        showToast(`已保存：${path}`, "success");
+      } else {
+        showToast("已取消保存", "info");
+      }
+    } else if (action === "pin") {
+      await historyPin(entry.id);
+      setButtonPending(button, false);
+      flashButtonSuccess(button);
+      showToast(
+        hasNative ? "已固定到屏幕" : "浏览器预览 · 桌面应用中会创建置顶贴图窗口",
+        "success",
+      );
+    }
+  } catch (error) {
+    setButtonPending(button, false);
+    const labels: Record<string, string> = { copy: "复制", save: "保存", pin: "贴图" };
+    showToast(`${labels[action] ?? "操作"}失败：${errorMessage(error)}`, "error");
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Views
 // ---------------------------------------------------------------------------
 
 function showView(view: View): void {
   activeView = view;
-  palettePanel?.close();
   document.querySelectorAll<HTMLButtonElement>("[data-view]").forEach((button) => {
-    button.classList.toggle("active", button.dataset.view === view);
+    const active = button.dataset.view === view;
+    button.classList.toggle("active", active);
+    if (active) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
   });
   const settings = view === "settings";
   el("settingsView").hidden = !settings;
-  el("workspaceView").hidden = settings;
+  el("historyView").hidden = settings;
   const title = document.querySelector<HTMLElement>(".title");
   const subtitle = document.querySelector<HTMLElement>(".sub");
-  if (title) title.textContent = settings ? "让 Pinstill 更顺手。" : "截取、标注，再带走。";
+  if (title) title.textContent = settings ? "让 Pinstill 更顺手。" : "截取后都在这里。";
   if (subtitle) {
     subtitle.textContent = settings
       ? "把常用习惯设好，剩下的交给每一次截图。"
-      : "截图后就地编辑，一步复制、下载或固定到屏幕。";
+      : "标注在选区工具栏里完成。点历史卡片即可预览、复制、保存或贴到屏幕上。";
   }
   const topActions = document.querySelector<HTMLElement>(".top .actions");
   if (topActions) topActions.hidden = settings;
@@ -520,9 +500,7 @@ function showView(view: View): void {
     renderSettings();
     return;
   }
-  el("historyView").classList.toggle("show", view === "history");
-  el("rackView").style.display = view === "history" ? "none" : "block";
-  if (view === "history") void refreshHistory();
+  void refreshHistory();
 }
 
 // ---------------------------------------------------------------------------
@@ -739,18 +717,8 @@ function commitSetting(row: SettingRow, input: HTMLInputElement | HTMLSelectElem
 
 function applyPreferences(changedKey?: string): void {
   document.documentElement.style.setProperty("--tooltip-delay", `${preferences.tooltipDelay}ms`);
-  let style = document.getElementById("preferenceStyle");
-  if (!style) {
-    style = document.createElement("style");
-    style.id = "preferenceStyle";
-    document.head.append(style);
-  }
-  style.textContent = preferences.tooltip ? "" : ".capture-toolbar button span{display:none}";
-  const preview = el("pinnedPreview");
-  preview.style.opacity = String(preferences.pinOpacity / 100);
-  preview.style.outline = preferences.pinBorder ? "1px solid #ffffff45" : "none";
   if (changedKey === "defaultColor" || changedKey === "defaultWidth") {
-    // Applied the next time a capture or the default tool is (re)selected.
+    // The overlay reads these from storage the next time a capture starts.
   }
   updateShortcutButton();
 }
@@ -1045,8 +1013,7 @@ async function runPermissionAction(
     showToast(`权限操作未完成：${errorMessage(error)}`, "error");
   }
   // Keep the button pending until the status lines have actually re-read the
-  // OS state (MINOR-2 from the R7 review: clearing it in `finally` made the
-  // spinner disappear while the native reads were still in flight).
+  // OS state (R7 review MINOR-2).
   await refreshPermissionCenter();
   await refreshPermissionStatus();
   void refreshPermissionBanner();
@@ -1146,9 +1113,6 @@ el("shortcut").addEventListener("click", () => {
 document.querySelectorAll<HTMLButtonElement>("[data-view]").forEach((button) => {
   button.addEventListener("click", () => showView(button.dataset.view as View));
 });
-el("unpin").addEventListener("click", () => {
-  el("pinnedPreview").hidden = true;
-});
 document
   .querySelectorAll<HTMLButtonElement>("#permissionBanner [data-banner-action]")
   .forEach((button) => {
@@ -1171,69 +1135,58 @@ el("historyClear").addEventListener("click", () => {
   void clearHistory();
 });
 
+// History preview actions + backdrop.
+document
+  .querySelectorAll<HTMLButtonElement>("#historyPreview [data-history-action]")
+  .forEach((button) => {
+    button.addEventListener("click", () =>
+      void runPreviewAction(button.dataset.historyAction ?? "", button),
+    );
+  });
+document
+  .getElementById("historyPreviewBackdrop")
+  ?.addEventListener("click", () => closeHistoryPreview());
+el<HTMLImageElement>("historyPreviewImage").addEventListener("error", () => {
+  showToast("截图原图加载失败", "error");
+});
+
 document.addEventListener("keydown", (event) => {
   if (recordingShortcut) {
     handleShortcutRecording(event);
     return;
   }
+  if (previewVisible()) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeHistoryPreview();
+      return;
+    }
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      stepHistoryPreview(-1);
+      return;
+    }
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      stepHistoryPreview(1);
+      return;
+    }
+  }
   const target = event.target as HTMLElement | null;
   const tagName = target?.tagName ?? "";
   if (["INPUT", "TEXTAREA", "SELECT"].includes(tagName)) return;
-  if (activeView === "settings") return;
-  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z" && !event.shiftKey) {
-    event.preventDefault();
-    editor.undo();
-    return;
-  }
-  if (event.key === "Escape") {
-    editor.exitCapture();
-    return;
-  }
-  if (event.key === "Enter" && preferences.enterCopy && editor.hasCapture()) {
-    if (palettePanel?.isOpen() && palettePanel.contains(event.target)) return;
-    const toolbar = el("captureToolbar");
-    if (!toolbar.classList.contains("hidden")) {
-      event.preventDefault();
-      void copyCurrent();
-    }
-  }
 });
 
 // Native events (no-ops in the browser preview).
-onCaptureCompleted((payload) => void handleCaptureCompleted(payload));
 onCaptureCancelled(() => {
-  showView("rack");
-  editor.notify("已取消截取 · 点击“截一张”重新开始");
   showToast("已取消截取", "info");
 });
 onCaptureFailed((payload) => {
-  showView("rack");
   showToast(payload.message || "截取失败", "error");
   if (payload.permission) {
     setPermissionLabel("需要屏幕录制权限", true);
     void refreshPermissionBanner();
     void refreshPermissionCenter();
-    editor.showResult(
-      "需要屏幕录制权限",
-      "Pinstill 需要系统的「屏幕录制」权限才能截图。点击下方按钮授权，或到系统设置中开启。",
-      {
-        label: "请求屏幕录制权限",
-        onClick: () => {
-          void (async () => {
-            try {
-              if (await requestScreenPermission()) {
-                setPermissionLabel("已准备好截取");
-                showToast("已获得屏幕录制权限，可以再截一次", "success");
-                return;
-              }
-            } catch {
-              // fall through to settings
-            }
-            await openPermissionSettings().catch(() => {});
-          })();
-        },
-      },
-    );
   }
   void showMainWindow().catch(() => {});
 });
@@ -1244,12 +1197,7 @@ onToast((payload) => showToast(payload.text, (payload.kind as "info" | "success"
 updateShortcutButton();
 applyPreferences();
 applyModeTexts();
-if (hasNative) {
-  editor.setEmpty();
-} else {
-  editor.setDemo();
-}
-void refreshHistory();
+showView("history");
 void refreshPermissionStatus();
 void refreshPermissionBanner();
 void pushNativeSettings();

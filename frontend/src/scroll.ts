@@ -7,8 +7,8 @@
 // - `Capture.SetScrollAuto(enabled)` toggles automatic scrolling (Go returns an
 //   error without macOS Accessibility permission; the page shows guidance and
 //   offers a button for `Capture.OpenScrollAccessibilitySettings()`);
-// - the action buttons call `Capture.FinishScroll(action)` (the 进编辑器 UI
-//   action maps to Go's "annotate"), and Go hides this window afterwards.
+// - the action buttons call `Capture.FinishScroll(action)` and Go hides this
+//   window afterwards.
 //
 // In a plain browser (no MyGo runtime) the bar runs a simulated session so the
 // page remains demoable without errors.
@@ -26,13 +26,12 @@ import {
 } from "./bridge";
 import { flashButtonSuccess, setButtonPending } from "./util";
 
-type ScrollUiAction = "copy" | "save" | "pin" | "editor" | "cancel";
+type ScrollUiAction = "copy" | "save" | "pin" | "cancel";
 
 const ACTION_DEFS: Array<{ action: ScrollUiAction; label: string; className?: string }> = [
   { action: "copy", label: "复制", className: "primary" },
   { action: "save", label: "保存" },
   { action: "pin", label: "贴图" },
-  { action: "editor", label: "进编辑器" },
   { action: "cancel", label: "取消", className: "cancel" },
 ];
 
@@ -40,7 +39,6 @@ const PENDING_TEXT: Record<ScrollUiAction, string> = {
   copy: "正在复制长图…",
   save: "正在保存长图…",
   pin: "正在固定长图…",
-  editor: "正在打开编辑器…",
   cancel: "已取消，正在关闭…",
 };
 
@@ -48,7 +46,6 @@ const DEMO_TEXT: Record<ScrollUiAction, string> = {
   copy: "复制长图到剪贴板",
   save: "打开保存对话框",
   pin: "创建桌面贴图",
-  editor: "交给主窗口编辑器",
   cancel: "取消本次滚动截图",
 };
 
@@ -265,7 +262,7 @@ async function runAction(uiAction: ScrollUiAction): Promise<void> {
   }
   progressEl.dataset.status = "running";
   progressEl.textContent = PENDING_TEXT[uiAction];
-  const goAction: FinishAnnotatedAction = uiAction === "editor" ? "annotate" : uiAction;
+  const goAction: FinishAnnotatedAction = uiAction;
   if (!hasNative) {
     demoFinish(uiAction);
     return;
