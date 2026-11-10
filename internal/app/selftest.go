@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,6 +42,8 @@ func (a *App) runSelfTest(mode string) {
 		a.selftestSettings()
 	case "perms":
 		a.selftestPerms()
+	case "palette":
+		a.selftestPalette()
 	case "deliver":
 		a.selftestDeliver()
 	case "uicapture":
@@ -1586,5 +1589,161 @@ func (a *App) selftestPerms() {
 		return
 	}
 	fmt.Printf("SELFTEST perms: checks=FAILED\n")
+	mygo.App.Exit(1)
+}
+
+// selftestPalette drives the R7.8 in-app colour palette panel: the overlay
+// toolbar opens it, a preset applies its colour and updates the hex/preview,
+// Esc closes only the panel (the annotation stays), the close button works,
+// and the main editor exposes the same panel on a delivered capture.
+func (a *App) selftestPalette() {
+	ok := true
+	failCheck := func(format string, args ...any) {
+		ok = false
+		fmt.Printf("SELFTEST palette: "+format+"\n", args...)
+	}
+	evalOverlay := func(js string) string {
+		v := a.overlayEval(js)
+		return strings.TrimSpace(fmt.Sprint(v))
+	}
+	evalMain := func(js string) string {
+		if a.main == nil {
+			return ""
+		}
+		v, err := a.main.Page().Eval(js)
+		if err != nil {
+			return fmt.Sprintf("error: %v", err)
+		}
+		return strings.TrimSpace(fmt.Sprint(v))
+	}
+
+	// 1. Overlay: drag a selection, get into the annotating state.
+	annotated := false
+	for attempt := 1; attempt <= 2 && !annotated; attempt++ {
+		if err := a.beginRegion(); err != nil {
+			fmt.Printf("SELFTEST palette: begin error %v\n", err)
+			break
+		}
+		time.Sleep(1200 * time.Millisecond)
+		if err := a.dragOverlaySelection(80, 90, 420, 320); err != nil {
+			fmt.Printf("SELFTEST palette: drag error %v\n", err)
+		}
+		if err := a.waitOverlayAnnotating(10 * time.Second); err == nil {
+			annotated = true
+			break
+		}
+		failCheck("annotating attempt %d failed", attempt)
+		a.cancelRegion()
+		time.Sleep(800 * time.Millisecond)
+	}
+	if !annotated {
+		fmt.Printf("SELFTEST palette: checks=FAILED\n")
+		mygo.App.Exit(1)
+		return
+	}
+
+	// 2. Open the panel from the overlay toolbar.
+	evalOverlay(`document.querySelector('[data-palette-toggle]')?.click(), 'ok'`)
+	time.Sleep(500 * time.Millisecond)
+	panelVisible := evalOverlay(`String((() => { const p = document.getElementById('colorPalettePanel'); return !!p && !p.hidden && p.offsetParent !== null; })())`)
+	presets := evalOverlay(`String(document.querySelectorAll('#colorPalettePanel button[data-palette-color]').length)`)
+	hasControls := evalOverlay(`String(!!document.getElementById('paletteSV') && !!document.getElementById('paletteHue') && !!document.getElementById('paletteHex') && !!document.getElementById('palettePreview'))`)
+	fmt.Printf("SELFTEST palette: open=%s presets=%s controls=%s\n", panelVisible, presets, hasControls)
+	if panelVisible != "true" {
+		failCheck("overlay palette panel did not open")
+	}
+	if n, err := strconv.Atoi(presets); err != nil || n < 32 {
+		failCheck("want >= 32 preset colours, got %q", presets)
+	}
+	if hasControls != "true" {
+		failCheck("palette controls (#paletteSV/#paletteHue/#paletteHex/#palettePreview) missing")
+	}
+
+	// 3. Pick the first preset: the hex field and the preview must follow.
+	picked := evalOverlay(`(() => { const b = document.querySelector('#colorPalettePanel button[data-palette-color]'); if (!b) return ''; const v = b.dataset.paletteColor; b.click(); return v; })()`)
+	time.Sleep(400 * time.Millisecond)
+	pickedHex := strings.ToLower(strings.TrimSpace(picked))
+	hexValue := strings.ToLower(evalOverlay(`String(document.getElementById('paletteHex')?.value ?? '')`))
+	previewBg := evalOverlay(`String(getComputedStyle(document.getElementById('palettePreview')).backgroundColor)`)
+	panelStillOpen := evalOverlay(`String(!document.getElementById('colorPalettePanel')?.hidden)`)
+	fmt.Printf("SELFTEST palette: picked=%s hex=%s preview=%s panel_open=%s\n", pickedHex, hexValue, previewBg, panelStillOpen)
+	if pickedHex == "" || hexValue != pickedHex {
+		failCheck("hex field did not follow the picked colour (picked %q, hex %q)", pickedHex, hexValue)
+	}
+	if previewBg == "" || previewBg == "rgba(0, 0, 0, 0)" || previewBg == "transparent" {
+		failCheck("palette preview did not update (background %q)", previewBg)
+	}
+	if panelStillOpen != "true" {
+		failCheck("panel closed after picking a colour")
+	}
+
+	// 4. Esc closes the panel only: the annotation toolbar must stay.
+	evalOverlay(`document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })), 'ok'`)
+	time.Sleep(400 * time.Millisecond)
+	panelAfterEsc := evalOverlay(`String(!!document.getElementById('colorPalettePanel') && !document.getElementById('colorPalettePanel').hidden)`)
+	toolbarStillShown := evalOverlay(`String((() => { const t = document.getElementById('annotationToolbar'); const c = document.getElementById('overlayCanvas'); return !!t && !t.hidden && !!c && !c.hidden; })())`)
+	fmt.Printf("SELFTEST palette: esc_panel_open=%s esc_kept_annotating=%s overlay_visible=%v\n", panelAfterEsc, toolbarStillShown, a.overlayVisible())
+	if panelAfterEsc != "false" {
+		failCheck("Esc did not close the palette panel")
+	}
+	if toolbarStillShown != "true" || !a.overlayVisible() || a.overlay == nil || !a.overlay.IsVisible() {
+		failCheck("Esc closed the capture instead of only the palette")
+	}
+
+	// 5. Reopen and close with the close button; the capture must survive.
+	evalOverlay(`document.querySelector('[data-palette-toggle]')?.click(), 'ok'`)
+	time.Sleep(400 * time.Millisecond)
+	reopened := evalOverlay(`String(!document.getElementById('colorPalettePanel')?.hidden)`)
+	evalOverlay(`document.querySelector('[data-palette-close]')?.click(), 'ok'`)
+	time.Sleep(400 * time.Millisecond)
+	closedByButton := evalOverlay(`String(!!document.getElementById('colorPalettePanel') && !document.getElementById('colorPalettePanel').hidden)`)
+	stillAnnotating := evalOverlay(`String((() => { const t = document.getElementById('annotationToolbar'); return !!t && !t.hidden; })())`)
+	fmt.Printf("SELFTEST palette: reopen=%s close_button_open=%s still_annotating=%s\n", reopened, closedByButton, stillAnnotating)
+	if reopened != "true" {
+		failCheck("palette panel did not reopen")
+	}
+	if closedByButton != "false" {
+		failCheck("close button did not hide the palette panel")
+	}
+	if stillAnnotating != "true" {
+		failCheck("closing the palette ended the annotation")
+	}
+	a.cancelRegion()
+	time.Sleep(900 * time.Millisecond)
+
+	// 6. Main editor: deliver a capture, then the same panel from the property bar.
+	disp := mygo.Screen.PrimaryDisplay()
+	b := disp.Bounds
+	region := capture.Rect{X: float64(b.X) + 160, Y: float64(b.Y) + 160, Width: 520, Height: 340}
+	go a.captureDeliver(region, "region")
+	time.Sleep(3200 * time.Millisecond)
+	editorToggle := evalMain(`String(!!document.querySelector('[data-palette-toggle]'))`)
+	evalMain(`document.querySelector('[data-palette-toggle]')?.click(), 'ok'`)
+	time.Sleep(500 * time.Millisecond)
+	editorPanel := evalMain(`String((() => { const p = document.getElementById('colorPalettePanel'); return !!p && !p.hidden && p.offsetParent !== null; })())`)
+	editorPresets := evalMain(`String(document.querySelectorAll('#colorPalettePanel button[data-palette-color]').length)`)
+	evalMain(`document.querySelector('[data-palette-close]')?.click(), 'ok'`)
+	time.Sleep(300 * time.Millisecond)
+	editorClosed := evalMain(`String(!!document.getElementById('colorPalettePanel') && !document.getElementById('colorPalettePanel').hidden)`)
+	fmt.Printf("SELFTEST palette: editor_toggle=%s editor_panel=%s editor_presets=%s editor_closed=%s\n", editorToggle, editorPanel, editorPresets, editorClosed)
+	if editorToggle != "true" {
+		failCheck("main editor has no [data-palette-toggle]")
+	}
+	if editorPanel != "true" {
+		failCheck("main editor palette panel did not open")
+	}
+	if n, err := strconv.Atoi(editorPresets); err != nil || n < 32 {
+		failCheck("main editor palette has %q presets, want >= 32", editorPresets)
+	}
+	if editorClosed != "false" {
+		failCheck("main editor palette panel did not close")
+	}
+
+	if ok {
+		fmt.Printf("SELFTEST palette: checks=ok\n")
+		mygo.App.Exit(0)
+		return
+	}
+	fmt.Printf("SELFTEST palette: checks=FAILED\n")
 	mygo.App.Exit(1)
 }

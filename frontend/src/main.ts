@@ -34,6 +34,7 @@ import {
 } from "./bridge";
 import { Editor } from "./editor";
 import { refreshPinstillIcons } from "./icons";
+import { ColorPalettePanel } from "./palette";
 import {
   DEFAULT_PREFERENCES,
   SETTINGS_KEY_LABELS,
@@ -89,6 +90,9 @@ let permissionRefreshSequence = 0;
 // Editor
 // ---------------------------------------------------------------------------
 
+// The shared in-app palette panel (R7.8); the editor's trigger closes over it.
+let palettePanel: ColorPalettePanel | null = null;
+
 const editor = new Editor({
   canvas: el<HTMLCanvasElement>("shotCanvas"),
   toolbar: el("captureToolbar"),
@@ -123,6 +127,12 @@ const editor = new Editor({
     download: () => exportCurrent(),
     clipboard: () => copyCurrent(),
   },
+  paletteToggle: (anchor) => palettePanel?.toggle(anchor),
+});
+
+palettePanel = new ColorPalettePanel({
+  getColor: () => editor.currentColor(),
+  onColor: (color, options) => editor.applyPaletteColor(color, options.remember),
 });
 
 // ---------------------------------------------------------------------------
@@ -281,6 +291,7 @@ function showPinnedPreview(dataURL: string): void {
 // ---------------------------------------------------------------------------
 
 async function startCapture(): Promise<void> {
+  palettePanel?.close();
   try {
     if (!hasNative) {
       showView("rack");
@@ -488,6 +499,7 @@ async function clearHistory(): Promise<void> {
 
 function showView(view: View): void {
   activeView = view;
+  palettePanel?.close();
   document.querySelectorAll<HTMLButtonElement>("[data-view]").forEach((button) => {
     button.classList.toggle("active", button.dataset.view === view);
   });
@@ -1178,6 +1190,7 @@ document.addEventListener("keydown", (event) => {
     return;
   }
   if (event.key === "Enter" && preferences.enterCopy && editor.hasCapture()) {
+    if (palettePanel?.isOpen() && palettePanel.contains(event.target)) return;
     const toolbar = el("captureToolbar");
     if (!toolbar.classList.contains("hidden")) {
       event.preventDefault();

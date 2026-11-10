@@ -34,12 +34,12 @@ import {
   type Rect,
 } from "./bridge";
 import {
-  isPresetColor,
   loadRecentColors,
   normalizeColor,
   PRESET_COLORS,
   rememberColor,
 } from "./colors";
+import { ColorPalettePanel, createPaletteToggleButton } from "./palette";
 import { DRAW_TOOLS, TOOLS, TOOL_ICONS, type ToolId } from "./tools";
 import { blobToBase64, decodeImageBlob, flashButtonSuccess, setButtonPending } from "./util";
 
@@ -160,7 +160,6 @@ const widthLabelText = el("overlayWidthLabelText");
 const textInput = el<HTMLInputElement>("overlayText");
 const toolbarStatus = el("overlayStatus");
 const demoToast = el("demoToast");
-const customColorInput = document.getElementById("customColor") as HTMLInputElement | null;
 const captureError = el("captureError");
 const captureErrorTitle = el("captureErrorTitle");
 const captureErrorText = el("captureErrorText");
@@ -224,6 +223,13 @@ let demoResetTimer: number | undefined;
 let recentColors: string[] = loadRecentColors();
 let inlineEditor: InlineTextEditor | null = null;
 
+// The shared in-app palette panel (R7.8). `setColor` is a hoisted function
+// declaration, so it is available when a colour is picked later.
+const palettePanel = new ColorPalettePanel({
+  getColor: () => color,
+  onColor: (next, options) => setColor(next, options.remember),
+});
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -252,6 +258,10 @@ function svgIcon(name: string): string {
 
 function isInsideToolbar(target: EventTarget | null): boolean {
   return target instanceof Element && Boolean(target.closest("#annotationToolbar"));
+}
+
+function isInsidePalette(target: EventTarget | null): boolean {
+  return target instanceof Element && Boolean(target.closest("#colorPalettePanel"));
 }
 
 function isInsideTextEditor(target: EventTarget | null): boolean {
@@ -511,16 +521,15 @@ function renderPalette(): void {
     colorsHost.append(button);
   }
 
-  const custom = document.createElement("button");
-  custom.type = "button";
-  custom.className = "swatch custom";
+  // R7.8: the old "+" custom swatch is now the palette-panel trigger; it keeps
+  // `data-color-custom` so earlier hooks stay valid.
+  const custom = createPaletteToggleButton("swatch custom");
   custom.dataset.colorCustom = "true";
-  custom.setAttribute("aria-label", "自定义颜色");
-  custom.title = "自定义颜色";
-  custom.addEventListener("click", () => customColorInput?.click());
+  custom.addEventListener("click", () => palettePanel.toggle(custom));
   colorsHost.append(custom);
 
-  for (const recent of recentColors) {
+  // The quick row stays compact; the panel shows all MAX_RECENT_COLORS.
+  for (const recent of recentColors.slice(0, 4)) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "swatch";
@@ -537,12 +546,12 @@ function renderPalette(): void {
 function updatePaletteSelection(): void {
   const current = color.toLowerCase();
   for (const button of colorsHost.querySelectorAll<HTMLElement>(".swatch")) {
+    // The palette trigger is a button, not a colour choice.
+    if (button.hasAttribute("data-palette-toggle")) continue;
     let selected = false;
     if (button.dataset.color) selected = button.dataset.color.toLowerCase() === current;
     else if (button.dataset.colorRecent) {
       selected = button.dataset.colorRecent.toLowerCase() === current;
-    } else if (button.dataset.colorCustom) {
-      selected = !isPresetColor(current) && !recentColors.includes(current);
     }
     button.classList.toggle("selected", selected);
     button.setAttribute("aria-pressed", String(selected));
@@ -637,6 +646,7 @@ function clearActionFeedback(): void {
 
 function hideToolbar(): void {
   toolbar.hidden = true;
+  palettePanel.close();
   clearActionFeedback();
   setToolbarPending(false);
   setToolbarStatus("");
@@ -893,6 +903,7 @@ async function finishWith(
 ): Promise<void> {
   if (phase === "finishing") return;
   phase = "finishing";
+  palettePanel.close();
   const button = actionButton(uiAction);
   setButtonPending(button, true);
   setToolbarPending(true, PENDING_LABELS[uiAction]);
@@ -1037,6 +1048,7 @@ function canvasPoint(event: PointerEvent): { x: number; y: number } | null {
 
 window.addEventListener("pointerdown", (event) => {
   if (isInsideTextEditor(event.target)) return;
+  if (isInsidePalette(event.target)) return;
   if (phase === "annotating") {
     if (isInsideToolbar(event.target)) return;
     if (event.button !== 0 || !engine) return;
@@ -1146,6 +1158,7 @@ window.addEventListener("keydown", (event) => {
     return;
   }
   if (event.key === "Enter" && phase === "annotating") {
+    if (palettePanel.isOpen() && palettePanel.contains(event.target)) return;
     event.preventDefault();
     void runAction("copy");
   }
@@ -1168,13 +1181,6 @@ captureErrorSettings.addEventListener("click", () => {
 });
 captureErrorRetry.addEventListener("click", () => void retryCapture());
 captureErrorCancel.addEventListener("click", () => dismissCaptureFailure());
-customColorInput?.addEventListener("input", () => {
-  if (customColorInput) setColor(customColorInput.value);
-});
-customColorInput?.addEventListener("change", () => {
-  if (customColorInput) setColor(customColorInput.value, true);
-});
-
 onOverlayShown((payload) => {
   if (payload && Number.isFinite(payload.width) && payload.width > 0) displayInfo = payload;
   // PrepareSelection re-shows the overlay without overlay:shown; if this is a

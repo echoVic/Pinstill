@@ -666,3 +666,47 @@ R6 的完整替换漏了两处旧名首字母 **T** 的图形残留（文字已�
 - MINOR-2（权限「重新检测」按钮 pending 在原生读取完成前被清除）：本轮已修——`main.ts` 把 `setButtonPending(false)` 移到 `refreshPermissionCenter/refreshPermissionStatus/refreshPermissionBanner` 之后。
 - NIT-1（非 darwin 登录项错误未导出为 `ErrUnsupported`）：语义一致，保留实现命名，R7.1 表格已注明。
 - NIT-2（`selftestPerms` 只打印未断言 banner hidden）：本轮已修——断言 banner 显隐与屏幕录制授权状态一致。
+
+---
+
+# R7.8 应用内调色板面板（用户试用反馈，2026-11-10 深夜）
+
+用户反馈「调色盘还是没有」。R5 做的「8 个预设色点 + 原生 `<input type="color">` 自定义取色 + 最近 4 色」不够：要一个**应用内自绘的完整调色板面板**，不依赖系统原生取色器（WKWebView 行为不可控），overlay 工具栏与主编辑器属性条共用同一套 UI/状态。
+
+## 交互（冻结）
+
+- 触发按钮：`[data-palette-toggle]`（overlay 工具栏与主编辑器属性条各一个，aria-label=「调色板」；overlay 里「+」自定义色块改为该按钮的别名，保留既有 `data-color-custom` 属性）。
+- 面板：`#colorPalettePanel`，全局单例（同一时刻最多一个），暗色暖调与现有设计一致；打开时锚定在触发按钮附近并夹在窗口可视区内。
+- 面板内容：
+  1. 预设色网格：≥ 32 个色块，`button[data-palette-color="#rrggbb"]`（值=应用颜色，小写 hex）。
+  2. 自定义区：饱和度/明度方块 `#paletteSV`（canvas，pointer 拖动取色）+ 色相滑条 `#paletteHue`（input[type=range]，0–360）+ 预览色块 `#palettePreview` + HEX 输入 `#paletteHex`（合法 6 位 hex 回车应用，非法不应用）。
+  3. 最近颜色：最多 8 个 `[data-palette-recent="#rrggbb"]`，复用 `colors.ts` 的 `pinstill.recentColors` 存储（MAX_RECENT_COLORS 提到 8）。
+  4. 关闭：`[data-palette-close]`；面板外点击关闭。
+- 行为：
+  - 选择任一颜色**立即应用**到当前工具并写入最近色（overlay 作用于 Engine，主编辑器作用于 editor 当前色）。
+  - **Esc 优先级**：面板打开时 Esc 只关闭面板，不取消截图/不退出标注态；面板关闭后 Esc 行为不变。
+  - overlay 退出标注态/取消截图时面板自动关闭；主窗口切视图时关闭。
+- 移除对 `<input type="color">` 的依赖（可保留隐藏 input 作兜底，但主路径自绘）。
+- 现有快捷色点行保留不变（仍可直接点）。
+
+## DOM hooks（frozen，selftest/headless 断言用）
+
+`[data-palette-toggle]`、`#colorPalettePanel`、`button[data-palette-color]`（≥32）、`#paletteSV`、`#paletteHue`、`#paletteHex`、`#palettePreview`、`[data-palette-recent]`、`[data-palette-close]`。
+
+## 验证（Lead）
+
+- `PINSTILL_SELFTEST=palette`：overlay 拖选进入标注态 → 点 `[data-palette-toggle]` → 断言面板可见、预设 ≥32；点第一个预设色 → 面板仍开、`#paletteHex` 值等于该色、工具栏当前色选中态更新；Esc → 面板隐藏且 overlay 仍在标注态；再开面板点 `[data-palette-close]` 隐藏；切到主窗口编辑器断言 `[data-palette-toggle]` 与面板可用。打印 `SELFTEST palette: presets=N hex=#... applied=true esc_kept_annotating=true editor=true checks=ok`。
+- `work/e2e.sh` 增加 palette 步骤；完整 e2e 全绿；前端 headless 四页无 console 错误。
+- 前端 build:web 四页通过；不得回归 flow/annotate/pin 既有 e2e 步骤（工具栏按钮布局变更是风险点）。
+
+## 非目标
+
+颜色透明度/渐变、取色吸管（屏幕取色）、自定义色板保存/命名（后续可做）。
+
+## R7.8 实测结论（Lead，2026-11-10 深夜）
+
+- **应用内调色板面板上线**：`frontend/src/palette.ts` 自绘面板（不依赖 WKWebView 原生取色器）——40 个预设色网格 + `#paletteSV` 饱和度/明度拖动 + `#paletteHue` 色相滑条 + `#paletteHex` HEX 输入 + `#palettePreview` 预览 + 最近 8 色（与两页共享的 `pinstill.recentColors` 复用）；overlay 工具栏与主编辑器属性条的「+」自定义色块改为 `[data-palette-toggle]`（保留 `data-color-custom`，工具栏按钮数量/布局不变）。
+- **Esc 优先级正确**：面板打开时 Esc 只关面板并 `preventDefault`，不取消截图/不退出标注态；面板关闭后 Esc 行为不变。点面板外、关闭按钮、切视图、开始新截图都会收起面板。
+- **验证**：`PINSTILL_SELFTEST=palette` 连过——open=true / presets=40 / picked=#e56e48 → hex 回读一致 / preview=rgb(229,110,72) / esc_kept_annotating=true / close 按钮与重开正常 / 主编辑器 editor_toggle=true、editor_panel=true、editor_presets=40 且可关闭；`work/e2e.sh` 新增 palette 步骤后完整 e2e（隔离数据目录）**21 步 ALL CHECKS PASSED**；flow/annotate/pin 等既有步骤无回归。
+- README 调色板描述与 README 截图已更新；未桥接的浏览器预览同样可开关/选色/拖动/输入/持久化。
+- 非目标（沿用 R7.8 契约）：颜色透明度/渐变、屏幕吸管取色、自定义色板保存命名。

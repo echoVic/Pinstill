@@ -15,7 +15,6 @@ import {
   type ShapeRenderStyle,
 } from "./annotate";
 import {
-  isPresetColor,
   loadRecentColors,
   normalizeColor,
   PRESET_COLORS,
@@ -23,6 +22,7 @@ import {
 } from "./colors";
 import { drawDemoScene } from "./demo";
 import { refreshPinstillIcons } from "./icons";
+import { createPaletteToggleButton } from "./palette";
 import type { Preferences } from "./settings";
 import { formatAccelerator } from "./settings";
 import { isDrawTool, TOOLS, TOOL_ICONS, type ToolId } from "./tools";
@@ -51,6 +51,8 @@ export interface EditorOptions {
   captureHint: HTMLElement;
   getPreferences: () => Preferences;
   actions: EditorActions;
+  /** Opens the shared in-app palette panel anchored to the trigger button. */
+  paletteToggle?: (anchor: HTMLElement) => void;
 }
 
 interface ResultAction {
@@ -87,7 +89,7 @@ export class Editor {
   private scale = 1;
   private inlineEditor: InlineTextEditor | null = null;
   private recentColors: string[] = loadRecentColors();
-  private readonly customColorInput: HTMLInputElement | null;
+  private readonly paletteToggle?: (anchor: HTMLElement) => void;
 
   constructor(options: EditorOptions) {
     this.canvas = options.canvas;
@@ -102,15 +104,7 @@ export class Editor {
     this.captureHintEl = options.captureHint;
     this.getPreferences = options.getPreferences;
     this.actions = options.actions;
-    this.customColorInput = document.getElementById("customColor") as HTMLInputElement | null;
-    if (this.customColorInput) {
-      this.customColorInput.addEventListener("input", () => {
-        if (this.customColorInput) this.setColor(this.customColorInput.value);
-      });
-      this.customColorInput.addEventListener("change", () => {
-        if (this.customColorInput) this.setColor(this.customColorInput.value, true);
-      });
-    }
+    this.paletteToggle = options.paletteToggle;
 
     this.buildToolbar();
     this.bindCanvasEvents();
@@ -463,43 +457,72 @@ export class Editor {
   private renderColorPalette(root: HTMLElement): void {
     const palette = document.createElement("span");
     palette.className = "color-palette";
-    const current = this.color.toLowerCase();
-    const custom = !isPresetColor(current) && !this.recentColors.includes(current);
 
     for (const preset of PRESET_COLORS) {
       const button = document.createElement("button");
       button.type = "button";
-      button.className = `color-swatch${preset.toLowerCase() === current ? " selected" : ""}`;
+      button.className = "color-swatch";
       button.dataset.color = preset;
       button.style.setProperty("--swatch", preset);
       button.setAttribute("aria-label", `颜色 ${preset}`);
-      button.setAttribute("aria-pressed", String(preset.toLowerCase() === current));
       button.addEventListener("click", () => this.setColor(preset));
       palette.append(button);
     }
 
-    const customButton = document.createElement("button");
-    customButton.type = "button";
-    customButton.className = `color-swatch custom${custom ? " selected" : ""}`;
-    customButton.dataset.colorCustom = "true";
-    customButton.setAttribute("aria-label", "自定义颜色");
-    customButton.setAttribute("aria-pressed", String(custom));
-    customButton.title = "自定义颜色";
-    customButton.addEventListener("click", () => this.customColorInput?.click());
-    palette.append(customButton);
+    // R7.8: the custom swatch opens the in-app palette panel instead of the
+    // WKWebView-native colour picker. data-color-custom is kept for older hooks.
+    const paletteButton = createPaletteToggleButton("color-swatch custom");
+    paletteButton.dataset.colorCustom = "true";
+    paletteButton.addEventListener("click", () => this.paletteToggle?.(paletteButton));
+    palette.append(paletteButton);
 
-    for (const recent of this.recentColors) {
+    // The quick row stays compact; the panel shows all MAX_RECENT_COLORS.
+    for (const recent of this.recentColors.slice(0, 4)) {
       const button = document.createElement("button");
       button.type = "button";
-      button.className = `color-swatch${recent === current ? " selected" : ""}`;
+      button.className = "color-swatch";
       button.dataset.colorRecent = recent;
       button.style.setProperty("--swatch", recent);
       button.setAttribute("aria-label", `最近使用颜色 ${recent}`);
-      button.setAttribute("aria-pressed", String(recent === current));
       button.addEventListener("click", () => this.setColor(recent));
       palette.append(button);
     }
     root.append(palette);
+    this.updateColorSelection();
+  }
+
+  /** Re-marks the quick swatches (colors + recents) for the current colour. */
+  private updateColorSelection(): void {
+    const current = this.color.toLowerCase();
+    for (const button of this.propertiesRoot.querySelectorAll<HTMLButtonElement>(
+      ".color-swatch",
+    )) {
+      if (button.hasAttribute("data-palette-toggle")) continue;
+      let selected = false;
+      if (button.dataset.color) selected = button.dataset.color.toLowerCase() === current;
+      else if (button.dataset.colorRecent) {
+        selected = button.dataset.colorRecent.toLowerCase() === current;
+      }
+      button.classList.toggle("selected", selected);
+      button.setAttribute("aria-pressed", String(selected));
+    }
+  }
+
+  /**
+   * Applies a colour chosen in the shared palette panel without rebuilding the
+   * property bar (the panel stays anchored and open while the user picks).
+   */
+  applyPaletteColor(next: string, remember = true): void {
+    const normalized = normalizeColor(next);
+    if (!normalized) return;
+    this.color = normalized;
+    if (remember) this.recentColors = rememberColor(normalized);
+    this.updateColorSelection();
+  }
+
+  /** The colour newly drawn annotations will use. */
+  currentColor(): string {
+    return this.color;
   }
 
   private setColor(next: string, remember = false): void {

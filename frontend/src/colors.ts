@@ -1,8 +1,8 @@
-// Shared colour palette for the annotation tools (overlay + main editor).
+// Shared colour state for the annotation tools (overlay + main editor).
 //
-// Preset swatches, a native colour picker (`<input type="color">`) for custom
-// colours, and the most recently used custom colours persisted in
-// localStorage so both pages share the same palette.
+// The quick swatch row, the presets every page shares, and the recently used
+// colours persisted in localStorage (up to MAX_RECENT_COLORS). The full
+// in-app palette panel lives in palette.ts and reuses this storage.
 
 export const PRESET_COLORS: ReadonlyArray<string> = [
   "#e56e48",
@@ -16,7 +16,7 @@ export const PRESET_COLORS: ReadonlyArray<string> = [
 ];
 
 export const RECENT_COLORS_KEY = "pinstill.recentColors";
-export const MAX_RECENT_COLORS = 4;
+export const MAX_RECENT_COLORS = 8;
 
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
 
