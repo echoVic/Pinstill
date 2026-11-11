@@ -812,6 +812,15 @@ interface SelectionResizeState {
   rect: Rect;
 }
 
+function sameRect(a: Rect, b: Rect): boolean {
+  return (
+    Math.abs(a.x - b.x) < 0.5 &&
+    Math.abs(a.y - b.y) < 0.5 &&
+    Math.abs(a.width - b.width) < 0.5 &&
+    Math.abs(a.height - b.height) < 0.5
+  );
+}
+
 const MIN_RESIZE = 24;
 let selectionResize: SelectionResizeState | null = null;
 
@@ -1303,6 +1312,10 @@ function startSelectionResize(event: PointerEvent, corner: SelectionResizeState[
     startY: event.clientY,
     rect: { ...committedRect },
   };
+  // Mainstream behaviour: while the region is adjusted the selection shows the
+  // live screen, not a stretched copy of the old capture. The canvas (and the
+  // annotations on it) are hidden until the new region is captured on release.
+  canvas.hidden = true;
   selection.classList.add("resizing");
   event.preventDefault();
   event.stopPropagation();
@@ -1448,9 +1461,17 @@ window.addEventListener("pointermove", (event) => {
 
 window.addEventListener("pointerup", (event) => {
   if (selectionResize) {
-    const rect = { ...(committedRect ?? selectionResize.rect) };
+    const original = selectionResize.rect;
+    const rect = { ...(committedRect ?? original) };
     selectionResize = null;
     selection.classList.remove("resizing");
+    if (sameRect(original, rect)) {
+      // A click without movement: nothing to re-capture.
+      canvas.hidden = false;
+      positionSelection(rect);
+      updateSizeBadge(rect);
+      return;
+    }
     void recaptureSelection(rect);
     return;
   }
