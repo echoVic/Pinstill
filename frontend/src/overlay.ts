@@ -26,6 +26,7 @@ import {
   openPermissionSettings,
   overlayInfo,
   prepareSelection,
+  prepareSelectionFast,
   settings,
   startScroll,
   type FinishAnnotatedAction,
@@ -139,6 +140,10 @@ const el = <T extends HTMLElement = HTMLElement>(id: string): T => {
 };
 
 const dim = el("dim");
+const maskTop = el("maskTop");
+const maskBottom = el("maskBottom");
+const maskLeft = el("maskLeft");
+const maskRight = el("maskRight");
 const selection = el("selection");
 const canvas = el<HTMLCanvasElement>("overlayCanvas");
 const prepareState = el("prepareState");
@@ -389,10 +394,43 @@ function updateSizeBadge(rect: Rect, toolbarAbove = false): void {
   sizeBadge.style.top = `${top}px`;
 }
 
+// Four cheap panels darken everything outside the selection. They replace a
+// single huge box-shadow, which made dragging/resizing repaint the whole
+// screen and feel laggy.
+function positionMasks(rect: Rect | null): void {
+  const vw = viewportWidth();
+  const vh = viewportHeight();
+  if (!rect) {
+    maskTop.hidden = true;
+    maskBottom.hidden = true;
+    maskLeft.hidden = true;
+    maskRight.hidden = true;
+    return;
+  }
+  const x = clamp(rect.x, 0, vw);
+  const y = clamp(rect.y, 0, vh);
+  const w = clamp(rect.width, 0, vw - x);
+  const h = clamp(rect.height, 0, vh - y);
+  const place = (el: HTMLElement, left: number, top: number, width: number, height: number) => {
+    const visible = width > 0.5 && height > 0.5;
+    el.hidden = !visible;
+    if (!visible) return;
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+    el.style.width = `${width}px`;
+    el.style.height = `${height}px`;
+  };
+  place(maskTop, 0, 0, vw, y);
+  place(maskBottom, 0, y + h, vw, vh - (y + h));
+  place(maskLeft, 0, y, x, h);
+  place(maskRight, x + w, y, vw - (x + w), h);
+  dim.hidden = true;
+}
+
 function renderSelection(): void {
   const rect = selectionRect();
   selection.hidden = false;
-  dim.hidden = true;
+  positionMasks(rect);
   selection.style.left = `${rect.x}px`;
   selection.style.top = `${rect.y}px`;
   selection.style.width = `${rect.width}px`;
@@ -402,7 +440,7 @@ function renderSelection(): void {
 
 function positionSelection(rect: Rect): void {
   selection.hidden = false;
-  dim.hidden = true;
+  positionMasks(rect);
   selection.style.left = `${rect.x}px`;
   selection.style.top = `${rect.y}px`;
   selection.style.width = `${rect.width}px`;
@@ -1056,7 +1094,7 @@ async function beginAnnotation(payload: OverlayCapture): Promise<void> {
   }
 }
 
-async function prepareSelectionFor(rect: Rect): Promise<void> {
+async function prepareSelectionFor(rect: Rect, fast = false): Promise<void> {
   phase = "preparing";
   toolbarMoved = false;
   lastCanvasClick = null;
@@ -1071,14 +1109,26 @@ async function prepareSelectionFor(rect: Rect): Promise<void> {
   captureHandled = false;
   handledCaptureId = "";
   selection.classList.add("capturing");
-  prepareState.hidden = true;
+  // The initial capture is seamless (chrome-free frame); a re-capture after
+  // adjusting the region shows the small spinner so the short wait reads as
+  // intentional instead of a blank gap.
+  prepareState.hidden = !fast;
   hint.hidden = true;
   crosshairV.hidden = true;
   crosshairH.hidden = true;
   sizeBadge.hidden = true;
   demoToast.hidden = true;
   try {
-    const payload = await prepareSelection(rect);
+    let payload: OverlayCapture;
+    if (fast) {
+      // Let the browser paint the chrome-free frame before Go grabs the screen.
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
+      payload = await prepareSelectionFast(rect);
+    } else {
+      payload = await prepareSelection(rect);
+    }
     handleCapture(payload);
   } catch (error) {
     if (captureHandled) return;
@@ -1105,6 +1155,7 @@ function showCaptureFailure(rawMessage: string, permission: boolean): void {
   phase = "finishing";
   hideToolbar();
   selection.classList.remove("capturing");
+  positionMasks(null);
   selection.hidden = true;
   dim.hidden = false;
   sizeBadge.hidden = true;
@@ -1233,6 +1284,7 @@ function reset(): void {
     editor.cancel();
   }
   hideCaptureError();
+  positionMasks(null);
   selection.classList.remove("capturing");
   if (transientTimer) window.clearTimeout(transientTimer);
   if (demoResetTimer) window.clearTimeout(demoResetTimer);
@@ -1247,6 +1299,7 @@ function reset(): void {
   startY = 0;
   currentX = 0;
   currentY = 0;
+  positionMasks(null);
   dim.hidden = false;
   selection.hidden = true;
   canvas.hidden = true;
@@ -1282,6 +1335,7 @@ function cancelRegionFlow(): void {
   if (transientTimer) window.clearTimeout(transientTimer);
   phase = "finishing";
   hideToolbar();
+  positionMasks(null);
   selection.hidden = true;
   sizeBadge.hidden = true;
   crosshairV.hidden = true;
@@ -1346,14 +1400,70 @@ function resizeRectFor(event: PointerEvent): Rect {
   return { x: x1, y: y1, width: x2 - x1, height: y2 - y1 };
 }
 
-async function recaptureSelection(rect: Rect): Promise<void> {
+/** Rebuilds the drawing engine around the current canvas content (used after a
+ * local crop, without a screen grab). */
+function installEngineForCanvas(base: HTMLCanvasElement, displayWidth: number): void {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  engine = new AnnotationEngine({
+    canvas,
+    getStyle: () => ({ color, width: penWidth, entry }),
+    getWatermarkOpacity: () => watermarkOpacity,
+    onDraw: () => updateToolbarState(),
+  });
+  engine.setBaseRenderer(() => {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(base, 0, 0, canvas.width, canvas.height);
+  });
+  engine.setScale(canvas.width / Math.max(1, displayWidth));
+  engine.setTool(currentTool);
+  engine.reset();
+  engine.redraw();
+}
+
+async function recaptureSelection(rect: Rect, previous: Rect): Promise<void> {
   if (phase !== "annotating") return;
   inlineEditor?.cancel();
   inlineEditor = null;
+  const hadAnnotations = engine?.canUndo() ?? false;
+  // Shrinking is instant: the new region lies inside the capture we already
+  // have, so crop it locally instead of grabbing the screen again.
+  if (
+    previous &&
+    rect.x >= previous.x - 0.5 &&
+    rect.y >= previous.y - 0.5 &&
+    rect.x + rect.width <= previous.x + previous.width + 0.5 &&
+    rect.y + rect.height <= previous.y + previous.height + 0.5 &&
+    canvas.width > 0 &&
+    canvas.height > 0
+  ) {
+    const scaleX = canvas.width / previous.width;
+    const scaleY = canvas.height / previous.height;
+    const sx = Math.max(0, Math.round((rect.x - previous.x) * scaleX));
+    const sy = Math.max(0, Math.round((rect.y - previous.y) * scaleY));
+    const sw = Math.max(1, Math.min(canvas.width - sx, Math.round(rect.width * scaleX)));
+    const sh = Math.max(1, Math.min(canvas.height - sy, Math.round(rect.height * scaleY)));
+    const cropped = document.createElement("canvas");
+    cropped.width = sw;
+    cropped.height = sh;
+    const cropCtx = cropped.getContext("2d");
+    cropCtx?.drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+    canvas.width = sw;
+    canvas.height = sh;
+    canvas.hidden = false;
+    committedRect = rect;
+    selection.classList.remove("capturing");
+    positionSelection(rect);
+    installEngineForCanvas(cropped, rect.width);
+    updateToolbarState();
+    if (hadAnnotations) {
+      showTransient("选区已调整 · 原有标注已重置", 2200);
+    }
+    return;
+  }
   committedRect = rect;
   positionSelection(rect);
-  const hadAnnotations = engine?.canUndo() ?? false;
-  await prepareSelectionFor(rect);
+  await prepareSelectionFor(rect, true);
   if (hadAnnotations && phase === "annotating") {
     showTransient("选区已调整 · 已重新截取（原有标注已重置）", 2200);
   }
@@ -1472,7 +1582,7 @@ window.addEventListener("pointerup", (event) => {
       updateSizeBadge(rect);
       return;
     }
-    void recaptureSelection(rect);
+    void recaptureSelection(rect, original);
     return;
   }
   if (phase === "selecting" && event.button === 0) {

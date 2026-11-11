@@ -1759,6 +1759,7 @@ func (a *App) selftestResize() {
 		window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, clientX: cx + 120, clientY: cy + 80, pointerId: 11, pointerType: 'mouse', button: 0 }));
 		return 'dragged';
 	})()`)
+	dragDone := time.Now()
 	// The page re-captures the adjusted region through Go; wait for the new
 	// annotation state and read the canvas size again.
 	recaptured := false
@@ -1767,7 +1768,7 @@ func (a *App) selftestResize() {
 		if err := a.waitOverlayAnnotating(2 * time.Second); err == nil {
 			after := eval(`String((() => { const c = document.getElementById('overlayCanvas'); return c ? c.width + 'x' + c.height : 'missing'; })())`)
 			if after != before && after != "missing" {
-				fmt.Printf("SELFTEST resize: handles=%s before=%s after=%s dragged=%s\n", handles, before, after, dragged)
+				fmt.Printf("SELFTEST resize: handles=%s before=%s after=%s recapture_ms=%d dragged=%s\n", handles, before, after, time.Since(dragDone).Milliseconds(), dragged)
 				recaptured = true
 				break
 			}
@@ -1777,7 +1778,33 @@ func (a *App) selftestResize() {
 	if !recaptured {
 		fmt.Printf("SELFTEST resize: handles=%s before=%s dragged=%s after=unchanged\n", handles, before, dragged)
 	}
-	if handles != "4" || before == "missing" || dragged != "dragged" || !recaptured {
+	// Now shrink the region (inside the current capture): the page crops
+	// locally instead of grabbing the screen again, so this should be fast.
+	beforeShrink := eval(`String((() => { const c = document.getElementById('overlayCanvas'); return c ? c.width + 'x' + c.height : 'missing'; })())`)
+	shrinkStart := time.Now()
+	shrinkDragged := eval(`(() => {
+		const handle = document.querySelector('[data-resize="nw"]');
+		if (!handle) return 'missing';
+		const r = handle.getBoundingClientRect();
+		const cx = r.left + r.width / 2;
+		const cy = r.top + r.height / 2;
+		handle.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, clientX: cx, clientY: cy, pointerId: 12, pointerType: 'mouse', button: 0 }));
+		window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, cancelable: true, clientX: cx + 100, clientY: cy + 60, pointerId: 12, pointerType: 'mouse' }));
+		window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, clientX: cx + 100, clientY: cy + 60, pointerId: 12, pointerType: 'mouse', button: 0 }));
+		return 'dragged';
+	})()`)
+	afterShrink := beforeShrink
+	shrinkDeadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(shrinkDeadline) {
+		afterShrink = eval(`String((() => { const c = document.getElementById('overlayCanvas'); return c ? c.width + 'x' + c.height : 'missing'; })())`)
+		if afterShrink != beforeShrink && afterShrink != "missing" {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	shrinkMS := time.Since(shrinkStart).Milliseconds()
+	fmt.Printf("SELFTEST resize: shrink before=%s after=%s shrink_ms=%d dragged=%s\n", beforeShrink, afterShrink, shrinkMS, shrinkDragged)
+	if handles != "4" || before == "missing" || dragged != "dragged" || !recaptured || shrinkDragged != "dragged" || afterShrink == beforeShrink || afterShrink == "missing" {
 		fmt.Printf("SELFTEST resize: checks=FAILED\n")
 		a.cancelRegion()
 		mygo.App.Exit(1)

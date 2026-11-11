@@ -144,6 +144,7 @@ step "Selftest: resize the captured selection"
 PINSTILL_SELFTEST=resize "$APP" 2>&1 | tee /tmp/pinstill-selftest-resize.log
 sleep 1.0
 expect 'SELFTEST resize: handles=4 before=[0-9][0-9]*x[0-9][0-9]* after=[0-9][0-9]*x[0-9][0-9]*' /tmp/pinstill-selftest-resize.log
+expect 'SELFTEST resize: shrink before=[0-9][0-9]*x[0-9][0-9]* after=[0-9][0-9]*x[0-9][0-9]*' /tmp/pinstill-selftest-resize.log
 expect 'SELFTEST resize: checks=ok' /tmp/pinstill-selftest-resize.log
 
 step "Selftest: desktop pin interactions"

@@ -29,11 +29,17 @@
   .dim { position: fixed; inset: 0; background: var(--mask); }
 
   /* The selection: during annotation it holds the captured image canvas. */
+  .mask {
+    position: fixed;
+    background: var(--mask);
+    pointer-events: none;
+    z-index: 1;
+  }
   .selection {
     position: fixed;
     background: transparent;
     border: 1px solid var(--amber);
-    box-shadow: 0 0 0 200vmax var(--mask);
+    z-index: 2;
   }
   .selection::before,
   .selection::after {
@@ -464,6 +470,10 @@
 </head>
 <body>
   <div class="dim" id="dim"></div>
+  <div class="mask" id="maskTop" hidden></div>
+  <div class="mask" id="maskBottom" hidden></div>
+  <div class="mask" id="maskLeft" hidden></div>
+  <div class="mask" id="maskRight" hidden></div>
   <div class="selection" id="selection" hidden>
     <canvas id="overlayCanvas" aria-label="截图标注画布" hidden></canvas>
     <div class="resize-handle" data-resize="nw" aria-hidden="true"></div>

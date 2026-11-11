@@ -230,6 +230,13 @@ export function prepareSelection(rect: Rect): Promise<OverlayCapture> {
   return call<OverlayCapture>("Capture.PrepareSelection", rect);
 }
 
+/** Re-capture after the page already hid its chrome (used when resizing the
+ * selection): skips most of the compositor wait so the new image appears fast. */
+export function prepareSelectionFast(rect: Rect): Promise<OverlayCapture> {
+  if (!hasNative) return Promise.resolve(browserCapture(rect));
+  return call<OverlayCapture>("Capture.PrepareSelectionFast", rect);
+}
+
 export function finishAnnotated(
   action: FinishAnnotatedAction,
   dataBase64: string,

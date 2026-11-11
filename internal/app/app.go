@@ -529,6 +529,17 @@ func (a *App) captureRegion(region capture.Rect, opts capture.CaptureOptions) ([
 // interior is transparent, so the capture sees the screen behind it. This
 // keeps the flow flicker-free.
 func (a *App) prepareSelection(rect Rect) (OverlayCapturePayload, error) {
+	return a.prepareSelectionWithDelay(rect, 90*time.Millisecond)
+}
+
+// prepareSelectionFast is used when the page already hid its chrome and waited
+// for a frame: it only keeps a short compositor delay so the re-captured image
+// shows up quickly after a region adjustment.
+func (a *App) prepareSelectionFast(rect Rect) (OverlayCapturePayload, error) {
+	return a.prepareSelectionWithDelay(rect, 20*time.Millisecond)
+}
+
+func (a *App) prepareSelectionWithDelay(rect Rect, chromeDelay time.Duration) (OverlayCapturePayload, error) {
 	a.mu.Lock()
 	disp := a.overlayDisplay
 	origin := a.overlayRect
@@ -555,7 +566,7 @@ func (a *App) prepareSelection(rect Rect) (OverlayCapturePayload, error) {
 	}
 	// Give the page a moment to hide its selection border and badges so they
 	// are not part of the capture.
-	time.Sleep(90 * time.Millisecond)
+	time.Sleep(chromeDelay)
 	s := a.settingsSnapshot()
 	pngBytes, err := a.captureRegion(region, capture.CaptureOptions{IncludeCursor: s.IncludeCursor})
 	if err != nil {

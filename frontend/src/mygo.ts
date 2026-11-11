@@ -272,6 +272,13 @@ export const Capture = {
     return call("Capture.PrepareSelection", rect);
   },
   /**
+   * PrepareSelectionFast re-captures a region the page has already prepared
+   * (chrome hidden, one frame awaited): used when adjusting the selection.
+   */
+  prepareSelectionFast(rect: Rect): Promise<OverlayCapturePayload> {
+    return call("Capture.PrepareSelectionFast", rect);
+  },
+  /**
    * RequestScreenPermission asks the OS for screen recording access. macOS shows
    * its system prompt when the grant is missing; the return value is the state
    * after the request, which is still false until the user approves and the

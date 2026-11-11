@@ -33,6 +33,12 @@ func (s *CaptureService) PrepareSelection(rect Rect) (OverlayCapturePayload, err
 	return s.app.prepareSelection(rect)
 }
 
+// PrepareSelectionFast re-captures a region the page has already prepared
+// (chrome hidden, one frame awaited): used when adjusting the selection.
+func (s *CaptureService) PrepareSelectionFast(rect Rect) (OverlayCapturePayload, error) {
+	return s.app.prepareSelectionFast(rect)
+}
+
 // FinishAnnotated completes an in-place annotation: it stores the composited
 // image and runs the chosen action (copy, pin, save or cancel).
 func (s *CaptureService) FinishAnnotated(action string, dataBase64 string) error {
