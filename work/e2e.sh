@@ -140,6 +140,12 @@ expect 'SELFTEST dblclick: first=clicked second=clicked clipboard=[0-9][0-9]*x[0
 grep -q 'clipboard=0x0' /tmp/pinstill-selftest-dblclick.log && fail=1
 expect 'SELFTEST dblclick: checks=ok' /tmp/pinstill-selftest-dblclick.log
 
+step "Selftest: resize the captured selection"
+PINSTILL_SELFTEST=resize "$APP" 2>&1 | tee /tmp/pinstill-selftest-resize.log
+sleep 1.0
+expect 'SELFTEST resize: handles=4 before=[0-9][0-9]*x[0-9][0-9]* after=[0-9][0-9]*x[0-9][0-9]*' /tmp/pinstill-selftest-resize.log
+expect 'SELFTEST resize: checks=ok' /tmp/pinstill-selftest-resize.log
+
 step "Selftest: desktop pin interactions"
 PINSTILL_SELFTEST=pinui "$APP" 2>&1 | tee /tmp/pinstill-selftest-pinui.log
 sleep 1.0

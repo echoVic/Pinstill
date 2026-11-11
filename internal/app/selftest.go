@@ -48,6 +48,8 @@ func (a *App) runSelfTest(mode string) {
 		a.selftestTextStyle()
 	case "dblclick":
 		a.selftestDoubleClick()
+	case "resize":
+		a.selftestResize()
 	case "uicapture":
 		a.selftestUICapture()
 	case "drag":
@@ -1707,6 +1709,83 @@ func (a *App) selftestDoubleClick() {
 		return
 	}
 	fmt.Printf("SELFTEST dblclick: checks=ok\n")
+	mygo.App.Exit(0)
+}
+
+// selftestResize proves the capture can be adjusted after it landed: dragging
+// a corner handle of the selection re-captures the adjusted region.
+func (a *App) selftestResize() {
+	if a.main != nil {
+		a.main.Show()
+	}
+	time.Sleep(1200 * time.Millisecond)
+	annotating := false
+	for attempt := 1; attempt <= 2 && !annotating; attempt++ {
+		if err := a.beginRegion(); err != nil {
+			fmt.Printf("SELFTEST resize: begin error %v\n", err)
+			break
+		}
+		time.Sleep(1200 * time.Millisecond)
+		if err := a.dragOverlaySelection(80, 90, 400, 300); err != nil {
+			fmt.Printf("SELFTEST resize: drag error %v\n", err)
+		}
+		if err := a.waitOverlayAnnotating(10 * time.Second); err == nil {
+			annotating = true
+			break
+		}
+		fmt.Printf("SELFTEST resize: annotating attempt %d failed\n", attempt)
+		a.cancelRegion()
+		time.Sleep(800 * time.Millisecond)
+	}
+	if !annotating {
+		fmt.Printf("SELFTEST resize: checks=FAILED\n")
+		mygo.App.Exit(1)
+		return
+	}
+	eval := func(js string) string {
+		return strings.TrimSpace(fmt.Sprint(a.overlayEval(js)))
+	}
+	handles := eval(`String(document.querySelectorAll('[data-resize]').length)`)
+	before := eval(`String((() => { const c = document.getElementById('overlayCanvas'); return c ? c.width + 'x' + c.height : 'missing'; })())`)
+	dragged := eval(`(() => {
+		const handle = document.querySelector('[data-resize="se"]');
+		if (!handle) return 'missing';
+		const r = handle.getBoundingClientRect();
+		const cx = r.left + r.width / 2;
+		const cy = r.top + r.height / 2;
+		const down = { bubbles: true, cancelable: true, clientX: cx, clientY: cy, pointerId: 11, pointerType: 'mouse', button: 0 };
+		handle.dispatchEvent(new PointerEvent('pointerdown', down));
+		window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, cancelable: true, clientX: cx + 120, clientY: cy + 80, pointerId: 11, pointerType: 'mouse' }));
+		window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, clientX: cx + 120, clientY: cy + 80, pointerId: 11, pointerType: 'mouse', button: 0 }));
+		return 'dragged';
+	})()`)
+	// The page re-captures the adjusted region through Go; wait for the new
+	// annotation state and read the canvas size again.
+	recaptured := false
+	deadline := time.Now().Add(12 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := a.waitOverlayAnnotating(2 * time.Second); err == nil {
+			after := eval(`String((() => { const c = document.getElementById('overlayCanvas'); return c ? c.width + 'x' + c.height : 'missing'; })())`)
+			if after != before && after != "missing" {
+				fmt.Printf("SELFTEST resize: handles=%s before=%s after=%s dragged=%s\n", handles, before, after, dragged)
+				recaptured = true
+				break
+			}
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	if !recaptured {
+		fmt.Printf("SELFTEST resize: handles=%s before=%s dragged=%s after=unchanged\n", handles, before, dragged)
+	}
+	if handles != "4" || before == "missing" || dragged != "dragged" || !recaptured {
+		fmt.Printf("SELFTEST resize: checks=FAILED\n")
+		a.cancelRegion()
+		mygo.App.Exit(1)
+		return
+	}
+	fmt.Printf("SELFTEST resize: checks=ok\n")
+	a.cancelRegion()
+	time.Sleep(300 * time.Millisecond)
 	mygo.App.Exit(0)
 }
 

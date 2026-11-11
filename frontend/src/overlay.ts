@@ -754,6 +754,7 @@ function placeToolbar(): void {
 
 function showToolbar(): void {
   toolbar.hidden = false;
+  selection.classList.add("resizable");
   setToolbarPending(false);
   setToolbarStatus("");
   selectTool(currentTool);
@@ -770,6 +771,7 @@ function clearActionFeedback(): void {
 
 function hideToolbar(): void {
   toolbar.hidden = true;
+  selection.classList.remove("resizable");
   palettePanel.close();
   clearActionFeedback();
   setToolbarPending(false);
@@ -799,6 +801,19 @@ interface CanvasClickState {
 }
 
 let lastCanvasClick: CanvasClickState | null = null;
+
+// After the capture lands in the selection the four corner handles can be
+// dragged to adjust the captured area; releasing re-captures the region.
+interface SelectionResizeState {
+  corner: "nw" | "ne" | "sw" | "se";
+  pointerId: number;
+  startX: number;
+  startY: number;
+  rect: Rect;
+}
+
+const MIN_RESIZE = 24;
+let selectionResize: SelectionResizeState | null = null;
 
 function startToolbarDrag(event: PointerEvent): void {
   if (toolbar.hidden || event.button !== 0) return;
@@ -1036,10 +1051,16 @@ async function prepareSelectionFor(rect: Rect): Promise<void> {
   phase = "preparing";
   toolbarMoved = false;
   lastCanvasClick = null;
+  selectionResize = null;
+  selection.classList.remove("resizing");
   // Go captures straight through the overlay window: hide the border, corner
   // marks, size badge, crosshair and hint so the captured image contains none
   // of our UI (the selection interior is already transparent).
   hideToolbar();
+  // A resize may re-capture within the same session, so the delivery guard
+  // has to accept the next capture id.
+  captureHandled = false;
+  handledCaptureId = "";
   selection.classList.add("capturing");
   prepareState.hidden = true;
   hint.hidden = true;
@@ -1269,6 +1290,62 @@ function cancelRegionFlow(): void {
 // Pointer & keyboard
 // ---------------------------------------------------------------------------
 
+function startSelectionResize(event: PointerEvent, corner: SelectionResizeState["corner"]): void {
+  if (phase !== "annotating" || !committedRect) return;
+  if (inlineEditor) {
+    inlineEditor.cancel();
+    inlineEditor = null;
+  }
+  selectionResize = {
+    corner,
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    rect: { ...committedRect },
+  };
+  selection.classList.add("resizing");
+  event.preventDefault();
+  event.stopPropagation();
+}
+
+function resizeRectFor(event: PointerEvent): Rect {
+  const drag = selectionResize;
+  if (!drag) return committedRect ?? { x: 0, y: 0, width: 0, height: 0 };
+  const dx = event.clientX - drag.startX;
+  const dy = event.clientY - drag.startY;
+  const base = drag.rect;
+  let x1 = base.x;
+  let y1 = base.y;
+  let x2 = base.x + base.width;
+  let y2 = base.y + base.height;
+  if (drag.corner === "nw" || drag.corner === "sw") {
+    x1 = clamp(base.x + dx, 0, Math.max(0, x2 - MIN_RESIZE));
+  }
+  if (drag.corner === "ne" || drag.corner === "se") {
+    x2 = clamp(base.x + base.width + dx, x1 + MIN_RESIZE, viewportWidth());
+  }
+  if (drag.corner === "nw" || drag.corner === "ne") {
+    y1 = clamp(base.y + dy, 0, Math.max(0, y2 - MIN_RESIZE));
+  }
+  if (drag.corner === "sw" || drag.corner === "se") {
+    y2 = clamp(base.y + base.height + dy, y1 + MIN_RESIZE, viewportHeight());
+  }
+  return { x: x1, y: y1, width: x2 - x1, height: y2 - y1 };
+}
+
+async function recaptureSelection(rect: Rect): Promise<void> {
+  if (phase !== "annotating") return;
+  inlineEditor?.cancel();
+  inlineEditor = null;
+  committedRect = rect;
+  positionSelection(rect);
+  const hadAnnotations = engine?.canUndo() ?? false;
+  await prepareSelectionFor(rect);
+  if (hadAnnotations && phase === "annotating") {
+    showTransient("选区已调整 · 已重新截取（原有标注已重置）", 2200);
+  }
+}
+
 function canvasPoint(event: PointerEvent): { x: number; y: number } | null {
   const rect = canvas.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) return null;
@@ -1281,6 +1358,14 @@ function canvasPoint(event: PointerEvent): { x: number; y: number } | null {
 window.addEventListener("pointerdown", (event) => {
   if (isInsideTextEditor(event.target)) return;
   if (isInsidePalette(event.target)) return;
+  if (phase === "annotating" && event.button === 0 && event.target instanceof Element) {
+    const handle = event.target.closest<HTMLElement>("[data-resize]");
+    const corner = handle?.dataset.resize;
+    if (corner === "nw" || corner === "ne" || corner === "sw" || corner === "se") {
+      startSelectionResize(event, corner);
+      return;
+    }
+  }
   if (phase === "annotating") {
     if (isInsideToolbar(event.target)) return;
     if (event.button !== 0 || !engine) return;
@@ -1340,6 +1425,14 @@ window.addEventListener("pointerdown", (event) => {
 });
 
 window.addEventListener("pointermove", (event) => {
+  if (selectionResize) {
+    event.preventDefault();
+    const rect = resizeRectFor(event);
+    committedRect = rect;
+    positionSelection(rect);
+    updateSizeBadge(rect);
+    return;
+  }
   if (phase === "selecting") {
     currentX = clamp(event.clientX, 0, viewportWidth());
     currentY = clamp(event.clientY, 0, viewportHeight());
@@ -1354,6 +1447,13 @@ window.addEventListener("pointermove", (event) => {
 });
 
 window.addEventListener("pointerup", (event) => {
+  if (selectionResize) {
+    const rect = { ...(committedRect ?? selectionResize.rect) };
+    selectionResize = null;
+    selection.classList.remove("resizing");
+    void recaptureSelection(rect);
+    return;
+  }
   if (phase === "selecting" && event.button === 0) {
     const rect = selectionRect();
     if (rect.width < MIN_SELECTION || rect.height < MIN_SELECTION) {

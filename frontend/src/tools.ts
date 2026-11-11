@@ -26,7 +26,6 @@ export type ToolId =
 
 /** The overlay annotation toolbar, drawing tools first, actions second. */
 export const TOOLS: ReadonlyArray<readonly [ToolId, string]> = [
-  ["drag", "移动标注"],
   ["rect", "矩形"],
   ["ellipse", "圆形"],
   ["line", "直线"],
@@ -50,7 +49,6 @@ export const TOOLS: ReadonlyArray<readonly [ToolId, string]> = [
 
 /** Lucide icon names used by `refreshPinstillIcons`. */
 export const TOOL_ICONS: Record<string, string> = {
-  drag: "move",
   rect: "square",
   ellipse: "circle",
   line: "minus",
@@ -74,13 +72,12 @@ export const TOOL_ICONS: Record<string, string> = {
 };
 
 /** Ids of tools that draw on the canvas (everything before "pin"). */
-export const DRAW_TOOLS: ReadonlyArray<ToolId> = TOOLS.slice(0, 11).map(
+export const DRAW_TOOLS: ReadonlyArray<ToolId> = TOOLS.slice(0, 10).map(
   ([id]) => id,
 );
 
 /** Tools offered as the default drawing tool in preferences. */
 export const DEFAULT_TOOL_CHOICES: ReadonlyArray<ToolId> = [
-  "drag",
   "rect",
   "arrow",
   "brush",

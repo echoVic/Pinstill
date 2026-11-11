@@ -53,6 +53,27 @@
   .selection.capturing::before,
   .selection.capturing::after { display: none; }
 
+  /* Corner handles: after the capture lands in the selection the four
+     corners can be dragged to adjust the captured area (the overlay then
+     re-captures the adjusted region). */
+  .resize-handle {
+    position: absolute;
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    border: 2px solid var(--amber);
+    background: #f7f3ea;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+    z-index: 4;
+    display: none;
+  }
+  .selection.resizable .resize-handle { display: block; }
+  .resize-handle[data-resize="nw"] { left: -6px; top: -6px; cursor: nwse-resize; }
+  .resize-handle[data-resize="ne"] { right: -6px; top: -6px; cursor: nesw-resize; }
+  .resize-handle[data-resize="sw"] { left: -6px; bottom: -6px; cursor: nesw-resize; }
+  .resize-handle[data-resize="se"] { right: -6px; bottom: -6px; cursor: nwse-resize; }
+  .selection.capturing .resize-handle { display: none; }
+
   #overlayCanvas {
     position: absolute;
     inset: 0;
@@ -445,6 +466,10 @@
   <div class="dim" id="dim"></div>
   <div class="selection" id="selection" hidden>
     <canvas id="overlayCanvas" aria-label="截图标注画布" hidden></canvas>
+    <div class="resize-handle" data-resize="nw" aria-hidden="true"></div>
+    <div class="resize-handle" data-resize="ne" aria-hidden="true"></div>
+    <div class="resize-handle" data-resize="sw" aria-hidden="true"></div>
+    <div class="resize-handle" data-resize="se" aria-hidden="true"></div>
     <div class="prepare-state" id="prepareState" hidden>
       <span class="prepare-spinner" aria-hidden="true"></span>
       <span>正在截取…</span>
