@@ -790,6 +790,16 @@ interface ToolbarDragState {
 let toolbarDrag: ToolbarDragState | null = null;
 let toolbarMoved = false;
 
+// Double-clicking the captured image finishes the capture with a copy, like
+// the mainstream tools: the action button is a shortcut, not a requirement.
+interface CanvasClickState {
+  time: number;
+  x: number;
+  y: number;
+}
+
+let lastCanvasClick: CanvasClickState | null = null;
+
 function startToolbarDrag(event: PointerEvent): void {
   if (toolbar.hidden || event.button !== 0) return;
   const rect = toolbar.getBoundingClientRect();
@@ -1025,6 +1035,7 @@ async function beginAnnotation(payload: OverlayCapture): Promise<void> {
 async function prepareSelectionFor(rect: Rect): Promise<void> {
   phase = "preparing";
   toolbarMoved = false;
+  lastCanvasClick = null;
   // Go captures straight through the overlay window: hide the border, corner
   // marks, size badge, crosshair and hint so the captured image contains none
   // of our UI (the selection interior is already transparent).
@@ -1275,6 +1286,22 @@ window.addEventListener("pointerdown", (event) => {
     if (event.button !== 0 || !engine) return;
     const point = canvasPoint(event);
     if (!point) return;
+    const now = performance.now();
+    const previousClick = lastCanvasClick;
+    const isDoubleClick =
+      previousClick !== null &&
+      now - previousClick.time <= 350 &&
+      Math.hypot(event.clientX - previousClick.x, event.clientY - previousClick.y) <= 8;
+    lastCanvasClick = { time: now, x: event.clientX, y: event.clientY };
+    if (isDoubleClick) {
+      // A double-click on the image means "done": commit any pending inline
+      // text, then copy the annotated capture (same path as the 复制 button).
+      event.preventDefault();
+      lastCanvasClick = null;
+      if (inlineEditor) inlineEditor.submit();
+      void runAction("copy");
+      return;
+    }
     if (inlineEditor) {
       // Clicking the canvas while typing commits the current text first.
       inlineEditor.submit();

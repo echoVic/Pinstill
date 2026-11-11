@@ -46,6 +46,8 @@ func (a *App) runSelfTest(mode string) {
 		a.selftestPalette()
 	case "textstyle":
 		a.selftestTextStyle()
+	case "dblclick":
+		a.selftestDoubleClick()
 	case "uicapture":
 		a.selftestUICapture()
 	case "drag":
@@ -1647,6 +1649,65 @@ func (a *App) selftestTextStyle() {
 	}
 	fmt.Printf("SELFTEST textstyle: checks=FAILED\n")
 	mygo.App.Exit(1)
+}
+
+// selftestDoubleClick proves that double-clicking the captured image finishes
+// the capture with a copy (the toolbar's 复制 button is a shortcut, not the
+// only way out).
+func (a *App) selftestDoubleClick() {
+	if a.main != nil {
+		a.main.Show()
+	}
+	time.Sleep(1200 * time.Millisecond)
+	annotating := false
+	for attempt := 1; attempt <= 2 && !annotating; attempt++ {
+		if err := a.beginRegion(); err != nil {
+			fmt.Printf("SELFTEST dblclick: begin error %v\n", err)
+			break
+		}
+		time.Sleep(1200 * time.Millisecond)
+		if err := a.dragOverlaySelection(80, 90, 400, 300); err != nil {
+			fmt.Printf("SELFTEST dblclick: drag error %v\n", err)
+		}
+		if err := a.waitOverlayAnnotating(10 * time.Second); err == nil {
+			annotating = true
+			break
+		}
+		fmt.Printf("SELFTEST dblclick: annotating attempt %d failed\n", attempt)
+		a.cancelRegion()
+		time.Sleep(800 * time.Millisecond)
+	}
+	if !annotating {
+		fmt.Printf("SELFTEST dblclick: checks=FAILED\n")
+		mygo.App.Exit(1)
+		return
+	}
+	click := func() string {
+		return strings.TrimSpace(fmt.Sprint(a.overlayEval(`(() => {
+			const c = document.getElementById('overlayCanvas');
+			if (!c) return 'no-canvas';
+			const r = c.getBoundingClientRect();
+			const opts = { bubbles: true, cancelable: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, pointerId: 9, pointerType: 'mouse', button: 0 };
+			c.dispatchEvent(new PointerEvent('pointerdown', opts));
+			window.dispatchEvent(new PointerEvent('pointerup', opts));
+			return 'clicked';
+		})()`)))
+	}
+	mygo.Clipboard.Clear()
+	first := click()
+	time.Sleep(120 * time.Millisecond)
+	second := click()
+	time.Sleep(2200 * time.Millisecond)
+	img := mygo.Clipboard.ReadImage()
+	width, height := imageDimensions(img)
+	fmt.Printf("SELFTEST dblclick: first=%s second=%s clipboard=%dx%d\n", first, second, width, height)
+	if width == 0 {
+		fmt.Printf("SELFTEST dblclick: checks=FAILED\n")
+		mygo.App.Exit(1)
+		return
+	}
+	fmt.Printf("SELFTEST dblclick: checks=ok\n")
+	mygo.App.Exit(0)
 }
 
 // selftestHold keeps the app running so its native shell can be inspected
