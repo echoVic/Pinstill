@@ -21,6 +21,12 @@ export interface Shape {
   dx?: number;
   dy?: number;
   text?: string;
+  /** Text shapes: font size in logical pt (independent of the width slider). */
+  fontSize?: number;
+  bold?: boolean;
+  italic?: boolean;
+  /** CSS font-family stack for text shapes. */
+  fontFamily?: string;
   points?: Point[];
   _origin?: Point;
 }
@@ -34,6 +40,10 @@ export interface ShapeRenderStyle {
   /** True while the shape is the in-progress draft (cheap mosaic preview). */
   preview?: boolean;
 }
+
+/** Default stack for annotation text: system UI font with a Chinese fallback. */
+export const DEFAULT_TEXT_FONT =
+  '-apple-system, "PingFang SC", "Helvetica Neue", "Segoe UI", sans-serif';
 
 export function roundRectPath(
   ctx: CanvasRenderingContext2D,
@@ -189,8 +199,10 @@ export function drawShape(
     ctx.globalAlpha = 1;
   }
   if (shape.kind === "text") {
-    const fontSize = (shape.width * 3 + 16) * scale;
-    ctx.font = `500 ${fontSize}px -apple-system, sans-serif`;
+    const fontSize = (shape.fontSize ?? 14) * scale;
+    const weight = shape.bold ? "700" : "400";
+    const styleAttr = shape.italic ? "italic " : "";
+    ctx.font = `${styleAttr}${weight} ${fontSize}px ${shape.fontFamily ?? DEFAULT_TEXT_FONT}`;
     const lines = (shape.text ?? "").split("\n");
     const lineHeight = fontSize * 1.3;
     lines.forEach((line, index) => {
@@ -426,6 +438,10 @@ export interface InlineTextOptions {
   color: string;
   /** Font size in CSS pixels (what the user sees while typing). */
   displayFontSize: number;
+  bold?: boolean;
+  italic?: boolean;
+  /** CSS font-family stack for the editing textarea. */
+  fontFamily?: string;
   value?: string;
   placeholder?: string;
   /** Labels (tags) are single-line: newlines become spaces. */
@@ -483,7 +499,7 @@ export class InlineTextEditor {
       borderRadius: "4px",
       background: "rgba(20, 20, 18, 0.88)",
       color: options.color,
-      font: `500 ${fontSize}px ui-sans-serif, system-ui, -apple-system, sans-serif`,
+      font: `${options.italic ? "italic " : ""}${options.bold ? "700" : "400"} ${fontSize}px ${options.fontFamily ?? DEFAULT_TEXT_FONT}`,
       lineHeight: "1.3",
       outline: "none",
       resize: "none",

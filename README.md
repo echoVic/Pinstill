@@ -11,7 +11,7 @@ Pinstill 是一个面向 macOS 和 Windows 的桌面截图与标注工具。它�
 真实可用（macOS 已在本机端到端验证）：
 
 - **区域截图 + 就地完整工具栏**：全局快捷键或托盘唤起全屏选区，遮罩 + 十字线 + 尺寸角标；松手后 Go **透过透明选区直接截屏（无闪烁）**、overlay 就地把截图显示在选区里，并浮出**完整标注工具栏**（可按住手柄拖到不挡内容的位置）——矩形/圆/直线/箭头/画笔/文字/标签/马赛克/高亮/水印、颜色与粗细（默认 2px 细线，可调）、撤销，翻译 / 提取文字 / 二维码（标注「待接入」）、滚动截图（真实功能），以及复制 / 贴图 / 保存 / 取消。标注直接发生在桌面上，不用先跳窗口（Enter 复制、⌘Z 撤销、Esc 取消）
-- **文字/标签**：选中工具后在画面上点击要放文字的位置，输入框就地出现直接输入；Enter 提交、Shift+Enter 换行、Esc 取消（与主流截图工具一致）
+- **文字/标签**：选中文字工具后在画面上点击要放文字的位置，输入框就地出现直接输入；Enter 提交、Shift+Enter 换行、Esc 取消。文字支持**粗体 / 斜体 / 字号（10–32pt，默认 14pt）/ 字体（系统默认 / 苹方 / Helvetica / Georgia / Menlo）**，样式会记住并在输入框里实时预览；标签保持图标样式
 - **调色板**：应用内自绘调色板面板——40 个预设色 + 饱和度/明度方块 + 色相滑条 + HEX 输入 + 最近 8 色（持久化）；选色即时生效，Esc 只关面板、不取消截图
 - **权限引导**：屏幕录制权限缺失时在选区原地提示「需要屏幕录制权限」并可一键打开系统设置，不再突然跳进主窗口
 - **整屏截图**：托盘菜单「截取整个屏幕」静默截取鼠标所在显示器 → 存历史 → 按「截图后」执行（默认复制到剪贴板），不打开主窗口
@@ -106,7 +106,7 @@ frontend/result.html         滚动截图长图预览
 frontend/src/                TypeScript 模块（bridge 是唯一的原生调用入口）
 vite.config.ts               五页多入口构建（index/overlay/pin/scroll/result）
 work/plan.md                 本轮开发的冻结接口契约与实测结论
-work/e2e.sh                  端到端验收脚本（构建 + 19 项 selftest）
+work/e2e.sh                  端到端验收脚本（构建 + 20 项 selftest）
 ```
 
 ### 端到端验收
@@ -116,7 +116,7 @@ bash work/e2e.sh            # 完整构建 + 全部自检
 bash work/e2e.sh --skip-build   # 用现有构建产物只跑自检
 ```
 
-脚本会依次跑 Go 测试 / vet / Windows 交叉编译、前端与桌面构建，以及 19 项应用级自检（真实退出、真实截图+历史+剪贴板、overlay 渲染、选区映射像素级对比、Esc 取消、**就地标注全流程 copy/pin/cancel + afterCapture 自动动作**、**桌面贴图交互（双击/菜单/滚轮/关闭）**、**贴图重启恢复**、**滚动截图**（默认自动滚动 → 自动完成 → 结果预览 → 复制；手动模式停顿自动完成；页面驱动结果窗口断言）、**整屏截图**、**历史动作 copy/pin/remove**、主窗口视图（断言无编辑器 DOM + 历史预览开关）、贴图窗口、全局快捷键注册、设置应用、**权限中心**、**调色板面板**）。自检通过环境变量驱动（`PINSTILL_SELFTEST=quit|capture|overlay|drag|esc|flow|pinui|pinpersist-setup|pinpersist-check|scroll|scrollflow|scrollmanual|fullscreen|historyactions|uicapture|pin|history|hotkeys|settings|perms|palette|showcase|scrollshot|hold`），产物与日志在 `/tmp/pinstill-selftest-*`。
+脚本会依次跑 Go 测试 / vet / Windows 交叉编译、前端与桌面构建，以及 20 项应用级自检（真实退出、真实截图+历史+剪贴板、overlay 渲染、选区映射像素级对比、Esc 取消、**就地标注全流程 copy/pin/cancel + afterCapture 自动动作**、**桌面贴图交互（双击/菜单/滚轮/关闭）**、**贴图重启恢复**、**滚动截图**（默认自动滚动 → 自动完成 → 结果预览 → 复制；手动模式停顿自动完成；页面驱动结果窗口断言）、**整屏截图**、**历史动作 copy/pin/remove**、主窗口视图（断言无编辑器 DOM + 历史预览开关）、贴图窗口、全局快捷键注册、设置应用、**权限中心**、**调色板面板**、**文字样式控件**）。自检通过环境变量驱动（`PINSTILL_SELFTEST=quit|capture|overlay|drag|esc|flow|pinui|pinpersist-setup|pinpersist-check|scroll|scrollflow|scrollmanual|fullscreen|historyactions|uicapture|pin|history|hotkeys|settings|perms|palette|textstyle|showcase|scrollshot|hold`），产物与日志在 `/tmp/pinstill-selftest-*`。
 
 ### 数据与权限
 

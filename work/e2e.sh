@@ -245,6 +245,14 @@ expect 'SELFTEST perms: actions=.*login-open' /tmp/pinstill-selftest-perms.log
 expect 'SELFTEST perms: banner=true' /tmp/pinstill-selftest-perms.log
 expect 'SELFTEST perms: checks=ok' /tmp/pinstill-selftest-perms.log
 
+step "Selftest: text style controls"
+PINSTILL_SELFTEST=textstyle "$APP" 2>&1 | tee /tmp/pinstill-selftest-textstyle.log
+sleep 1.0
+expect 'SELFTEST textstyle: props=true width_hidden=true' /tmp/pinstill-selftest-textstyle.log
+expect 'bold=true italic=true size=20' /tmp/pinstill-selftest-textstyle.log
+expect 'input=true commit=sent input_gone=true' /tmp/pinstill-selftest-textstyle.log
+expect 'SELFTEST textstyle: checks=ok' /tmp/pinstill-selftest-textstyle.log
+
 step "Selftest: colour palette panel"
 PINSTILL_SELFTEST=palette "$APP" 2>&1 | tee /tmp/pinstill-selftest-palette.log
 sleep 1.0

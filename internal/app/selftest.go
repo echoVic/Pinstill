@@ -44,6 +44,8 @@ func (a *App) runSelfTest(mode string) {
 		a.selftestPerms()
 	case "palette":
 		a.selftestPalette()
+	case "textstyle":
+		a.selftestTextStyle()
 	case "uicapture":
 		a.selftestUICapture()
 	case "drag":
@@ -1370,6 +1372,22 @@ func (a *App) selftestShowcase() {
 			if err := a.drawOverlayAnnotation(); err != nil {
 				fmt.Printf("SELFTEST showcase: overlay draw error %v\n", err)
 			}
+			// Show the text formatting controls and a sample text annotation.
+			_, _ = a.overlay.Page().Eval(`document.querySelector('[data-tool="text"]')?.click()`)
+			time.Sleep(250 * time.Millisecond)
+			_, _ = a.overlay.Page().Eval(`(() => {
+				const c = document.getElementById('overlayCanvas');
+				const r = c.getBoundingClientRect();
+				c.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, clientX: r.left + r.width * 0.14, clientY: r.top + r.height * 0.2, pointerId: 5, pointerType: 'mouse', button: 0 }));
+			})()`)
+			time.Sleep(300 * time.Millisecond)
+			_, _ = a.overlay.Page().Eval(`(() => {
+				const t = document.getElementById('textInputOverlay');
+				if (!t) return;
+				t.value = 'Pinstill · 标注';
+				t.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+			})()`)
+			time.Sleep(350 * time.Millisecond)
 		}
 		time.Sleep(600 * time.Millisecond)
 		savePage(a.overlay, "overlay")
@@ -1508,6 +1526,126 @@ func (a *App) selftestHistoryActions() {
 		return
 	}
 	fmt.Printf("SELFTEST historyactions: checks=FAILED\n")
+	mygo.App.Exit(1)
+}
+
+// selftestTextStyle drives the text tool's formatting controls: they only show
+// for the text tool, bold / italic / size / font apply, and typing commits the
+// annotation with the chosen style.
+func (a *App) selftestTextStyle() {
+	if a.main != nil {
+		a.main.Show()
+	}
+	time.Sleep(1200 * time.Millisecond)
+	// The overlay page can miss the first PrepareSelection right after a
+	// launch; retrying once keeps the selftest deterministic (same as flow).
+	annotating := false
+	for attempt := 1; attempt <= 2 && !annotating; attempt++ {
+		if err := a.beginRegion(); err != nil {
+			fmt.Printf("SELFTEST textstyle: begin error %v\n", err)
+			break
+		}
+		time.Sleep(1200 * time.Millisecond)
+		if err := a.dragOverlaySelection(80, 90, 520, 380); err != nil {
+			fmt.Printf("SELFTEST textstyle: drag error %v\n", err)
+		}
+		if err := a.waitOverlayAnnotating(10 * time.Second); err == nil {
+			annotating = true
+			break
+		}
+		fmt.Printf("SELFTEST textstyle: annotating attempt %d failed %v\n", attempt, a.overlayEval(`(() => { const c = document.getElementById('overlayCanvas'); const t = document.getElementById('annotationToolbar'); return JSON.stringify({ canvas: c ? (c.hidden ? 'hidden' : c.width + 'x' + c.height) : 'missing', toolbar: t ? (t.hidden ? 'hidden' : 'shown') : 'missing', phase: document.getElementById('overlayStatus')?.textContent }); })()`))
+		a.cancelRegion()
+		time.Sleep(800 * time.Millisecond)
+	}
+	if !annotating {
+		fmt.Printf("SELFTEST textstyle: checks=FAILED\n")
+		mygo.App.Exit(1)
+		return
+	}
+	eval := func(js string) string {
+		return strings.TrimSpace(fmt.Sprint(a.overlayEval(js)))
+	}
+	// The style is persisted in localStorage and shared with the user's app:
+	// save it up front and put it back before exiting so the selftest never
+	// changes the user's text defaults.
+	savedStyle := ""
+	if a.main != nil {
+		if v, err := a.main.Page().Eval("localStorage.getItem('pinstill.textStyle') ?? ''"); err == nil {
+			savedStyle = fmt.Sprint(v)
+		}
+	}
+	restoreStyle := func() {
+		if a.main == nil {
+			return
+		}
+		if savedStyle == "" {
+			_, _ = a.main.Page().Eval("localStorage.removeItem('pinstill.textStyle')")
+			return
+		}
+		_, _ = a.main.Page().Eval(fmt.Sprintf("localStorage.setItem('pinstill.textStyle', %q)", savedStyle))
+	}
+	ok := true
+	failCheck := func(format string, args ...any) {
+		ok = false
+		fmt.Printf("SELFTEST textstyle: "+format+"\n", args...)
+	}
+	eval(`document.querySelector('[data-tool="text"]')?.click(), 'ok'`)
+	time.Sleep(350 * time.Millisecond)
+	propsVisible := eval(`String((() => { const p = document.getElementById('overlayTextProps'); return !!p && !p.hidden; })())`)
+	widthHidden := eval(`String((() => { const w = document.getElementById('overlayWidthLabel'); return !!w && w.hidden; })())`)
+	eval(`(() => { const b = document.getElementById('textBold'); if (b && b.getAttribute('aria-pressed') !== 'true') b.click(); return 'ok'; })()`)
+	eval(`(() => { const b = document.getElementById('textItalic'); if (b && b.getAttribute('aria-pressed') !== 'true') b.click(); return 'ok'; })()`)
+	eval(`(() => { const s = document.getElementById('textSize'); s.value = '20'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`)
+	eval(`(() => { const f = document.getElementById('textFont'); f.selectedIndex = Math.min(3, f.options.length - 1); f.dispatchEvent(new Event('change', { bubbles: true })); })()`)
+	bold := eval(`document.getElementById('textBold')?.getAttribute('aria-pressed') ?? ''`)
+	italic := eval(`document.getElementById('textItalic')?.getAttribute('aria-pressed') ?? ''`)
+	size := eval(`document.getElementById('textSize')?.value ?? ''`)
+	fontOptions := eval(`String(document.getElementById('textFont')?.options.length ?? 0)`)
+	eval(`(() => {
+		const c = document.getElementById('overlayCanvas');
+		const r = c.getBoundingClientRect();
+		const opts = { bubbles: true, cancelable: true, clientX: r.left + r.width * 0.2, clientY: r.top + r.height * 0.3, pointerId: 3, pointerType: 'mouse', button: 0 };
+		c.dispatchEvent(new PointerEvent('pointerdown', opts));
+		return 'ok';
+	})()`)
+	time.Sleep(400 * time.Millisecond)
+	inputShown := eval(`String(!!document.getElementById('textInputOverlay'))`)
+	committed := eval(`(() => { const t = document.getElementById('textInputOverlay'); if (!t) return 'missing'; t.value = 'Pinstill 标注'; t.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); return 'sent'; })()`)
+	time.Sleep(450 * time.Millisecond)
+	inputGone := eval(`String(!document.getElementById('textInputOverlay'))`)
+	fmt.Printf("SELFTEST textstyle: props=%s width_hidden=%s bold=%s italic=%s size=%s fonts=%s\n", propsVisible, widthHidden, bold, italic, size, fontOptions)
+	fmt.Printf("SELFTEST textstyle: input=%s commit=%s input_gone=%s\n", inputShown, committed, inputGone)
+	if propsVisible != "true" {
+		failCheck("text style controls are not visible for the text tool")
+	}
+	if widthHidden != "true" {
+		failCheck("line-width slider is still shown for the text tool")
+	}
+	if bold != "true" {
+		failCheck("bold toggle did not turn on")
+	}
+	if italic != "true" {
+		failCheck("italic toggle did not turn on")
+	}
+	if size != "20" {
+		failCheck("font size did not change to 20pt (got %q)", size)
+	}
+	if fontOptions == "0" || fontOptions == "" {
+		failCheck("font family select is empty")
+	}
+	if inputShown != "true" {
+		failCheck("inline text editor did not open")
+	}
+	if committed != "sent" || inputGone != "true" {
+		failCheck("text annotation did not commit (commit=%q gone=%q)", committed, inputGone)
+	}
+	restoreStyle()
+	if ok {
+		fmt.Printf("SELFTEST textstyle: checks=ok\n")
+		mygo.App.Exit(0)
+		return
+	}
+	fmt.Printf("SELFTEST textstyle: checks=FAILED\n")
 	mygo.App.Exit(1)
 }
 

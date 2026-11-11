@@ -295,7 +295,38 @@
   .capture-error-actions button.primary { background: var(--amber); border-color: var(--amber); color: #21170d; font-weight: 700; }
   .capture-error-actions button.primary:hover { background: #ffb765; }
 
+  .at-text-props { display: flex; align-items: center; gap: 4px; }
+  .at-text-props[hidden] { display: none; }
+  .textstyle-btn {
+    width: 24px;
+    height: 26px;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    border: 1px solid #d8d2c5;
+    border-radius: 6px;
+    background: #f7f3ea;
+    color: #36332c;
+    font: 700 13px/1 var(--font);
+    cursor: pointer;
+  }
+  .textstyle-btn[aria-pressed="true"] { background: #30362f; border-color: #30362f; color: #f7f3ea; }
+  .textstyle-btn:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+  .textstyle-btn.italic { font-style: italic; font-family: Georgia, "Songti SC", serif; }
+  .textstyle-select {
+    height: 26px;
+    padding: 0 4px;
+    border: 1px solid #d8d2c5;
+    border-radius: 6px;
+    background: #f7f3ea;
+    color: #36332c;
+    font: 500 11px/1 var(--font);
+  }
+  .textstyle-select:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+  #textSize { width: 62px; }
+  #textFont { width: 92px; }
   .at-width { display: flex; align-items: center; gap: 5px; font-size: 11px; color: #6f6a5e; }
+  .at-width[hidden] { display: none; }
   #overlayWidth { width: 72px; accent-color: #e8ac64; }
   #overlayWidthValue { min-width: 13px; text-align: right; font-variant-numeric: tabular-nums; }
 
@@ -433,6 +464,12 @@
     <div class="at-row at-bottom">
       <div class="at-props">
         <div class="at-colors" id="overlayColors" role="group" aria-label="标注颜色"></div>
+        <div class="at-text-props" id="overlayTextProps" role="group" aria-label="文字样式" hidden>
+          <button type="button" class="textstyle-btn" id="textBold" aria-label="粗体" title="粗体" aria-pressed="false">B</button>
+          <button type="button" class="textstyle-btn italic" id="textItalic" aria-label="斜体" title="斜体" aria-pressed="false">I</button>
+          <select class="textstyle-select" id="textSize" aria-label="字号"></select>
+          <select class="textstyle-select" id="textFont" aria-label="字体"></select>
+        </div>
         <label class="at-width" for="overlayWidth" id="overlayWidthLabel">
           <span id="overlayWidthLabelText">粗细</span>
           <input id="overlayWidth" type="range" min="1" max="10" step="1" value="2" aria-label="粗细" />

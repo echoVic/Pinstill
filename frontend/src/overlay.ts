@@ -14,7 +14,7 @@
 // browser (no MyGo runtime) the flow is simulated with the design's demo image
 // and toasts, so the static preview stays demoable without console errors.
 
-import { AnnotationEngine, InlineTextEditor } from "./annotate";
+import { AnnotationEngine, DEFAULT_TEXT_FONT, InlineTextEditor } from "./annotate";
 import {
   beginRegion,
   cancelRegion,
@@ -153,8 +153,14 @@ const colorsHost = el("overlayColors");
 const actionsHost = el("overlayActions");
 const widthInput = el<HTMLInputElement>("overlayWidth");
 const widthValue = el("overlayWidthValue");
+const widthLabel = el("overlayWidthLabel");
 const widthLabelText = el("overlayWidthLabelText");
 const textInput = el<HTMLInputElement>("overlayText");
+const textProps = el("overlayTextProps");
+const textBoldButton = el<HTMLButtonElement>("textBold");
+const textItalicButton = el<HTMLButtonElement>("textItalic");
+const textSizeSelect = el<HTMLSelectElement>("textSize");
+const textFontSelect = el<HTMLSelectElement>("textFont");
 const toolbarStatus = el("overlayStatus");
 const demoToast = el("demoToast");
 const captureError = el("captureError");
@@ -198,6 +204,59 @@ const watermarkText =
   typeof storedPreferences.watermarkText === "string" && storedPreferences.watermarkText
     ? storedPreferences.watermarkText
     : "Pinstill";
+// Text annotations used to derive size and weight from the line-width
+// slider, which made them heavier than mainstream tools. Size (pt), bold,
+// italic and font family are explicit now, and remembered across captures.
+interface TextStyleState {
+  size: number;
+  bold: boolean;
+  italic: boolean;
+  family: string;
+}
+
+const TEXT_STYLE_KEY = "pinstill.textStyle";
+const TEXT_SIZES: ReadonlyArray<number> = [10, 11, 12, 14, 16, 18, 20, 24, 28, 32];
+const TEXT_FONTS: ReadonlyArray<Readonly<{ value: string; label: string }>> = [
+  { value: DEFAULT_TEXT_FONT, label: "系统默认" },
+  { value: '"PingFang SC", -apple-system, sans-serif', label: "苹方" },
+  { value: '"Helvetica Neue", Helvetica, sans-serif', label: "Helvetica" },
+  { value: 'Georgia, "Songti SC", serif', label: "Georgia" },
+  { value: 'Menlo, "SF Mono", monospace', label: "Menlo" },
+];
+const DEFAULT_TEXT_STYLE: TextStyleState = {
+  size: 14,
+  bold: false,
+  italic: false,
+  family: DEFAULT_TEXT_FONT,
+};
+
+function loadTextStyle(): TextStyleState {
+  try {
+    const raw = JSON.parse(localStorage.getItem(TEXT_STYLE_KEY) ?? "null") as
+      | Partial<TextStyleState>
+      | null;
+    if (!raw || typeof raw !== "object") return { ...DEFAULT_TEXT_STYLE };
+    const size = TEXT_SIZES.includes(Number(raw.size)) ? Number(raw.size) : DEFAULT_TEXT_STYLE.size;
+    const family = TEXT_FONTS.some((font) => font.value === raw.family)
+      ? String(raw.family)
+      : DEFAULT_TEXT_STYLE.family;
+    return { size, bold: Boolean(raw.bold), italic: Boolean(raw.italic), family };
+  } catch {
+    return { ...DEFAULT_TEXT_STYLE };
+  }
+}
+
+let textStyle: TextStyleState = loadTextStyle();
+
+function saveTextStyle(): void {
+  try {
+    localStorage.setItem(TEXT_STYLE_KEY, JSON.stringify(textStyle));
+  } catch {
+    // Storage may be unavailable; the session state still applies.
+  }
+}
+
+
 const watermarkOpacity =
   typeof storedPreferences.watermarkOpacity === "number"
     ? clamp(storedPreferences.watermarkOpacity, 10, 90)
@@ -411,6 +470,43 @@ function buildToolbar(): void {
 
   renderPalette();
 
+  textSizeSelect.replaceChildren();
+  for (const size of TEXT_SIZES) {
+    const option = document.createElement("option");
+    option.value = String(size);
+    option.textContent = `${size}pt`;
+    textSizeSelect.append(option);
+  }
+  textFontSelect.replaceChildren();
+  for (const font of TEXT_FONTS) {
+    const option = document.createElement("option");
+    option.value = font.value;
+    option.textContent = font.label;
+    textFontSelect.append(option);
+  }
+  textBoldButton.addEventListener("click", () => {
+    textStyle.bold = !textStyle.bold;
+    applyTextStyleUI();
+    saveTextStyle();
+  });
+  textItalicButton.addEventListener("click", () => {
+    textStyle.italic = !textStyle.italic;
+    applyTextStyleUI();
+    saveTextStyle();
+  });
+  textSizeSelect.addEventListener("change", () => {
+    const size = Number(textSizeSelect.value);
+    textStyle.size = TEXT_SIZES.includes(size) ? size : DEFAULT_TEXT_STYLE.size;
+    saveTextStyle();
+  });
+  textFontSelect.addEventListener("change", () => {
+    textStyle.family = TEXT_FONTS.some((font) => font.value === textFontSelect.value)
+      ? textFontSelect.value
+      : DEFAULT_TEXT_STYLE.family;
+    saveTextStyle();
+  });
+  applyTextStyleUI();
+
   actionsHost.replaceChildren();
   for (const def of ACTION_DEFS) {
     const button = document.createElement("button");
@@ -501,6 +597,13 @@ function showRecognitionPlaceholder(tool: string): void {
   }, 3200);
 }
 
+function applyTextStyleUI(): void {
+  textBoldButton.setAttribute("aria-pressed", String(textStyle.bold));
+  textItalicButton.setAttribute("aria-pressed", String(textStyle.italic));
+  textSizeSelect.value = String(textStyle.size);
+  textFontSelect.value = textStyle.family;
+}
+
 function selectTool(tool: ToolId): void {
   currentTool = tool;
   engine?.setTool(tool);
@@ -514,8 +617,12 @@ function selectTool(tool: ToolId): void {
   // watermark keeps the toolbar text field.
   const showsTextInput = tool === "watermark";
   textInput.hidden = !showsTextInput;
-  widthLabelText.textContent =
-    tool === "text" || tool === "watermark" ? "字号" : "粗细";
+  // The text tool gets its own style controls (bold/italic/size/family); the
+  // line-width slider only applies to the drawing tools and the watermark.
+  const isTextTool = tool === "text";
+  textProps.hidden = !isTextTool;
+  widthLabel.hidden = isTextTool;
+  widthLabelText.textContent = tool === "watermark" ? "字号" : "粗细";
   if (tool === "watermark") {
     entry = watermarkText;
     textInput.value = entry;
@@ -819,12 +926,16 @@ function openInlineText(point: { x: number; y: number }): void {
   if (tool !== "text" && tool !== "tag") return;
   const shapeColor = color;
   const shapeWidth = penWidth;
-  const displayFontSize = tool === "tag" ? 20 : shapeWidth * 3 + 16;
+  const isText = tool === "text";
+  const displayFontSize = isText ? textStyle.size : 20;
   inlineEditor = new InlineTextEditor({
     canvas,
     point,
     color: shapeColor,
     displayFontSize,
+    bold: isText ? textStyle.bold : false,
+    italic: isText ? textStyle.italic : false,
+    fontFamily: isText ? textStyle.family : DEFAULT_TEXT_FONT,
     placeholder: tool === "tag" ? "输入标签" : "输入文字",
     singleLine: tool === "tag",
     onSubmit: (text) => {
@@ -838,6 +949,14 @@ function openInlineText(point: { x: number; y: number }): void {
         color: shapeColor,
         width: shapeWidth,
         text,
+        ...(isText
+          ? {
+              fontSize: textStyle.size,
+              bold: textStyle.bold,
+              italic: textStyle.italic,
+              fontFamily: textStyle.family,
+            }
+          : {}),
       });
       updateToolbarState();
     },
