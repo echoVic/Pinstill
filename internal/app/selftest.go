@@ -1747,14 +1747,34 @@ func (a *App) selftestResize() {
 	}
 	handles := eval(`String(document.querySelectorAll('[data-resize]').length)`)
 	before := eval(`String((() => { const c = document.getElementById('overlayCanvas'); return c ? c.width + 'x' + c.height : 'missing'; })())`)
+	handlePoint := eval(`(() => {
+		const handle = document.querySelector('[data-resize="se"]');
+		if (!handle) return '';
+		const r = handle.getBoundingClientRect();
+		return (r.left + r.width / 2) + ',' + (r.top + r.height / 2);
+	})()`)
+	down := eval(`(() => {
+		const handle = document.querySelector('[data-resize="se"]');
+		if (!handle) return 'missing';
+		const r = handle.getBoundingClientRect();
+		handle.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, pointerId: 11, pointerType: 'mouse', button: 0 }));
+		return 'down';
+	})()`)
+	time.Sleep(300 * time.Millisecond)
+	midHidden := eval(`String(document.getElementById('overlayCanvas')?.hidden ?? 'missing')`)
+	midMask := eval(`String(!!document.getElementById('maskTop')?.hidden)`)
+	fmt.Printf("SELFTEST resize: pressed=%s canvas_hidden_mid=%s masks_hidden_mid=%s point=%s\n", down, midHidden, midMask, handlePoint)
+	if a.overlay != nil {
+		if pagePNG, err := a.overlay.CapturePage(); err == nil {
+			_ = os.WriteFile("/tmp/pinstill-resize-mid.png", pagePNG, 0o644)
+		}
+	}
 	dragged := eval(`(() => {
 		const handle = document.querySelector('[data-resize="se"]');
 		if (!handle) return 'missing';
 		const r = handle.getBoundingClientRect();
 		const cx = r.left + r.width / 2;
 		const cy = r.top + r.height / 2;
-		const down = { bubbles: true, cancelable: true, clientX: cx, clientY: cy, pointerId: 11, pointerType: 'mouse', button: 0 };
-		handle.dispatchEvent(new PointerEvent('pointerdown', down));
 		window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, cancelable: true, clientX: cx + 120, clientY: cy + 80, pointerId: 11, pointerType: 'mouse' }));
 		window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, clientX: cx + 120, clientY: cy + 80, pointerId: 11, pointerType: 'mouse', button: 0 }));
 		return 'dragged';
@@ -1804,7 +1824,7 @@ func (a *App) selftestResize() {
 	}
 	shrinkMS := time.Since(shrinkStart).Milliseconds()
 	fmt.Printf("SELFTEST resize: shrink before=%s after=%s shrink_ms=%d dragged=%s\n", beforeShrink, afterShrink, shrinkMS, shrinkDragged)
-	if handles != "4" || before == "missing" || dragged != "dragged" || !recaptured || shrinkDragged != "dragged" || afterShrink == beforeShrink || afterShrink == "missing" {
+	if handles != "4" || before == "missing" || dragged != "dragged" || !recaptured || shrinkDragged != "dragged" || afterShrink == beforeShrink || afterShrink == "missing" || midHidden != "true" || midMask != "true" {
 		fmt.Printf("SELFTEST resize: checks=FAILED\n")
 		a.cancelRegion()
 		mygo.App.Exit(1)

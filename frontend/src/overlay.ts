@@ -1368,8 +1368,10 @@ function startSelectionResize(event: PointerEvent, corner: SelectionResizeState[
   };
   // Mainstream behaviour: while the region is adjusted the selection shows the
   // live screen, not a stretched copy of the old capture. The canvas (and the
-  // annotations on it) are hidden until the new region is captured on release.
+  // annotations on it) are hidden until the new region is captured on release,
+  // and the dim mask lifts so the whole screen is visible while adjusting.
   canvas.hidden = true;
+  positionMasks(null);
   selection.classList.add("resizing");
   event.preventDefault();
   event.stopPropagation();
