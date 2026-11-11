@@ -213,12 +213,13 @@
     pointer-events: none;
     opacity: 0;
     visibility: hidden;
-    transition: opacity 0.12s ease;
+    transition: opacity 0.12s ease var(--tooltip-delay, 0ms);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
     z-index: 10;
   }
   .tool-btn:hover .tip,
   .tool-btn:focus-visible .tip { opacity: 1; visibility: visible; }
+  .annotation-toolbar.no-tooltips .tool-btn .tip { display: none; }
   .at-tools .tool-btn:nth-child(-n + 2) .tip { left: 0; transform: none; }
   .at-tools .tool-btn:last-child .tip { left: auto; right: 0; transform: none; }
 

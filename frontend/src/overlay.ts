@@ -40,7 +40,7 @@ import {
   rememberColor,
 } from "./colors";
 import { ColorPalettePanel, createPaletteToggleButton } from "./palette";
-import { DRAW_TOOLS, TOOLS, TOOL_ICONS, type ToolId } from "./tools";
+import { DRAW_TOOLS, TOOLS, TOOL_ICONS, isDrawTool, type ToolId } from "./tools";
 import { blobToBase64, decodeImageBlob, flashButtonSuccess, setButtonPending } from "./util";
 
 const MIN_SELECTION = 3;
@@ -164,10 +164,17 @@ const captureErrorSettings = el<HTMLButtonElement>("captureErrorSettings");
 const captureErrorRetry = el<HTMLButtonElement>("captureErrorRetry");
 const captureErrorCancel = el<HTMLButtonElement>("captureErrorCancel");
 const hintInitialHTML = hint.innerHTML;
+document.documentElement.style.setProperty("--tooltip-delay", `${tooltipDelayMs}ms`);
+if (!tooltipsEnabled) toolbar.classList.add("no-tooltips");
 
 interface StoredPreferences {
   defaultColor?: unknown;
   defaultWidth?: unknown;
+  defaultTool?: unknown;
+  tooltip?: unknown;
+  tooltipDelay?: unknown;
+  enterCopy?: unknown;
+  scrollAuto?: unknown;
   watermarkText?: unknown;
   watermarkOpacity?: unknown;
 }
@@ -196,7 +203,16 @@ const watermarkOpacity =
     ? clamp(storedPreferences.watermarkOpacity, 10, 90)
     : 35;
 
-let currentTool: ToolId = "rect";
+const initialTool = storedPreferences.defaultTool;
+let currentTool: ToolId =
+  typeof initialTool === "string" && isDrawTool(initialTool) ? initialTool : "rect";
+const tooltipsEnabled = storedPreferences.tooltip !== false;
+const tooltipDelayMs =
+  typeof storedPreferences.tooltipDelay === "number"
+    ? clamp(Math.round(storedPreferences.tooltipDelay), 0, 2000)
+    : 120;
+const enterCopyEnabled = storedPreferences.enterCopy !== false;
+const scrollAutoDefault = storedPreferences.scrollAuto !== false;
 let entry = "重点说明";
 
 let displayInfo: OverlayInfo | null = null;
@@ -458,9 +474,10 @@ async function startScrollFromToolbar(): Promise<void> {
   }
   setToolbarPending(true, "正在进入滚动截图…");
   try {
-    // R9: scrolling capture starts in automatic mode; Go falls back to manual
-    // (and reports autoDenied on the control bar) when Accessibility is missing.
-    await startScroll(committedRect, true);
+    // R9: automatic scrolling by default (the user's preference can switch the
+    // default); Go falls back to manual and reports autoDenied on the control
+    // bar when the Accessibility permission is missing.
+    await startScroll(committedRect, scrollAutoDefault);
     phase = "finishing";
     setToolbarStatus("滚动截图进行中 · 结束后自动预览");
   } catch (error) {

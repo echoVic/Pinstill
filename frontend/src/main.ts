@@ -722,7 +722,6 @@ function commitSetting(row: SettingRow, input: HTMLInputElement | HTMLSelectElem
 }
 
 function applyPreferences(changedKey?: string): void {
-  document.documentElement.style.setProperty("--tooltip-delay", `${preferences.tooltipDelay}ms`);
   if (changedKey === "defaultColor" || changedKey === "defaultWidth") {
     // The overlay reads these from storage the next time a capture starts.
   }

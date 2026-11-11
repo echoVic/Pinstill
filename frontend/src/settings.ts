@@ -127,6 +127,12 @@ export const SETTINGS_SCHEMA: SettingsCategory[] = [
               { value: "pin", label: "固定到屏幕" },
             ],
           },
+          {
+            key: "scrollAuto",
+            name: "滚动截图默认自动",
+            description: "选区里点「滚动截图」时默认自动滚动；关闭后默认手动，控制条里随时可切换。",
+            type: "toggle",
+          },
         ],
       },
       {
@@ -192,8 +198,8 @@ export const SETTINGS_SCHEMA: SettingsCategory[] = [
           },
           {
             key: "editorKeys",
-            name: "常用编辑按键",
-            description: "撤销：⌘ / Ctrl Z　·　取消：Esc",
+            name: "标注快捷键",
+            description: "撤销：⌘ / Ctrl Z　·　完成复制：Enter　·　取消：Esc",
             type: "info",
             text: "固定按键",
           },
@@ -294,7 +300,7 @@ export const SETTINGS_SCHEMA: SettingsCategory[] = [
           {
             key: "defaultTool",
             name: "默认工具",
-            description: "点击“截一张”时使用的标注工具。",
+            description: "选区工具栏默认选中的标注工具。",
             type: "select",
             options: toolOptions,
           },
@@ -479,6 +485,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   cursor: false,
   sound: true,
   afterCapture: "inplace",
+  scrollAuto: true,
   tooltip: true,
   tooltipDelay: 120,
   captureKey: "CmdOrCtrl+Shift+1",
