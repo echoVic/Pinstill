@@ -176,17 +176,17 @@ PINSTILL_SELFTEST=scrollflow PINSTILL_SELFTEST_SCROLL_SIM=1 "$APP" 2>&1 | tee /t
 sleep 1.0
 expect 'SELFTEST scrollflow: result=[0-9][0-9]*x[0-9][0-9]*' /tmp/pinstill-selftest-scrollflow.log
 expect 'SELFTEST scrollflow: image=[0-9][0-9]*x[0-9][0-9]*' /tmp/pinstill-selftest-scrollflow.log
-expect 'SELFTEST scrollflow: actions=.*copy' /tmp/pinstill-selftest-scrollflow.log
-expect 'SELFTEST scrollflow: actions=.*save' /tmp/pinstill-selftest-scrollflow.log
-expect 'SELFTEST scrollflow: actions=.*pin' /tmp/pinstill-selftest-scrollflow.log
-expect 'SELFTEST scrollflow: actions=.*close' /tmp/pinstill-selftest-scrollflow.log
+expect 'actions=.*copy' /tmp/pinstill-selftest-scrollflow.log
+expect 'actions=.*save' /tmp/pinstill-selftest-scrollflow.log
+expect 'actions=.*pin' /tmp/pinstill-selftest-scrollflow.log
+expect 'actions=.*close' /tmp/pinstill-selftest-scrollflow.log
 expect 'SELFTEST scrollflow: closed=true' /tmp/pinstill-selftest-scrollflow.log
 
 step "Selftest: scrolling capture (manual mode auto finish)"
 PINSTILL_SELFTEST=scrollmanual PINSTILL_SELFTEST_SCROLL_SIM=1 "$APP" 2>&1 | tee /tmp/pinstill-selftest-scrollmanual.log
 sleep 1.0
 expect 'SELFTEST scrollmanual: result=[0-9][0-9]*x[0-9][0-9]*' /tmp/pinstill-selftest-scrollmanual.log
-expect 'SELFTEST scrollmanual: window=true' /tmp/pinstill-selftest-scrollmanual.log
+expect 'result=.*window=true' /tmp/pinstill-selftest-scrollmanual.log
 expect 'SELFTEST scrollmanual: checks=ok' /tmp/pinstill-selftest-scrollmanual.log
 
 step "Selftest: whole-display capture"

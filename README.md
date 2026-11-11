@@ -17,7 +17,7 @@ Pinstill 是一个面向 macOS 和 Windows 的桌面截图与标注工具。它�
 - **整屏截图**：托盘菜单「截取整个屏幕」静默截取鼠标所在显示器 → 存历史 → 按「截图后」执行（默认复制到剪贴板），不打开主窗口
 - **复制 / 导出**：一键写入剪贴板；按设置里的 PNG / JPEG、质量、文件名前缀走系统保存对话框，并默认定位到设置里的「默认保存文件夹」
 - **挂在桌面（贴图）**：始终置顶的无边框贴图窗口；拖动摆放、滚轮缩放、右下角手柄按比例缩放、⌘/Ctrl+滚轮调透明度、右键菜单（复制 / 保存 / 关闭 / 透明度 / 原始大小）、双击复制、Esc 关闭；多张各自独立摆放，**重启应用后自动恢复**（图片、位置、大小、透明度）
-- **滚动截图**：选区里点「滚动截图」后进入独立控制条模式——overlay 隐藏，你直接滚动目标窗口，Pinstill 自动抓帧并按重叠拼接成长图（也可开「自动滚动」，需要 macOS「辅助功能」权限）；完成后复制 / 保存 / 贴图，长图同样进历史
+- **滚动截图（默认自动）**：选区里点「滚动截图」后 overlay 隐藏、浮出紧凑控制条；默认自动滚动并抓帧拼接，到底 / 停顿约 1.2 秒 / 达到上限时**自动完成**并弹出长图结果预览窗口（复制 / 保存 / 贴图 / 关闭）；依赖 macOS「辅助功能」权限，未授权时自动降级为手动滚动（同样自动完成）；控制条可暂停/继续、切换自动/手动、立即完成、取消，长图同样进历史
 - **历史与预览**：截图自动落盘、真实缩略图卡片；点击打开大图预览（复制 / 保存 / 贴图 / 删除，←/→ 切换、Esc 关闭）、单条删除（二次确认）/ 清空；保留天数与容量上限生效。主窗口只有历史 + 偏好设置，不再有编辑器
 - **托盘**：菜单栏常驻图标：截取区域 / 截取整个屏幕 / 固定剪贴板图片 / 历史与设置 / 退出
 - **全局快捷键**：默认 ⌘⇧1（截取区域）、⌘⇧2（固定剪贴板图片）、⌘⇧O（提取文字，能力待接入）；可在设置里重新录制，注册失败会提示
@@ -40,9 +40,13 @@ Pinstill 是一个面向 macOS 和 Windows 的桌面截图与标注工具。它�
 
 ![桌面贴图](outputs/pinstill-pin.jpg)
 
-滚动截图控制条（手动滚动抓帧拼接，可选自动滚动）：
+滚动截图：默认自动滚动，控制条可暂停 / 切手动 / 立即完成（图为达到上限时的状态）：
 
-![滚动截图](outputs/pinstill-scroll.jpg)
+![滚动截图控制条](outputs/pinstill-scroll.jpg)
+
+滚动截图完成后的长图预览窗口（复制 / 保存 / 贴图 / 关闭，Esc 关闭）：
+
+![滚动截图结果预览](outputs/pinstill-scroll-result.jpg)
 
 历史（主窗口只有历史 + 偏好设置）：
 
@@ -97,10 +101,12 @@ internal/pin/                桌面贴图持久化：图片 + pins.json（位置
 frontend/index.html          主窗口（历史 / 设置）
 frontend/overlay.html        全屏选区覆盖层
 frontend/pin.html            置顶贴图窗口
+frontend/scroll.html         滚动截图控制条
+frontend/result.html         滚动截图长图预览
 frontend/src/                TypeScript 模块（bridge 是唯一的原生调用入口）
-vite.config.ts               四页多入口构建（index/overlay/pin/scroll）
+vite.config.ts               五页多入口构建（index/overlay/pin/scroll/result）
 work/plan.md                 本轮开发的冻结接口契约与实测结论
-work/e2e.sh                  端到端验收脚本（构建 + 18 项 selftest）
+work/e2e.sh                  端到端验收脚本（构建 + 19 项 selftest）
 ```
 
 ### 端到端验收
@@ -110,7 +116,7 @@ bash work/e2e.sh            # 完整构建 + 全部自检
 bash work/e2e.sh --skip-build   # 用现有构建产物只跑自检
 ```
 
-脚本会依次跑 Go 测试 / vet / Windows 交叉编译、前端与桌面构建，以及 18 项应用级自检（真实退出、真实截图+历史+剪贴板、overlay 渲染、选区映射像素级对比、Esc 取消、**就地标注全流程 copy/pin/cancel + afterCapture 自动动作**、**桌面贴图交互（双击/菜单/滚轮/关闭）**、**贴图重启恢复**、**滚动截图拼接与页面全流程**（长图经剪贴板校验）、**整屏截图**、**历史动作 copy/pin/remove**、主窗口视图（断言无编辑器 DOM + 历史预览开关）、贴图窗口、全局快捷键注册、设置应用、**权限中心**、**调色板面板**）。自检通过环境变量驱动（`PINSTILL_SELFTEST=quit|capture|overlay|drag|esc|flow|pinui|pinpersist-setup|pinpersist-check|scroll|scrollflow|fullscreen|historyactions|uicapture|pin|history|hotkeys|settings|perms|palette|showcase|scrollshot|hold`），产物与日志在 `/tmp/pinstill-selftest-*`。
+脚本会依次跑 Go 测试 / vet / Windows 交叉编译、前端与桌面构建，以及 19 项应用级自检（真实退出、真实截图+历史+剪贴板、overlay 渲染、选区映射像素级对比、Esc 取消、**就地标注全流程 copy/pin/cancel + afterCapture 自动动作**、**桌面贴图交互（双击/菜单/滚轮/关闭）**、**贴图重启恢复**、**滚动截图**（默认自动滚动 → 自动完成 → 结果预览 → 复制；手动模式停顿自动完成；页面驱动结果窗口断言）、**整屏截图**、**历史动作 copy/pin/remove**、主窗口视图（断言无编辑器 DOM + 历史预览开关）、贴图窗口、全局快捷键注册、设置应用、**权限中心**、**调色板面板**）。自检通过环境变量驱动（`PINSTILL_SELFTEST=quit|capture|overlay|drag|esc|flow|pinui|pinpersist-setup|pinpersist-check|scroll|scrollflow|scrollmanual|fullscreen|historyactions|uicapture|pin|history|hotkeys|settings|perms|palette|showcase|scrollshot|hold`），产物与日志在 `/tmp/pinstill-selftest-*`。
 
 ### 数据与权限
 
@@ -126,7 +132,7 @@ bash work/e2e.sh --skip-build   # 用现有构建产物只跑自检
 
 - **Windows 未真机验证**（GDI 后端仅保证纯 Go 交叉编译通过；坐标按物理像素解释，与 macOS 的 point 语义不同，HiDPI 缩放下选区可能错位，当前按「基础实现」看待）
 - **OCR / 翻译 / 二维码** 尚未接入服务，UI 明确标注「待接入」
-- **滚动截图**：手动模式已可用；Windows 上手动拼接引擎同样编译可用但未真机验证；自动滚动依赖 macOS「辅助功能」权限，滚轮事件在部分 App（自绘滚动/虚拟列表）可能不生效，建议先用手动模式；固定表头/表尾（网页顶栏、聊天输入框）会造成拼接错位，请框选内部滚动区；上限 120 帧 / 30000px
+- **滚动截图**：默认自动滚动，依赖 macOS「辅助功能」权限（未授权会自动降级为手动并给出授权入口）；滚轮事件在部分 App（自绘滚动/虚拟列表）可能不生效，可切手动滚；固定表头/表尾（网页顶栏、聊天输入框）会造成拼接错位，请框选内部滚动区；连续 3 帧无变化（约 1.2 秒）会自动完成，可先「暂停」再继续；上限 120 帧 / 30000px；Windows 手动拼接引擎交叉编译通过但未真机验证
 - **overlay 覆盖的是屏幕可见工作区**（macOS 的 Panel 会被 AppKit 约束在菜单栏与 Dock 之外），无法直接框选菜单栏 / Dock 区域；选区坐标按窗口实际 frame 换算，截图内容不受影响
 - **登录启动** 在未安装到 `/Applications` 的构建里会返回 `Operation not permitted`，设置页会如实展示；安装后的行为待人工确认
 - **导出 / 保存 / 历史另存对话框**未纳入自动化自检（模态框），导出、格式转换与保存路径逻辑由单元测试 / History.Save 绑定覆盖，建议人工点一次确认

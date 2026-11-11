@@ -830,4 +830,5 @@ R6 的完整替换漏了两处旧名首字母 **T** 的图形残留（文字已�
 - **新增绑定**：`Capture.SetScrollPaused`、`CopyScrollResult`、`SaveScrollResult`、`PinScrollResult`、`CloseScrollResult`；事件 `scroll:result`；`scroll:init` 增加 `autoDenied`，`scroll:progress` 增加 `paused` 状态；控制条 380×64，结果窗口 980×720 上限按显示器夹取。
 - **selftest**：`scroll`（自动收尾 → 结果 1280×2600 → 剪贴板 1280×2600 → 复制后窗口关闭）、`scrollmanual`（手动模式停顿自动收尾）、`scrollflow`（页面驱动 → 结果窗口 DOM：图片 1280×2600 / 9 帧 / copy,save,pin,close / 关闭）全绿；`scrollshot` 产出控制条与结果窗口截图（用于 README，需解锁后重拍）。
 - `go test`/`go vet` 全绿；`npm run build:web` 5 页通过。
-- **待补**：完整 e2e 与 Developer ID 签名构建（本轮验证时 Mac 已锁屏，登录钥匙串不可用导致 codesign 卡在取私钥；临时用 ad-hoc 构建验证了滚动相关 selftest；README 截图与文案在解锁后补跑并提交）。
+- **解锁后补齐（2026-11-11 中午）**：Developer ID 签名构建（带安全时间戳）通过；完整 `work/e2e.sh --skip-build`（隔离数据目录）**22 步 ALL CHECKS PASSED**——scroll / scrollflow / scrollmanual 三步全绿（结果 1280×2600、剪贴板校验、结果窗口 DOM 四动作、手动模式自动收尾）；README 滚动截图文案更新，新增控制条 + 长图预览两张截图（`pinstill-scroll.jpg` / `pinstill-scroll-result.jpg`）。
+- **顺手修复（用户反馈）**：调色板触发器在选区快速色点行里原来显示成「彩虹圆 + 小图标」，看起来像误入的 emoji；现改为中性 19px 圆角按钮 + 11px 调色板图标（hover/展开时 amber 高亮），overlay 截图已重拍。
