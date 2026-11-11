@@ -126,6 +126,7 @@ expect 'main visible=true' /tmp/pinstill-selftest-esc.log
 step "Selftest: desktop action flow (drag + toolbar)"
 PINSTILL_SELFTEST=flow "$APP" 2>&1 | tee /tmp/pinstill-selftest-flow.log
 sleep 1.0
+expect 'SELFTEST flow: toolbar_drag=60,40' /tmp/pinstill-selftest-flow.log
 expect 'SELFTEST flow: copy clipboard' /tmp/pinstill-selftest-flow.log
 grep -q 'SELFTEST flow: copy clipboard EMPTY' /tmp/pinstill-selftest-flow.log && fail=1
 expect 'SELFTEST flow: pin pins=1' /tmp/pinstill-selftest-flow.log

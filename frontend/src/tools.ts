@@ -26,7 +26,7 @@ export type ToolId =
 
 /** The overlay annotation toolbar, drawing tools first, actions second. */
 export const TOOLS: ReadonlyArray<readonly [ToolId, string]> = [
-  ["drag", "拖拽"],
+  ["drag", "移动标注"],
   ["rect", "矩形"],
   ["ellipse", "圆形"],
   ["line", "直线"],

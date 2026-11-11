@@ -765,6 +765,22 @@ func (a *App) selftestFlow() {
 	}
 	// copy: annotated image on the clipboard
 	if prepare("copy") {
+		// The annotation toolbar is draggable; actions must still work after it
+		// was moved out of the way.
+		dragDelta := a.overlayEval(`(() => {
+			const handle = document.getElementById('annotationHandle');
+			const bar = document.getElementById('annotationToolbar');
+			if (!handle || !bar) return 'missing';
+			const before = bar.getBoundingClientRect();
+			const r = handle.getBoundingClientRect();
+			const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+			handle.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, clientX: cx, clientY: cy, pointerId: 7, pointerType: 'mouse', button: 0 }));
+			window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, cancelable: true, clientX: cx + 60, clientY: cy + 40, pointerId: 7, pointerType: 'mouse' }));
+			window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, clientX: cx + 60, clientY: cy + 40, pointerId: 7, pointerType: 'mouse', button: 0 }));
+			const after = bar.getBoundingClientRect();
+			return Math.round(after.x - before.x) + ',' + Math.round(after.y - before.y);
+		})()`)
+		fmt.Printf("SELFTEST flow: toolbar_drag=%v\n", dragDelta)
 		click("copy", "copy")
 		if img := mygo.Clipboard.ReadImage(); len(img) > 0 {
 			w, h := imageDimensions(img)

@@ -307,7 +307,7 @@ export const SETTINGS_SCHEMA: SettingsCategory[] = [
           {
             key: "defaultWidth",
             name: "画笔粗细",
-            description: "与编辑器中的粗细选项同步。",
+            description: "新建标注的默认线条粗细；在标注工具栏里还可以临时调整。",
             type: "range",
             min: 1,
             max: 10,
@@ -494,7 +494,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   historyLimitMB: 2048,
   defaultTool: "arrow",
   defaultColor: "#e56e48",
-  defaultWidth: 4,
+  defaultWidth: 2,
   watermarkText: "Pinstill",
   watermarkOpacity: 35,
   pinOpacity: 100,
@@ -544,6 +544,24 @@ function normalizeLegacyAccelerator(value: string): string {
 }
 
 /** Loads persisted preferences, merging only values whose type still matches. */
+// Older builds defaulted the annotation stroke to 4, which reads too heavy
+// next to the mainstream tools (their default is ~2). Existing preferences
+// are migrated once, only when the stored value is still the old default.
+const WIDTH_MIGRATION_KEY = "pinstill.prefsWidthMigration";
+
+function migrateLegacyWidth(preferences: Preferences): void {
+  try {
+    if (localStorage.getItem(WIDTH_MIGRATION_KEY)) return;
+    localStorage.setItem(WIDTH_MIGRATION_KEY, "1");
+    if (preferences.defaultWidth === 4) {
+      preferences.defaultWidth = 2;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(preferences));
+    }
+  } catch {
+    // Storage may be unavailable; the in-memory default still applies.
+  }
+}
+
 export function loadPreferences(): Preferences {
   const preferences: Preferences = { ...DEFAULT_PREFERENCES };
   try {
@@ -573,6 +591,7 @@ export function loadPreferences(): Preferences {
     // the in-place toolbar.
     preferences.afterCapture = "inplace";
   }
+  migrateLegacyWidth(preferences);
   return preferences;
 }
 

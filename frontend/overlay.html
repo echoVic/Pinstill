@@ -155,7 +155,27 @@
   }
   .at-row { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; max-width: 100%; }
   .at-tools { row-gap: 2px; }
+  .at-tools-body { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; min-width: 0; }
   .at-tool-sep { width: 1px; height: 20px; margin: 0 3px; background: rgba(26, 25, 21, 0.14); flex: 0 0 auto; }
+  .at-handle {
+    width: 22px;
+    height: 30px;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: #8b8578;
+    cursor: grab;
+    flex: 0 0 auto;
+  }
+  .at-handle svg { width: 13px; height: 18px; }
+  .at-handle:hover { background: #ece6d9; color: #4a463d; }
+  .at-handle:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+  .annotation-toolbar.dragging .at-handle { cursor: grabbing; }
+  body.dragging-toolbar, body.dragging-toolbar * { cursor: grabbing !important; user-select: none; }
+
   .at-bottom { gap: 6px; padding-top: 3px; border-top: 1px solid #e4ded2; }
 
   .tool-btn {
@@ -403,14 +423,19 @@
   <div class="size-badge" id="sizeBadge" hidden></div>
 
   <div class="annotation-toolbar" id="annotationToolbar" role="toolbar" aria-label="标注工具栏" hidden>
-    <div class="at-row at-tools" id="overlayTools" role="group" aria-label="绘制工具"></div>
+    <div class="at-row at-tools">
+      <button type="button" class="at-handle" id="annotationHandle" aria-label="拖动工具栏" title="按住拖动工具栏">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>
+      </button>
+      <div class="at-tools-body" id="overlayTools" role="group" aria-label="绘制工具"></div>
+    </div>
     <div class="at-row at-bottom">
       <div class="at-props">
         <div class="at-colors" id="overlayColors" role="group" aria-label="标注颜色"></div>
         <label class="at-width" for="overlayWidth" id="overlayWidthLabel">
           <span id="overlayWidthLabelText">粗细</span>
-          <input id="overlayWidth" type="range" min="1" max="10" step="1" value="4" aria-label="粗细" />
-          <output id="overlayWidthValue">4</output>
+          <input id="overlayWidth" type="range" min="1" max="10" step="1" value="2" aria-label="粗细" />
+          <output id="overlayWidthValue">2</output>
         </label>
         <input id="overlayText" type="text" placeholder="输入内容" maxlength="100" aria-label="标注内容" hidden />
       </div>

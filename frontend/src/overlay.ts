@@ -147,6 +147,7 @@ const crosshairH = el("crosshairH");
 const sizeBadge = el("sizeBadge");
 const hint = el("hint");
 const toolbar = el("annotationToolbar");
+const annotationHandle = el<HTMLButtonElement>("annotationHandle");
 const toolsHost = el("overlayTools");
 const colorsHost = el("overlayColors");
 const actionsHost = el("overlayActions");
@@ -185,7 +186,7 @@ let color =
 let penWidth =
   typeof storedPreferences.defaultWidth === "number"
     ? clamp(Math.round(storedPreferences.defaultWidth), 1, 10)
-    : 4;
+    : 2;
 const watermarkText =
   typeof storedPreferences.watermarkText === "string" && storedPreferences.watermarkText
     ? storedPreferences.watermarkText
@@ -591,6 +592,7 @@ function setToolbarPending(pending: boolean, label = "", kind: "info" | "error" 
 function placeToolbar(): void {
   if (!committedRect) return;
   toolbar.hidden = false;
+  if (toolbarMoved) return;
   toolbar.style.left = "0px";
   toolbar.style.top = "0px";
   toolbar.classList.toggle(
@@ -649,6 +651,96 @@ function hideToolbar(): void {
   setToolbarPending(false);
   setToolbarStatus("");
 }
+
+// The annotation toolbar can be dragged out of the way: grab the handle (or
+// any non-interactive part of the bar) and move it; the position is kept for
+// the current capture and the bar is re-placed for the next one.
+interface ToolbarDragState {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  left: number;
+  top: number;
+}
+
+let toolbarDrag: ToolbarDragState | null = null;
+let toolbarMoved = false;
+
+function startToolbarDrag(event: PointerEvent): void {
+  if (toolbar.hidden || event.button !== 0) return;
+  const rect = toolbar.getBoundingClientRect();
+  toolbarDrag = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    left: rect.left,
+    top: rect.top,
+  };
+  toolbar.style.left = `${rect.left}px`;
+  toolbar.style.top = `${rect.top}px`;
+  toolbar.classList.add("dragging");
+  document.body.classList.add("dragging-toolbar");
+  event.preventDefault();
+}
+
+function moveToolbarDrag(event: PointerEvent): boolean {
+  if (!toolbarDrag || event.pointerId !== toolbarDrag.pointerId) return false;
+  const width = toolbar.offsetWidth;
+  const height = toolbar.offsetHeight;
+  const left = clamp(
+    toolbarDrag.left + event.clientX - toolbarDrag.startX,
+    EDGE_MARGIN,
+    Math.max(EDGE_MARGIN, viewportWidth() - width - EDGE_MARGIN),
+  );
+  const top = clamp(
+    toolbarDrag.top + event.clientY - toolbarDrag.startY,
+    EDGE_MARGIN,
+    Math.max(EDGE_MARGIN, viewportHeight() - height - EDGE_MARGIN),
+  );
+  if (left !== toolbarDrag.left || top !== toolbarDrag.top) toolbarMoved = true;
+  toolbar.style.left = `${left}px`;
+  toolbar.style.top = `${top}px`;
+  event.preventDefault();
+  return true;
+}
+
+function endToolbarDrag(event: PointerEvent): void {
+  if (!toolbarDrag || event.pointerId !== toolbarDrag.pointerId) return;
+  toolbarDrag = null;
+  toolbar.classList.remove("dragging");
+  document.body.classList.remove("dragging-toolbar");
+  if (committedRect) {
+    updateSizeBadge(committedRect, toolbar.getBoundingClientRect().top < committedRect.y);
+  }
+}
+
+annotationHandle.addEventListener("pointerdown", (event) => {
+  startToolbarDrag(event);
+  event.stopPropagation();
+});
+toolbar.addEventListener("pointerdown", (event) => {
+  if (event.target instanceof Element && event.target.closest("button,input,label,output,select,textarea")) {
+    return;
+  }
+  startToolbarDrag(event);
+});
+window.addEventListener(
+  "pointermove",
+  (event) => {
+    if (moveToolbarDrag(event)) event.stopPropagation();
+  },
+  true,
+);
+window.addEventListener(
+  "pointerup",
+  (event) => endToolbarDrag(event),
+  true,
+);
+window.addEventListener(
+  "pointercancel",
+  (event) => endToolbarDrag(event),
+  true,
+);
 
 function undo(): void {
   if (!engine) return;
@@ -796,6 +888,7 @@ async function beginAnnotation(payload: OverlayCapture): Promise<void> {
 
 async function prepareSelectionFor(rect: Rect): Promise<void> {
   phase = "preparing";
+  toolbarMoved = false;
   // Go captures straight through the overlay window: hide the border, corner
   // marks, size badge, crosshair and hint so the captured image contains none
   // of our UI (the selection interior is already transparent).
