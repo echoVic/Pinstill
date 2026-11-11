@@ -4,7 +4,7 @@
 // Page-side behavior from plan R2.2:
 // - the whole image is the window's drag region (CSS `--app-region: drag`,
 //   see pin.html); controls are no-drag;
-// - hover close button, custom context menu (copy / save / close / opacity
+// - custom context menu (copy / save / close / opacity
 //   ±10% / original size), double-click copies, wheel scales the window
 //   (⌘/Ctrl + wheel changes opacity), the bottom-right grip resizes the
 //   window keeping the aspect ratio, Esc closes;
@@ -51,8 +51,8 @@ const el = <T extends HTMLElement = HTMLElement>(id: string): T => {
 
 const windowEl = el("pinWindow");
 const image = el<HTMLImageElement>("pinImage");
-const errorEl = el("pinError");
 const closeButton = el<HTMLButtonElement>("pinClose");
+const errorEl = el("pinError");
 const resizeHandle = el("pinResize");
 const menu = el("pinMenu");
 const menuState = el("pinMenuState");
@@ -407,6 +407,8 @@ menu.addEventListener("click", (event) => {
   }
 });
 
+closeButton.addEventListener("click", () => void closeWindow());
+
 // ---------------------------------------------------------------------------
 // Wheel: scale the window, ⌘/Ctrl + wheel changes opacity
 // ---------------------------------------------------------------------------
@@ -535,7 +537,6 @@ function applyPin(init: PinInit): void {
   image.src = init.url;
 }
 
-closeButton.addEventListener("click", () => void closeWindow());
 
 window.addEventListener("dblclick", (event) => {
   if (closing) return;

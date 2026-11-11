@@ -832,3 +832,9 @@ R6 的完整替换漏了两处旧名首字母 **T** 的图形残留（文字已�
 - `go test`/`go vet` 全绿；`npm run build:web` 5 页通过。
 - **解锁后补齐（2026-11-11 中午）**：Developer ID 签名构建（带安全时间戳）通过；完整 `work/e2e.sh --skip-build`（隔离数据目录）**22 步 ALL CHECKS PASSED**——scroll / scrollflow / scrollmanual 三步全绿（结果 1280×2600、剪贴板校验、结果窗口 DOM 四动作、手动模式自动收尾）；README 滚动截图文案更新，新增控制条 + 长图预览两张截图（`pinstill-scroll.jpg` / `pinstill-scroll-result.jpg`）。
 - **顺手修复（用户反馈）**：调色板触发器在选区快速色点行里原来显示成「彩虹圆 + 小图标」，看起来像误入的 emoji；现改为中性 19px 圆角按钮 + 11px 调色板图标（hover/展开时 amber 高亮），overlay 截图已重拍。
+
+## R9.7 用户试用反馈修复（2026-11-11 下午）
+
+1. **主窗口左上角品牌被「红黄绿」交通灯压住**：macOS 隐藏标题栏（hidden inset）把窗口控制按钮浮在页面左上角，而历史页的 rail 顶部只有 24px 内边距，品牌标记正好被三个按钮叠住。修复：`main.ts` 在 macOS 下给 `<html>` 加 `.is-mac`，CSS 里 `.is-mac .rail{padding-top:56px}`，品牌挪到交通灯下方（Windows/浏览器不受影响）。
+2. **贴图窗口的关闭按钮太大太抢**：恢复保留关闭按钮（Esc / 右键菜单照旧），但缩小为 18×18 的半透明「玻璃」小按钮（图标 10px、无边框、悬停淡入、focus-visible 细琥珀描边）；结果预览窗口右上角关闭按钮也从 26px 收到 22px 并减小图标，和整体更协调。
+3. 验证：`pinui` 通过（关闭按钮点击 → pins=0/stored=0）；`npm run build:web` 5 页；签名构建（Developer ID，带时间戳）；完整 e2e 复跑。

@@ -254,6 +254,10 @@ select:focus-visible,input[type=text]:focus-visible,input[type=range]:focus-visi
 .toast[data-kind=success]{border-left:3px solid #a8c7a0}
 .toast[data-kind=info]{border-left:3px solid #f3a24e}
 
+/* macOS inset title bar: the traffic lights float over the top-left of the
+   page, so the rail starts below them instead of under the brand. */
+.is-mac .rail{padding-top:56px}
+
 /* ---------------------------------------------------------------- narrow windows */
 @media(max-width:1250px){
   .main{padding:26px 28px 40px}

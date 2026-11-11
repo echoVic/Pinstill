@@ -51,31 +51,33 @@
     box-shadow: inset 0 0 0 1px rgba(243, 162, 78, 0.9);
   }
 
+  /* Small, quiet close affordance: an 18px glass button that fades in on
+     hover/focus (Esc and the right-click menu still work too). */
   .pin-close {
     --app-region: no-drag;
     position: absolute;
-    top: 6px;
-    right: 6px;
-    width: 24px;
-    height: 24px;
+    top: 5px;
+    right: 5px;
+    width: 18px;
+    height: 18px;
     padding: 0;
     display: grid;
     place-items: center;
-    border: 1px solid rgba(26, 25, 21, 0.2);
-    border-radius: 7px;
-    background: rgba(250, 247, 240, 0.86);
-    color: #36332c;
+    border: 0;
+    border-radius: 5px;
+    background: rgba(24, 23, 20, 0.55);
+    color: rgba(246, 242, 232, 0.92);
     cursor: pointer;
     opacity: 0;
     transition: opacity 0.12s ease, background 0.12s ease;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.22);
     z-index: 1;
   }
-  .pin-close svg { width: 14px; height: 14px; }
+  .pin-close svg { width: 10px; height: 10px; }
   .pin-window:hover .pin-close,
   .pin-close:focus-visible { opacity: 1; }
-  .pin-close:hover { background: #fffaf0; }
-  .pin-close:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+  .pin-close:hover { background: rgba(24, 23, 20, 0.82); }
+  .pin-close:focus-visible { outline: 1px solid var(--amber); outline-offset: 1px; }
 
   /* Bottom-right resize grip: page-driven, keeps the aspect ratio. */
   .pin-resize {
@@ -196,7 +198,7 @@
   <div class="pin-window" id="pinWindow">
     <img id="pinImage" alt="固定到桌面的截图" />
     <button type="button" class="pin-close" id="pinClose" aria-label="关闭贴图" title="关闭贴图（Esc）">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
     </button>
     <div class="pin-resize" id="pinResize" role="slider" aria-label="调整贴图大小" tabindex="-1">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M21 15 15 21"/><path d="M21 8 8 21"/></svg>

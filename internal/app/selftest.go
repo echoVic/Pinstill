@@ -943,7 +943,7 @@ func (a *App) selftestPinUI() {
 	}
 	a.mu.Unlock()
 	fmt.Printf("SELFTEST pinui: wheel bounds=%+v scaled=%v\n", afterWheel, afterWheel.Width > after.Width)
-	// close through the page's close button: state must disappear
+	// close through the hover close button: state must disappear
 	fmt.Printf("SELFTEST pinui: close=%v\n", eval(`(() => { const b = document.getElementById('pinClose'); if (!b) return 'missing'; b.click(); return 'clicked'; })()`))
 	time.Sleep(900 * time.Millisecond)
 	a.mu.Lock()
