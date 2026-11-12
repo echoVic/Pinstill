@@ -106,7 +106,6 @@ python3 -m http.server 8765
 - macOS 13+（Apple Silicon / Intel），已安装 Xcode Command Line Tools
 - Go **1.27+**（版本以 [go.mod](go.mod) 为准）
 - Node.js **22+** 与 npm
-- 可选：Apple Developer ID 证书（用于签名；不签名也能本地跑）
 
 ### 构建
 
@@ -123,16 +122,6 @@ open build/darwin-arm64/Pinstill.app
 ```
 
 产物在 `build/darwin-arm64/`（`.app` 与 `.dmg`）。
-
-签名默认使用 **ad-hoc**（`-`），新克隆无需证书即可构建；但 ad-hoc 签名每次构建都会变化，
-macOS 的「屏幕录制 / 辅助功能」授权需要重新确认。日常使用建议用固定 Developer ID 构建：
-
-```bash
-MACOS_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)" npm run build
-```
-
-签名身份只影响本机 TCC 授权记忆，不参与应用逻辑。当前**未做公证（notarization）**：在其他 Mac
-上首次打开可能需要在「系统设置 → 隐私与安全性」点「仍要打开」，或右键 → 打开。
 
 开发模式（Vite 热更新 + MyGo 窗口）：
 
@@ -160,9 +149,6 @@ npm run dev
 - 滚动截图自动滚动需要「辅助功能」权限（未授权自动降级为手动）
 - 开发 / 自检可用 `PINSTILL_DATA_DIR=/tmp/pinstill-data` 把 captures、pins、session 隔离到指定目录
   （生成 README 截图的 `PINSTILL_SELFTEST=showcase` 强制要求设置该变量，避免读到真实历史）
-- 旧名 **Tupen** 的历史数据会在首次启动新版本时自动迁移：`Application Support/Tupen → Pinstill`、
-  `Caches/Tupen → Pinstill`，以及 WebKit 的 `dev.echovic.tupen → dev.echovic.pinstill`；
-  bundle id 变更后，系统「屏幕录制」权限需要重新授权一次
 
 ## 架构
 
@@ -267,7 +253,7 @@ work/plan.md                  开发记录：接口契约与实测结论
 - [x] 权限中心、登录启动、7 类偏好设置
 - [ ] OCR / 翻译 / 二维码接入
 - [ ] Windows 真机验证与适配
-- [ ] Developer ID 公证与二进制 release
+- [ ] 提供二进制 release
 
 ## 参与贡献
 

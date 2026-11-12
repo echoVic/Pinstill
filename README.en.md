@@ -70,14 +70,7 @@ npm run build:web
 open build/darwin-arm64/Pinstill.app
 ```
 
-The build is ad-hoc signed by default. For a stable macOS TCC grant (screen recording /
-accessibility) across rebuilds, sign with your Developer ID:
-
-```bash
-MACOS_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)" npm run build
-```
-
-Notarization is not set up yet. Development mode with Vite HMR: `npm run dev`.
+Development mode with Vite HMR: `npm run dev`.
 
 On first launch, grant **Screen Recording** (required for captures); automatic scrolling capture
 also needs **Accessibility**.
