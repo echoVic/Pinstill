@@ -45,6 +45,46 @@ export interface ShapeRenderStyle {
 export const DEFAULT_TEXT_FONT =
   '-apple-system, "PingFang SC", "Helvetica Neue", "Segoe UI", sans-serif';
 
+/** A tiled watermark laid over the whole capture (not a movable shape). */
+export interface WatermarkLayer {
+  text: string;
+  /** 10..90: the tiled text renders with this opacity. */
+  opacity: number;
+  /** Font size in logical pt (scaled by the canvas scale). */
+  size: number;
+  color: string;
+}
+
+/** Draws the repeated watermark text across the whole canvas. */
+export function drawTiledWatermark(
+  ctx: CanvasRenderingContext2D,
+  layer: WatermarkLayer,
+  scale: number,
+  canvas: HTMLCanvasElement,
+): void {
+  const text = layer.text.trim();
+  if (!text) return;
+  const fontSize = Math.max(10, layer.size) * scale;
+  ctx.save();
+  ctx.globalAlpha = Math.max(0.05, Math.min(1, layer.opacity / 100));
+  ctx.fillStyle = layer.color;
+  ctx.font = `600 ${fontSize}px ${DEFAULT_TEXT_FONT}`;
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "left";
+  const textWidth = Math.max(1, ctx.measureText(text).width);
+  const stepX = textWidth + fontSize * 2.2;
+  const stepY = fontSize * 2.4;
+  const startX = -stepX * 0.25;
+  let row = 0;
+  for (let y = stepY * 0.6; y < canvas.height + stepY; y += stepY, row++) {
+    const offset = row % 2 === 0 ? 0 : stepX / 2;
+    for (let x = startX + offset; x < canvas.width + stepX; x += stepX) {
+      ctx.fillText(text, x, y);
+    }
+  }
+  ctx.restore();
+}
+
 export function roundRectPath(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -264,6 +304,7 @@ export class AnnotationEngine {
   private scale = 1;
   private labelNumber = 1;
   private baseRenderer: (() => void) | null = null;
+  private watermark: WatermarkLayer | null = null;
 
   constructor(options: AnnotationEngineOptions) {
     this.canvas = options.canvas;
@@ -275,6 +316,17 @@ export class AnnotationEngine {
 
   setBaseRenderer(renderer: (() => void) | null): void {
     this.baseRenderer = renderer;
+  }
+
+  /** Sets (or clears) the tiled watermark drawn over the capture and under the
+   * annotations; the watermark is part of every exported image. */
+  setWatermark(layer: WatermarkLayer | null): void {
+    this.watermark = layer ? { ...layer } : null;
+    this.redraw();
+  }
+
+  getWatermark(): WatermarkLayer | null {
+    return this.watermark ? { ...this.watermark } : null;
   }
 
   /** canvas pixels per logical design pixel (capture pixels / selection CSS px). */
@@ -327,6 +379,9 @@ export class AnnotationEngine {
     const { width, height } = this.canvas;
     this.ctx.clearRect(0, 0, width, height);
     this.baseRenderer?.();
+    if (this.watermark) {
+      drawTiledWatermark(this.ctx, this.watermark, this.scale, this.canvas);
+    }
     for (const shape of this.shapes) {
       drawShape(this.ctx, shape, {
         scale: this.scale,
@@ -425,8 +480,7 @@ export class AnnotationEngine {
       tool === "text" ||
       tool === "tag" ||
       tool === "mosaic" ||
-      tool === "highlight" ||
-      tool === "watermark"
+      tool === "highlight"
     );
   }
 }

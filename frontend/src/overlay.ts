@@ -15,6 +15,7 @@
 // and toasts, so the static preview stays demoable without console errors.
 
 import { AnnotationEngine, DEFAULT_TEXT_FONT, InlineTextEditor } from "./annotate";
+import type { WatermarkLayer } from "./annotate";
 import {
   beginRegion,
   cancelRegion,
@@ -161,6 +162,10 @@ const widthValue = el("overlayWidthValue");
 const widthLabel = el("overlayWidthLabel");
 const widthLabelText = el("overlayWidthLabelText");
 const textInput = el<HTMLInputElement>("overlayText");
+const watermarkProps = el("overlayWatermark");
+const watermarkTextInput = el<HTMLInputElement>("watermarkText");
+const watermarkOpacityInput = el<HTMLInputElement>("watermarkOpacity");
+const watermarkOpacityValue = el("watermarkOpacityValue");
 const textProps = el("overlayTextProps");
 const textBoldButton = el<HTMLButtonElement>("textBold");
 const textItalicButton = el<HTMLButtonElement>("textItalic");
@@ -276,6 +281,70 @@ const tooltipDelayMs =
 const enterCopyEnabled = storedPreferences.enterCopy !== false;
 const scrollAutoDefault = storedPreferences.scrollAuto !== false;
 let entry = "重点说明";
+
+// Tiled watermark: a full-canvas layer (not a movable shape) with its own
+// text and opacity, remembered across captures. The colour follows the
+// current annotation colour and the size follows the 字号 slider.
+interface WatermarkSettings {
+  text: string;
+  opacity: number;
+}
+
+const WATERMARK_STYLE_KEY = "pinstill.watermark";
+
+function loadWatermarkSettings(): WatermarkSettings {
+  const fallback: WatermarkSettings = {
+    text: watermarkText,
+    opacity: clamp(watermarkOpacity, 10, 90),
+  };
+  try {
+    const raw = JSON.parse(localStorage.getItem(WATERMARK_STYLE_KEY) ?? "null") as
+      | Partial<WatermarkSettings>
+      | null;
+    if (raw && typeof raw.text === "string") {
+      fallback.text = raw.text.slice(0, 20) || "Pinstill";
+      fallback.opacity = clamp(Math.round(Number(raw.opacity) || 30), 10, 90);
+    }
+  } catch {
+    // Ignore broken storage and use the settings defaults.
+  }
+  return fallback;
+}
+
+let watermark = loadWatermarkSettings();
+let watermarkEnabled = false;
+
+function watermarkLayer(): WatermarkLayer | null {
+  if (!watermarkEnabled) return null;
+  const text = watermark.text.trim();
+  if (!text) return null;
+  return {
+    text,
+    opacity: watermark.opacity,
+    // Reuse the line-width slider as the watermark font size.
+    size: penWidth * 3 + 18,
+    color,
+  };
+}
+
+function applyWatermark(): void {
+  engine?.setWatermark(watermarkLayer());
+}
+
+function saveWatermark(): void {
+  try {
+    localStorage.setItem(WATERMARK_STYLE_KEY, JSON.stringify(watermark));
+  } catch {
+    // Storage may be unavailable; the session state still applies.
+  }
+}
+
+function updateWatermarkUI(): void {
+  watermarkTextInput.value = watermark.text;
+  watermarkOpacityInput.value = String(watermark.opacity);
+  watermarkOpacityValue.textContent = `${watermark.opacity}%`;
+}
+
 
 // Tooltip preferences are read from localStorage above; apply them only now,
 // otherwise `tooltipsEnabled` is still undefined when the init code runs.
@@ -563,9 +632,22 @@ function buildToolbar(): void {
   widthInput.addEventListener("input", () => {
     penWidth = clamp(Number(widthInput.value) || 1, 1, 10);
     widthValue.textContent = String(penWidth);
+    if (watermarkEnabled) applyWatermark();
   });
   textInput.addEventListener("input", () => {
     entry = textInput.value;
+  });
+  updateWatermarkUI();
+  watermarkTextInput.addEventListener("input", () => {
+    watermark.text = watermarkTextInput.value.slice(0, 20);
+    saveWatermark();
+    applyWatermark();
+  });
+  watermarkOpacityInput.addEventListener("input", () => {
+    watermark.opacity = clamp(Math.round(Number(watermarkOpacityInput.value) || 30), 10, 90);
+    watermarkOpacityValue.textContent = `${watermark.opacity}%`;
+    saveWatermark();
+    applyWatermark();
   });
 
   selectTool(currentTool);
@@ -582,6 +664,7 @@ function onToolbarClick(event: Event): void {
     const tool = toolButton.dataset.tool;
     if (tool === "undo") undo();
     else if (tool === "scroll") void startScrollFromToolbar();
+    else if (tool === "watermark") toggleWatermarkTool();
     else if (tool && PLACEHOLDER_TOOLS.has(tool)) showRecognitionPlaceholder(tool);
     else if (tool) selectTool(tool as ToolId);
     return;
@@ -645,6 +728,21 @@ function applyTextStyleUI(): void {
   textFontSelect.value = textStyle.family;
 }
 
+/** The watermark button is an on/off layer: clicking it shows the tiled
+ * watermark and its settings row, clicking it again removes the watermark and
+ * returns to the rectangle tool. */
+function toggleWatermarkTool(): void {
+  if (watermarkEnabled) {
+    watermarkEnabled = false;
+    applyWatermark();
+    watermarkProps.hidden = true;
+    selectTool("rect");
+    return;
+  }
+  watermarkEnabled = true;
+  selectTool("watermark");
+}
+
 function selectTool(tool: ToolId): void {
   currentTool = tool;
   engine?.setTool(tool);
@@ -654,21 +752,21 @@ function selectTool(tool: ToolId): void {
     button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", String(active));
   }
-  // Text and tag now use the inline editor at the clicked position; only the
-  // watermark keeps the toolbar text field.
-  const showsTextInput = tool === "watermark";
-  textInput.hidden = !showsTextInput;
-  // The text tool gets its own style controls (bold/italic/size/family); the
-  // line-width slider only applies to the drawing tools and the watermark.
+  // Text and tag use the inline editor at the clicked position, so the old
+  // toolbar text field stays hidden; the watermark has its own settings row.
+  textInput.hidden = true;
   const isTextTool = tool === "text";
+  const isWatermarkTool = tool === "watermark";
   textProps.hidden = !isTextTool;
+  watermarkProps.hidden = !isWatermarkTool;
   widthLabel.hidden = isTextTool;
-  widthLabelText.textContent = tool === "watermark" ? "字号" : "粗细";
-  if (tool === "watermark") {
-    entry = watermarkText;
-    textInput.value = entry;
+  widthLabelText.textContent = isWatermarkTool ? "字号" : "粗细";
+  if (isWatermarkTool) {
+    watermarkEnabled = true;
+    updateWatermarkUI();
+    applyWatermark();
   }
-  canvas.style.cursor = tool === "drag" ? "move" : tool === "text" ? "text" : "crosshair";
+  canvas.style.cursor = tool === "text" ? "text" : "crosshair";
 }
 
 function renderPalette(): void {
@@ -733,6 +831,7 @@ function setColor(next: string, remember = false): void {
     updatePaletteSelection();
   }
   if (inlineEditor) inlineEditor.element.style.color = color;
+  if (watermarkEnabled) applyWatermark();
 }
 
 function updateWidthValue(): void {
@@ -1082,6 +1181,7 @@ async function beginAnnotation(payload: OverlayCapture): Promise<void> {
     engine.setScale(canvas.width / Math.max(1, displayedWidth));
     engine.setTool(currentTool);
     engine.reset();
+    engine.setWatermark(watermarkLayer());
     engine.redraw();
 
     phase = "annotating";
@@ -1281,6 +1381,7 @@ hookHost.__pinstillDemoCapture = async (dataUrl: string): Promise<void> => {
 
 function reset(): void {
   phase = "idle";
+  watermarkEnabled = false;
   if (inlineEditor) {
     const editor = inlineEditor;
     inlineEditor = null;
@@ -1423,6 +1524,7 @@ function installEngineForCanvas(base: HTMLCanvasElement, displayWidth: number): 
   engine.setScale(canvas.width / Math.max(1, displayWidth));
   engine.setTool(currentTool);
   engine.reset();
+  engine.setWatermark(watermarkLayer());
   engine.redraw();
 }
 

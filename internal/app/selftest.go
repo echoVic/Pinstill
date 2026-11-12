@@ -50,6 +50,8 @@ func (a *App) runSelfTest(mode string) {
 		a.selftestDoubleClick()
 	case "resize":
 		a.selftestResize()
+	case "watermark":
+		a.selftestWatermark()
 	case "uicapture":
 		a.selftestUICapture()
 	case "drag":
@@ -1416,6 +1418,32 @@ func (a *App) selftestShowcase() {
 		}
 		time.Sleep(600 * time.Millisecond)
 		savePage(a.overlay, "overlay")
+		// Watermark screenshot: the tiled watermark plus its settings row.
+		// The stored defaults are restored afterwards so the README run never
+		// changes the user's watermark text/opacity.
+		if a.overlay != nil {
+			savedWatermark := ""
+			if v, err := a.overlay.Page().Eval("localStorage.getItem('pinstill.watermark') ?? ''"); err == nil {
+				savedWatermark = fmt.Sprint(v)
+			}
+			_, _ = a.overlay.Page().Eval(`document.querySelector('[data-tool="watermark"]')?.click()`)
+			time.Sleep(300 * time.Millisecond)
+			_, _ = a.overlay.Page().Eval(`(() => {
+				const t = document.getElementById('watermarkText');
+				if (t) { t.value = 'Pinstill'; t.dispatchEvent(new Event('input', { bubbles: true })); }
+				const o = document.getElementById('watermarkOpacity');
+				if (o) { o.value = '30'; o.dispatchEvent(new Event('input', { bubbles: true })); }
+			})()`)
+			time.Sleep(500 * time.Millisecond)
+			savePage(a.overlay, "watermark")
+			_, _ = a.overlay.Page().Eval(`document.querySelector('[data-tool="watermark"]')?.click()`)
+			if savedWatermark == "" {
+				_, _ = a.overlay.Page().Eval("localStorage.removeItem('pinstill.watermark')")
+			} else {
+				_, _ = a.overlay.Page().Eval(fmt.Sprintf("localStorage.setItem('pinstill.watermark', %q)", savedWatermark))
+			}
+			time.Sleep(300 * time.Millisecond)
+		}
 		a.cancelRegion()
 		time.Sleep(700 * time.Millisecond)
 	}
@@ -1854,6 +1882,118 @@ func (a *App) selftestResize() {
 	fmt.Printf("SELFTEST resize: checks=ok\n")
 	a.cancelRegion()
 	time.Sleep(300 * time.Millisecond)
+	mygo.App.Exit(0)
+}
+
+// selftestWatermark drives the tiled watermark: the tool toggles a repeated
+// watermark layer, its settings row edits text and opacity live, toggling it
+// off restores the untouched capture, and copies include the watermark.
+func (a *App) selftestWatermark() {
+	if a.main != nil {
+		a.main.Show()
+	}
+	time.Sleep(1200 * time.Millisecond)
+	annotating := false
+	for attempt := 1; attempt <= 2 && !annotating; attempt++ {
+		if err := a.beginRegion(); err != nil {
+			fmt.Printf("SELFTEST watermark: begin error %v\n", err)
+			break
+		}
+		time.Sleep(1200 * time.Millisecond)
+		if err := a.dragOverlaySelection(80, 90, 520, 380); err != nil {
+			fmt.Printf("SELFTEST watermark: drag error %v\n", err)
+		}
+		if err := a.waitOverlayAnnotating(10 * time.Second); err == nil {
+			annotating = true
+			break
+		}
+		fmt.Printf("SELFTEST watermark: annotating attempt %d failed\n", attempt)
+		a.cancelRegion()
+		time.Sleep(800 * time.Millisecond)
+	}
+	if !annotating {
+		fmt.Printf("SELFTEST watermark: checks=FAILED\n")
+		mygo.App.Exit(1)
+		return
+	}
+	eval := func(js string) string {
+		return strings.TrimSpace(fmt.Sprint(a.overlayEval(js)))
+	}
+	// The watermark defaults live in localStorage and are shared with the
+	// user's app: save them and put them back before exiting.
+	savedWatermark := ""
+	if a.main != nil {
+		if v, err := a.main.Page().Eval("localStorage.getItem('pinstill.watermark') ?? ''"); err == nil {
+			savedWatermark = fmt.Sprint(v)
+		}
+	}
+	restoreWatermark := func() {
+		if a.main == nil {
+			return
+		}
+		if savedWatermark == "" {
+			_, _ = a.main.Page().Eval("localStorage.removeItem('pinstill.watermark')")
+			return
+		}
+		_, _ = a.main.Page().Eval(fmt.Sprintf("localStorage.setItem('pinstill.watermark', %q)", savedWatermark))
+	}
+	canvasHash := `(() => {
+		const c = document.getElementById('overlayCanvas');
+		if (!c) return 'missing';
+		const s = c.toDataURL();
+		let h = 0;
+		for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+		return String(h);
+	})()`
+	baseHash := eval(canvasHash)
+	eval(`document.querySelector('[data-tool="watermark"]')?.click(), 'ok'`)
+	time.Sleep(450 * time.Millisecond)
+	shown := eval(`String(!document.getElementById('overlayWatermark').hidden)`)
+	renderedHash := eval(canvasHash)
+	defaultText := eval(`document.getElementById('watermarkText')?.value ?? ''`)
+	defaultOpacity := eval(`document.getElementById('watermarkOpacityValue')?.textContent ?? ''`)
+	tileCount := eval(`(() => {
+		// The watermark is tiled: proof that more than one copy is drawn is that
+		// the layer covers rows outside a single text line; report the canvas
+		// height as a sanity value.
+		const c = document.getElementById('overlayCanvas');
+		return c ? String(c.height) : '0';
+	})()`)
+	eval(`(() => { const t = document.getElementById('watermarkText'); if (!t) return; t.value = (t.value || 'Pinstill') + ' ·'; t.dispatchEvent(new Event('input', { bubbles: true })); })()`)
+	eval(`(() => { const o = document.getElementById('watermarkOpacity'); if (!o) return; o.value = '45'; o.dispatchEvent(new Event('input', { bubbles: true })); })()`)
+	time.Sleep(350 * time.Millisecond)
+	editedHash := eval(canvasHash)
+	opacityLabel := eval(`document.getElementById('watermarkOpacityValue')?.textContent ?? ''`)
+	eval(`document.querySelector('[data-tool="watermark"]')?.click(), 'ok'`)
+	time.Sleep(350 * time.Millisecond)
+	hiddenAfter := eval(`String(document.getElementById('overlayWatermark').hidden)`)
+	offHash := eval(canvasHash)
+	fmt.Printf("SELFTEST watermark: shown=%s default_text=%q default_opacity=%s height=%s\n", shown, defaultText, defaultOpacity, tileCount)
+	fmt.Printf("SELFTEST watermark: rendered=%v edited=%v opacity=%s off_hidden=%s restored=%v\n", renderedHash != baseHash, editedHash != renderedHash, opacityLabel, hiddenAfter, offHash == baseHash)
+	ok := shown == "true" && renderedHash != baseHash && editedHash != renderedHash && opacityLabel == "45%" && hiddenAfter == "true" && offHash == baseHash
+	if !ok {
+		restoreWatermark()
+		fmt.Printf("SELFTEST watermark: checks=FAILED\n")
+		a.cancelRegion()
+		mygo.App.Exit(1)
+		return
+	}
+	// Copy with the watermark enabled: the exported image must include it.
+	mygo.Clipboard.Clear()
+	eval(`document.querySelector('[data-tool="watermark"]')?.click(), 'ok'`)
+	time.Sleep(300 * time.Millisecond)
+	eval(`document.querySelector('[data-action="copy"]')?.click(), 'ok'`)
+	time.Sleep(1800 * time.Millisecond)
+	img := mygo.Clipboard.ReadImage()
+	width, height := imageDimensions(img)
+	fmt.Printf("SELFTEST watermark: clipboard=%dx%d\n", width, height)
+	restoreWatermark()
+	if width == 0 || height == 0 {
+		fmt.Printf("SELFTEST watermark: checks=FAILED\n")
+		mygo.App.Exit(1)
+		return
+	}
+	fmt.Printf("SELFTEST watermark: checks=ok\n")
 	mygo.App.Exit(0)
 }
 

@@ -147,6 +147,14 @@ expect 'SELFTEST resize: handles=4 before=[0-9][0-9]*x[0-9][0-9]* after=[0-9][0-
 expect 'SELFTEST resize: shrink before=[0-9][0-9]*x[0-9][0-9]* after=[0-9][0-9]*x[0-9][0-9]*' /tmp/pinstill-selftest-resize.log
 expect 'SELFTEST resize: checks=ok' /tmp/pinstill-selftest-resize.log
 
+step "Selftest: tiled watermark"
+PINSTILL_SELFTEST=watermark "$APP" 2>&1 | tee /tmp/pinstill-selftest-watermark.log
+sleep 1.0
+expect 'SELFTEST watermark: shown=true' /tmp/pinstill-selftest-watermark.log
+expect 'rendered=true edited=true opacity=45% off_hidden=true restored=true' /tmp/pinstill-selftest-watermark.log
+expect 'SELFTEST watermark: clipboard=[0-9][0-9]*x[0-9][0-9]*' /tmp/pinstill-selftest-watermark.log
+expect 'SELFTEST watermark: checks=ok' /tmp/pinstill-selftest-watermark.log
+
 step "Selftest: desktop pin interactions"
 PINSTILL_SELFTEST=pinui "$APP" 2>&1 | tee /tmp/pinstill-selftest-pinui.log
 sleep 1.0
