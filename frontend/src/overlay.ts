@@ -1197,6 +1197,24 @@ async function beginAnnotation(payload: OverlayCapture): Promise<void> {
   }
 }
 
+/** Resolves with the promise result, or rejects after `ms` so a stuck native
+ * capture can never leave the overlay frozen behind a spinner. */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error(label)), ms);
+    promise.then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        window.clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 async function prepareSelectionFor(rect: Rect, fast = false): Promise<void> {
   phase = "preparing";
   toolbarMoved = false;
@@ -1212,10 +1230,10 @@ async function prepareSelectionFor(rect: Rect, fast = false): Promise<void> {
   captureHandled = false;
   handledCaptureId = "";
   selection.classList.add("capturing");
-  // The initial capture is seamless (chrome-free frame); a re-capture after
-  // adjusting the region shows the small spinner so the short wait reads as
-  // intentional instead of a blank gap.
-  prepareState.hidden = !fast;
+  // No "capturing" spinner here: the wait is ~250ms at most and the spinner
+  // looked like a hang while adjusting the region. A watchdog below recovers
+  // if the native capture ever stalls.
+  prepareState.hidden = true;
   hint.hidden = true;
   crosshairV.hidden = true;
   crosshairH.hidden = true;
@@ -1224,13 +1242,21 @@ async function prepareSelectionFor(rect: Rect, fast = false): Promise<void> {
   try {
     let payload: OverlayCapture;
     if (fast) {
-      // Let the browser paint the chrome-free frame before Go grabs the screen.
+      // Let the browser paint the chrome-free frame before Go grabs the screen;
+      // the timer fallback means rAF throttling can never stall the capture.
       await new Promise<void>((resolve) => {
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        let done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          resolve();
+        };
+        requestAnimationFrame(() => requestAnimationFrame(finish));
+        window.setTimeout(finish, 120);
       });
-      payload = await prepareSelectionFast(rect);
+      payload = await withTimeout(prepareSelectionFast(rect), 4000, "重新截取超时");
     } else {
-      payload = await prepareSelection(rect);
+      payload = await withTimeout(prepareSelection(rect), 10000, "截取超时");
     }
     handleCapture(payload);
   } catch (error) {
@@ -1475,6 +1501,7 @@ function startSelectionResize(event: PointerEvent, corner: SelectionResizeState[
   // annotations on it) are hidden until the new region is captured on release,
   // and the dim mask lifts so the whole screen is visible while adjusting.
   canvas.hidden = true;
+  prepareState.hidden = true;
   positionMasks(null);
   selection.classList.add("resizing");
   event.preventDefault();
@@ -1570,7 +1597,25 @@ async function recaptureSelection(rect: Rect, previous: Rect): Promise<void> {
   }
   committedRect = rect;
   positionSelection(rect);
-  await prepareSelectionFor(rect, true);
+  try {
+    await prepareSelectionFor(rect, true);
+  } catch (error) {
+    // Keep the user's previous capture usable instead of freezing behind a
+    // "正在截取" state: restore the old region and its canvas (annotations are
+    // still in the engine).
+    if (phase === "preparing") {
+      phase = "annotating";
+      committedRect = previous;
+      canvas.hidden = false;
+      prepareState.hidden = true;
+      selection.classList.remove("capturing");
+      positionSelection(previous);
+      updateSizeBadge(previous);
+      showToolbar();
+      showTransient(`重新截取失败：${errorMessage(error)} · 已恢复原选区`, 3000);
+    }
+    return;
+  }
   if (hadAnnotations && phase === "annotating") {
     showTransient("选区已调整 · 已重新截取（原有标注已重置）", 2200);
   }

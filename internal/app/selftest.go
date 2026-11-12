@@ -52,6 +52,8 @@ func (a *App) runSelfTest(mode string) {
 		a.selftestResize()
 	case "watermark":
 		a.selftestWatermark()
+	case "resizestress":
+		a.selftestResizeStress()
 	case "uicapture":
 		a.selftestUICapture()
 	case "drag":
@@ -1994,6 +1996,84 @@ func (a *App) selftestWatermark() {
 		return
 	}
 	fmt.Printf("SELFTEST watermark: checks=ok\n")
+	mygo.App.Exit(0)
+}
+
+// selftestResizeStress repeats grow re-captures the way a user refines the
+// region, to catch recapture stalls (the "正在截取…" spinner must always go away).
+func (a *App) selftestResizeStress() {
+	if a.main != nil {
+		a.main.Show()
+	}
+	time.Sleep(1200 * time.Millisecond)
+	annotating := false
+	for attempt := 1; attempt <= 3 && !annotating; attempt++ {
+		if err := a.beginRegion(); err != nil {
+			fmt.Printf("SELFTEST resizestress: begin error %v\n", err)
+			break
+		}
+		time.Sleep(1200 * time.Millisecond)
+		if err := a.dragOverlaySelection(80, 90, 400, 300); err != nil {
+			fmt.Printf("SELFTEST resizestress: drag error %v\n", err)
+		}
+		if err := a.waitOverlayAnnotating(10 * time.Second); err == nil {
+			annotating = true
+			break
+		}
+		fmt.Printf("SELFTEST resizestress: annotating attempt %d failed\n", attempt)
+		a.cancelRegion()
+		time.Sleep(900 * time.Millisecond)
+	}
+	if !annotating {
+		fmt.Printf("SELFTEST resizestress: checks=FAILED\n")
+		mygo.App.Exit(1)
+		return
+	}
+	eval := func(js string) string {
+		return strings.TrimSpace(fmt.Sprint(a.overlayEval(js)))
+	}
+	failures := 0
+	for round := 1; round <= 5; round++ {
+		delta := 40 + round*10
+		eval(fmt.Sprintf(`(() => {
+			const h = document.querySelector('[data-resize="se"]');
+			if (!h) return 'missing';
+			const r = h.getBoundingClientRect();
+			const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+			h.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, clientX: cx, clientY: cy, pointerId: 20 + %d, pointerType: 'mouse', button: 0 }));
+			window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, cancelable: true, clientX: cx + %d, clientY: cy + %d, pointerId: 20 + %d, pointerType: 'mouse' }));
+			window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, clientX: cx + %d, clientY: cy + %d, pointerId: 20 + %d, pointerType: 'mouse', button: 0 }));
+			return 'ok';
+		})()`, round, delta, delta/2, round, delta, delta/2, round))
+		start := time.Now()
+		recovered := false
+		deadline := time.Now().Add(8 * time.Second)
+		for time.Now().Before(deadline) {
+			spinner := eval(`String(!document.getElementById('prepareState')?.hidden)`)
+			toolbar := eval(`String(!document.getElementById('annotationToolbar')?.hidden)`)
+			if spinner == "false" && toolbar == "true" {
+				recovered = true
+				break
+			}
+			time.Sleep(120 * time.Millisecond)
+		}
+		ms := time.Since(start).Milliseconds()
+		fmt.Printf("SELFTEST resizestress: round=%d recovered=%v ms=%d\n", round, recovered, ms)
+		if !recovered {
+			failures++
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	if failures > 0 {
+		fmt.Printf("SELFTEST resizestress: checks=FAILED\n")
+		a.cancelRegion()
+		mygo.App.Exit(1)
+		return
+	}
+	fmt.Printf("SELFTEST resizestress: checks=ok\n")
+	a.cancelRegion()
+	time.Sleep(300 * time.Millisecond)
 	mygo.App.Exit(0)
 }
 
