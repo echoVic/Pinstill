@@ -915,3 +915,12 @@ R8 删除主窗口编辑器后，设置页有若干项变成「惰性」（保�
 用户反馈「工具栏 hover 提示没了」。原因：R9.9 接入「图标文字提示」设置时，`document.documentElement.style.setProperty("--tooltip-delay", ...)` 和 `if (!tooltipsEnabled) toolbar.classList.add("no-tooltips")` 两行写在**读取偏好之前**，此时 `tooltipsEnabled` 尚未初始化（undefined）→ 每次启动都无条件加上 `no-tooltips`，所有 hover 提示被隐藏。
 
 修复：把这两行移到偏好解析之后执行。验证：`palette` 自检新增断言（工具栏无 `no-tooltips`、`--tooltip-delay` 有效），e2e 增加 `tooltips=true` 断言；完整 e2e ALL CHECKS PASSED。
+
+## R14：滚动截图时显示选区范围框（2026-11-12，用户反馈）
+
+用户反馈：「滚动截图开始的时候，范围框还是要显示的，不然不知道截的是哪块」。
+
+- 新增一个**透明、置顶、点击穿透**的细边框窗口 `frame.html`（`a.scrollFrame`）：滚动截图开始、overlay 隐藏后，用它标出正在截取的范围。
+- 边框紧贴选区**外侧**：窗口尺寸 = 选区 + 每边 2px，`frame.html` 只画 2px 琥珀色描边 → 描边像素永远在截图区域之外，**不会进入长图**。
+- `SetIgnoreMouseEvents(true)` 点击穿透，手动滚动仍能滚到底下 App；会话结束（完成/取消/失败/预览打开）立即隐藏。
+- 验证：`scroll`/`scrollmanual` 自检断言会话中 `frame_visible=true frame_size=524x424`（选区 520×420 + 2px 边框）、结束后 `frame_hidden=true`；e2e 增加两处断言；完整 e2e **ALL CHECKS PASSED**；README 更新。

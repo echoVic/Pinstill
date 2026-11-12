@@ -1224,6 +1224,10 @@ func (a *App) selftestScroll() {
 		mygo.App.Exit(1)
 		return
 	}
+	time.Sleep(500 * time.Millisecond)
+	frameVisible := a.scrollFrameVisible()
+	frameW, frameH := a.scrollFrameSize()
+	fmt.Printf("SELFTEST scroll: frame_visible=%v frame_size=%dx%d\n", frameVisible, frameW, frameH)
 	deadline := time.Now().Add(25 * time.Second)
 	var win *mygo.Window
 	for time.Now().Before(deadline) {
@@ -1257,6 +1261,12 @@ func (a *App) selftestScroll() {
 	stillOpen := a.result != nil
 	a.mu.Unlock()
 	fmt.Printf("SELFTEST scroll: closed_after_copy=%v\n", !stillOpen)
+	fmt.Printf("SELFTEST scroll: frame_hidden=%v\n", !a.scrollFrameVisible())
+	if !frameVisible || a.scrollFrameVisible() {
+		fmt.Printf("SELFTEST scroll: checks=FAILED\n")
+		mygo.App.Exit(1)
+		return
+	}
 	mygo.App.Exit(0)
 }
 
@@ -1278,6 +1288,10 @@ func (a *App) selftestScrollManual() {
 		mygo.App.Exit(1)
 		return
 	}
+	time.Sleep(500 * time.Millisecond)
+	frameVisible := a.scrollFrameVisible()
+	frameW, frameH := a.scrollFrameSize()
+	fmt.Printf("SELFTEST scrollmanual: frame_visible=%v frame_size=%dx%d\n", frameVisible, frameW, frameH)
 	deadline := time.Now().Add(25 * time.Second)
 	var win *mygo.Window
 	for time.Now().Before(deadline) {
@@ -1296,6 +1310,13 @@ func (a *App) selftestScrollManual() {
 		time.Sleep(500 * time.Millisecond)
 	}
 	if win == nil || meta.Width == 0 {
+		fmt.Printf("SELFTEST scrollmanual: checks=FAILED\n")
+		mygo.App.Exit(1)
+		return
+	}
+	frameHidden := !a.scrollFrameVisible()
+	fmt.Printf("SELFTEST scrollmanual: frame_hidden=%v\n", frameHidden)
+	if !frameVisible || !frameHidden {
 		fmt.Printf("SELFTEST scrollmanual: checks=FAILED\n")
 		mygo.App.Exit(1)
 		return

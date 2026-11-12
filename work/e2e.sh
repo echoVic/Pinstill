@@ -185,6 +185,8 @@ expect 'SELFTEST scroll: accessibility=' /tmp/pinstill-selftest-scroll.log
 expect 'SELFTEST scroll: result=[0-9][0-9]*x[0-9][0-9]*' /tmp/pinstill-selftest-scroll.log
 expect 'SELFTEST scroll: clipboard=1280x' /tmp/pinstill-selftest-scroll.log
 expect 'SELFTEST scroll: closed_after_copy=true' /tmp/pinstill-selftest-scroll.log
+expect 'SELFTEST scroll: frame_visible=true frame_size=524x424' /tmp/pinstill-selftest-scroll.log
+expect 'SELFTEST scroll: frame_hidden=true' /tmp/pinstill-selftest-scroll.log
 
 step "Selftest: scrolling capture through the page"
 PINSTILL_SELFTEST=scrollflow PINSTILL_SELFTEST_SCROLL_SIM=1 "$APP" 2>&1 | tee /tmp/pinstill-selftest-scrollflow.log
@@ -202,6 +204,8 @@ PINSTILL_SELFTEST=scrollmanual PINSTILL_SELFTEST_SCROLL_SIM=1 "$APP" 2>&1 | tee 
 sleep 1.0
 expect 'SELFTEST scrollmanual: result=[0-9][0-9]*x[0-9][0-9]*' /tmp/pinstill-selftest-scrollmanual.log
 expect 'result=.*window=true' /tmp/pinstill-selftest-scrollmanual.log
+expect 'SELFTEST scrollmanual: frame_visible=true frame_size=524x424' /tmp/pinstill-selftest-scrollmanual.log
+expect 'SELFTEST scrollmanual: frame_hidden=true' /tmp/pinstill-selftest-scrollmanual.log
 expect 'SELFTEST scrollmanual: checks=ok' /tmp/pinstill-selftest-scrollmanual.log
 
 step "Selftest: whole-display capture"

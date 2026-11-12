@@ -23,6 +23,7 @@ export default defineConfig({
         overlay: page("overlay.html"),
         pin: page("pin.html"),
         scroll: page("scroll.html"),
+        frame: page("frame.html"),
         result: page("result.html"),
       },
     },

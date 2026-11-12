@@ -122,6 +122,90 @@ func (a *App) createScrollControl() {
 	a.control = win
 }
 
+// createScrollFrame creates the thin, click-through border that marks the
+// scrolling-capture region while the overlay is hidden: the user keeps seeing
+// which part of the screen is being captured.
+func (a *App) createScrollFrame() {
+	win := mygo.NewWindow(mygo.WindowOptions{
+		Title:             "Pinstill 滚动截图范围",
+		Width:             320,
+		Height:            240,
+		Hidden:            true,
+		Frameless:         true,
+		Transparent:       true,
+		Panel:             true,
+		AlwaysOnTop:       true,
+		DisableResize:     true,
+		DisableMinimize:   true,
+		DisableMaximize:   true,
+		DisableClose:      true,
+		DisableFullScreen: true,
+		BackgroundColor:   "rgba(0,0,0,0)",
+		URL:               "/frame.html",
+	})
+	win.SetIgnoreMouseEvents(true)
+	a.mu.Lock()
+	a.scrollFrame = win
+	a.mu.Unlock()
+}
+
+// scrollFrameBorder is how far outside the capture region the marker is drawn.
+// The border has to stay outside the captured pixels: a frame pixel inside the
+// region would end up in every stitched screenshot.
+const scrollFrameBorder = 2
+
+// showScrollFrame places the region marker just outside the capture region and
+// shows it; the window stays click-through so manual scrolling still reaches
+// the app underneath.
+func (a *App) showScrollFrame(region capture.Rect) {
+	a.mu.Lock()
+	win := a.scrollFrame
+	a.mu.Unlock()
+	if win == nil || win.IsDestroyed() {
+		return
+	}
+	win.SetBounds(mygo.Rectangle{
+		X:      int(region.X) - scrollFrameBorder,
+		Y:      int(region.Y) - scrollFrameBorder,
+		Width:  int(region.Width) + scrollFrameBorder*2,
+		Height: int(region.Height) + scrollFrameBorder*2,
+	})
+	win.SetIgnoreMouseEvents(true)
+	win.Show()
+}
+
+// hideScrollFrame removes the region marker when the session ends.
+func (a *App) hideScrollFrame() {
+	a.mu.Lock()
+	win := a.scrollFrame
+	a.mu.Unlock()
+	if win != nil && !win.IsDestroyed() {
+		win.Hide()
+	}
+}
+
+// scrollFrameSize reports the region marker's window size (selftests check that
+// it is the capture region plus the 2px border on every side).
+func (a *App) scrollFrameSize() (int, int) {
+	a.mu.Lock()
+	win := a.scrollFrame
+	a.mu.Unlock()
+	if win == nil || win.IsDestroyed() {
+		return 0, 0
+	}
+	bounds := win.Bounds()
+	return bounds.Width, bounds.Height
+}
+
+// scrollFrameVisible reports whether the scrolling-capture region marker is on
+// screen (used by the selftests).
+func (a *App) scrollFrameVisible() bool {
+	a.mu.Lock()
+	win := a.scrollFrame
+	a.mu.Unlock()
+	return win != nil && win.IsVisible()
+}
+
 // placeScrollControl puts the control bar next to the capture region, without
 // covering it.
 func (a *App) placeScrollControl(region capture.Rect) {
@@ -234,6 +318,7 @@ func (a *App) startScroll(rect Rect, autoScroll bool) error {
 	a.mu.Unlock()
 	a.placeScrollControl(region)
 	control.Show()
+	a.showScrollFrame(region)
 	emitToWindow(a, control, EventScrollInit, ScrollInitPayload{
 		Rect:                 rect,
 		Auto:                 effectiveAuto,
@@ -379,6 +464,7 @@ func (a *App) finalizeScroll(session *scrollSession, status string) {
 
 // clearScrollSession releases the session and the capture state.
 func (a *App) clearScrollSession() {
+	a.hideScrollFrame()
 	a.mu.Lock()
 	a.scroll = nil
 	a.capturing = false

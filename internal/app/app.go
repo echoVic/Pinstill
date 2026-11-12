@@ -33,6 +33,7 @@ type App struct {
 	main           *mygo.Window
 	overlay        *mygo.Window
 	control        *mygo.Window
+	scrollFrame    *mygo.Window
 	result         *mygo.Window
 	overlayDisplay mygo.Display
 	overlayRect    mygo.Rectangle
@@ -85,6 +86,7 @@ func (a *App) Start() {
 	a.createOverlay()
 	a.createMainWindow()
 	a.createScrollControl()
+	a.createScrollFrame()
 	a.setMenu()
 	a.createTray()
 	if errs := a.registerShortcuts(DefaultSettings()); len(errs) > 0 {

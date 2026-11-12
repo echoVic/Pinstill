@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pinstill 滚动截图范围</title>
+    <style>
+      :root { --amber: #f3a24e; }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body {
+        width: 100%;
+        height: 100%;
+        background: transparent;
+        overflow: hidden;
+      }
+      body { position: fixed; inset: 0; }
+      /* The native window is 2px larger than the captured region on every
+         side, so this ring sits just outside the captured pixels and never
+         shows up inside the stitched frames. */
+      .frame {
+        position: absolute;
+        inset: 0;
+        border: 2px solid var(--amber);
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="frame" aria-hidden="true"></div>
+  </body>
+</html>
