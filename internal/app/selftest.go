@@ -2086,12 +2086,18 @@ func (a *App) selftestPalette() {
 	panelVisible := evalOverlay(`String((() => { const p = document.getElementById('colorPalettePanel'); return !!p && !p.hidden && p.offsetParent !== null; })())`)
 	presets := evalOverlay(`String(document.querySelectorAll('#colorPalettePanel button[data-palette-color]').length)`)
 	hasControls := evalOverlay(`String(!!document.getElementById('paletteSV') && !!document.getElementById('paletteHue') && !!document.getElementById('paletteHex') && !!document.getElementById('palettePreview'))`)
-	fmt.Printf("SELFTEST palette: open=%s presets=%s controls=%s\n", panelVisible, presets, hasControls)
+	// Hover tooltips must be active by default (regression: the init order once
+	// added "no-tooltips" to every toolbar).
+	tooltips := evalOverlay(`String((() => { const t = document.getElementById('annotationToolbar'); const tip = document.querySelector('.tool-btn .tip'); const delay = getComputedStyle(document.documentElement).getPropertyValue('--tooltip-delay').trim(); return !!t && !t.classList.contains('no-tooltips') && !!tip && delay !== '' && delay !== 'undefinedms'; })())`)
+	fmt.Printf("SELFTEST palette: open=%s presets=%s controls=%s tooltips=%s\n", panelVisible, presets, hasControls, tooltips)
 	if panelVisible != "true" {
 		failCheck("overlay palette panel did not open")
 	}
 	if n, err := strconv.Atoi(presets); err != nil || n < 32 {
 		failCheck("want >= 32 preset colours, got %q", presets)
+	}
+	if tooltips != "true" {
+		failCheck("toolbar hover tooltips are disabled by default")
 	}
 	if hasControls != "true" {
 		failCheck("palette controls (#paletteSV/#paletteHue/#paletteHex/#palettePreview) missing")

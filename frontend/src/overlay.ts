@@ -175,8 +175,6 @@ const captureErrorSettings = el<HTMLButtonElement>("captureErrorSettings");
 const captureErrorRetry = el<HTMLButtonElement>("captureErrorRetry");
 const captureErrorCancel = el<HTMLButtonElement>("captureErrorCancel");
 const hintInitialHTML = hint.innerHTML;
-document.documentElement.style.setProperty("--tooltip-delay", `${tooltipDelayMs}ms`);
-if (!tooltipsEnabled) toolbar.classList.add("no-tooltips");
 
 interface StoredPreferences {
   defaultColor?: unknown;
@@ -278,6 +276,11 @@ const tooltipDelayMs =
 const enterCopyEnabled = storedPreferences.enterCopy !== false;
 const scrollAutoDefault = storedPreferences.scrollAuto !== false;
 let entry = "重点说明";
+
+// Tooltip preferences are read from localStorage above; apply them only now,
+// otherwise `tooltipsEnabled` is still undefined when the init code runs.
+document.documentElement.style.setProperty("--tooltip-delay", `${tooltipDelayMs}ms`);
+if (!tooltipsEnabled) toolbar.classList.add("no-tooltips");
 
 let displayInfo: OverlayInfo | null = null;
 let phase: Phase = "idle";

@@ -271,6 +271,7 @@ step "Selftest: colour palette panel"
 PINSTILL_SELFTEST=palette "$APP" 2>&1 | tee /tmp/pinstill-selftest-palette.log
 sleep 1.0
 expect 'SELFTEST palette: open=true' /tmp/pinstill-selftest-palette.log
+expect 'tooltips=true' /tmp/pinstill-selftest-palette.log
 expect 'esc_kept_annotating=true' /tmp/pinstill-selftest-palette.log
 expect 'SELFTEST palette: main_toggles=0' /tmp/pinstill-selftest-palette.log
 expect 'SELFTEST palette: checks=ok' /tmp/pinstill-selftest-palette.log

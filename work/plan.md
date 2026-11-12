@@ -909,3 +909,9 @@ R8 删除主窗口编辑器后，设置页有若干项变成「惰性」（保�
 3. `resize` 自检扩展为两段：放大（640×420 → 880×580，recapture_ms 打印）+ 缩小（880×580 → 680×460，shrink_ms 打印）；e2e 增加 shrink 断言；完整 e2e ALL CHECKS PASSED。
 
 **R12 修正 2（用户反馈「拖的时候没立刻隐藏」）**：拖角时旧截图虽然已隐藏，但选区外的暗色遮罩还在，导致选区里亮、外面暗，看起来仍像"截图没消失"。现改为：**一按下四角手柄立即同时隐藏截图和暗色遮罩**（整屏恢复正常亮度，只剩选框/四角/尺寸角标跟着鼠标），松手后重新截取并恢复遮罩。`resize` 自检改为分步派发 press，并断言拖动中 `canvas_hidden_mid=true`、`masks_hidden_mid=true`（同时保存 `/tmp/pinstill-resize-mid.png` 供人工检查），放大/缩小时延仍为 ~244ms / ~1ms；完整 e2e ALL CHECKS PASSED。
+
+## R13：修复工具栏 hover 提示消失（2026-11-12，用户反馈）
+
+用户反馈「工具栏 hover 提示没了」。原因：R9.9 接入「图标文字提示」设置时，`document.documentElement.style.setProperty("--tooltip-delay", ...)` 和 `if (!tooltipsEnabled) toolbar.classList.add("no-tooltips")` 两行写在**读取偏好之前**，此时 `tooltipsEnabled` 尚未初始化（undefined）→ 每次启动都无条件加上 `no-tooltips`，所有 hover 提示被隐藏。
+
+修复：把这两行移到偏好解析之后执行。验证：`palette` 自检新增断言（工具栏无 `no-tooltips`、`--tooltip-delay` 有效），e2e 增加 `tooltips=true` 断言；完整 e2e ALL CHECKS PASSED。
