@@ -55,7 +55,10 @@ export interface WatermarkLayer {
   color: string;
 }
 
-/** Draws the repeated watermark text across the whole canvas. */
+/** Watermark marks are drawn diagonally, like the mainstream tools. */
+const WATERMARK_ANGLE = (-30 * Math.PI) / 180;
+
+/** Draws the sparse, diagonal tiled watermark across the whole canvas. */
 export function drawTiledWatermark(
   ctx: CanvasRenderingContext2D,
   layer: WatermarkLayer,
@@ -69,16 +72,21 @@ export function drawTiledWatermark(
   ctx.globalAlpha = Math.max(0.05, Math.min(1, layer.opacity / 100));
   ctx.fillStyle = layer.color;
   ctx.font = `600 ${fontSize}px ${DEFAULT_TEXT_FONT}`;
+  ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.textAlign = "left";
   const textWidth = Math.max(1, ctx.measureText(text).width);
-  const stepX = textWidth + fontSize * 2.2;
-  const stepY = fontSize * 2.4;
-  const startX = -stepX * 0.25;
+  // Generous spacing: a watermark marks the image without covering it.
+  const stepX = textWidth + fontSize * 6;
+  const stepY = fontSize * 7;
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+  const extent = Math.hypot(canvas.width, canvas.height) / 2 + Math.max(textWidth, stepY);
+  ctx.translate(cx, cy);
+  ctx.rotate(WATERMARK_ANGLE);
   let row = 0;
-  for (let y = stepY * 0.6; y < canvas.height + stepY; y += stepY, row++) {
+  for (let y = -extent; y <= extent; y += stepY, row++) {
     const offset = row % 2 === 0 ? 0 : stepX / 2;
-    for (let x = startX + offset; x < canvas.width + stepX; x += stepX) {
+    for (let x = -extent + offset; x <= extent; x += stepX) {
       ctx.fillText(text, x, y);
     }
   }
