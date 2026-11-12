@@ -15,12 +15,11 @@ export default defineConfig({
   frontendDist: "dist",
   out: "build",
 
+  // Ad-hoc signing by default so a fresh clone builds without a certificate.
   // A stable Developer ID signature keeps macOS TCC grants (screen recording,
-  // accessibility) across rebuilds; an ad-hoc signature changes on every build
-  // and forces the user to re-authorize. Override for other machines with
-  // MACOS_SIGNING_IDENTITY, or set it to "-" for an ad-hoc development build.
+  // accessibility) across rebuilds, so for day-to-day use build with:
+  //   MACOS_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)" npm run build
   macos: {
-    signingIdentity:
-      process.env.MACOS_SIGNING_IDENTITY ?? "Developer ID Application: Your Name (TEAMID)",
+    signingIdentity: process.env.MACOS_SIGNING_IDENTITY ?? "-",
   },
 });

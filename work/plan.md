@@ -950,3 +950,14 @@ R8 删除主窗口编辑器后，设置页有若干项变成「惰性」（保�
   3. 重截加 **4 秒超时**、首次截取加 **10 秒超时**；超时/失败时**恢复调整前的选区、截图和标注**并提示「重新截取失败 · 已恢复原选区」，不再卡死。
   4. 开始新的拖角手势时清掉残留的 prepare state。
 - 验证：新增 `PINSTILL_SELFTEST=resizestress`（连续 5 次放大重截，每轮 ~244ms 均回到标注态、无 spinner、检查 ok）；完整 e2e **23 项 ALL CHECKS PASSED**；签名构建 Timestamp 16:08:22。
+
+## R17：开源发布准备（2026-11-12）
+
+- 仓库从 private 转为 public，并**重建为干净的公开仓库**（删除旧仓库后重新创建并推送重写后的历史）：
+  - 用 `git filter-branch --index-filter` 从全部历史中移除本地项目笔记 `.bits/`（含内部研发工具说明，不应公开）；
+  - 用 `tree-filter` 把历史中出现的本机签名身份 / Team ID 统一替换为占位符 `Developer ID` / `TEAMID`；
+  - 当前 `mygo.config.ts` 的签名身份默认改为 `-`（ad-hoc），需要稳定 TCC 时通过 `MACOS_SIGNING_IDENTITY` 环境变量传入，仓库不再硬编码个人证书。
+- 新增 `LICENSE`（MIT，与 `mygo.config.ts` 的 `license: "MIT"` 一致）。
+- README 重写为开源版：特性 / 截图 / 从源码构建（含签名与权限说明）/ 使用 / 数据与权限 / 架构图 / 开发与测试 / 项目结构 / 已知限制 / 路线图 / 贡献指南 / License / 致谢；新增 `README.en.md` 英文版并在两版之间互链。
+- 新增 `.github/workflows/ci.yml`（Go vet/test + Windows 交叉编译 + 前端 `npm ci`/`build:web`）与 CI badge。
+- `.gitignore` 增加 `.bits/`；提交前复核无个人路径、证书身份、内部资料等敏感内容。
