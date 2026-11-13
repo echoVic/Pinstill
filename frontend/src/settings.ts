@@ -16,6 +16,7 @@ export interface Preferences {
   cursor: boolean;
   sound: boolean;
   afterCapture: "inplace" | "clipboard" | "pin";
+  scrollAuto: boolean;
   tooltip: boolean;
   tooltipDelay: number;
   // 快捷键

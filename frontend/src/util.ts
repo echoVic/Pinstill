@@ -12,7 +12,7 @@ export function bytesToBase64(bytes: Uint8Array): string {
 }
 
 /** Decodes plain base64 into bytes. */
-export function base64ToBytes(base64: string): Uint8Array {
+export function base64ToBytes(base64: string): Uint8Array<ArrayBuffer> {
   const binary = atob(base64.replace(/\s+/g, ""));
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);

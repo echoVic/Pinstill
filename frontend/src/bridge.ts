@@ -1,69 +1,37 @@
 // The single entry point for talking to the native (Go) side of Pinstill.
 //
 // Every bound method from work/plan.md §3.3/§3.6 is wrapped here on top of the
-// untyped `mygo-runtime` API, with the exact names, arguments and return values
+// generated services and events, with the exact arguments and return values
 // of the contract. When the page runs in a plain browser (`hasNative === false`,
 // e.g. `npm run dev:web` static preview) the wrappers degrade gracefully to the
 // design prototype's simulation: nothing throws at import time, and the preview
 // stays clickable.
 
-import { call, isMyGo, on } from "mygo-runtime";
+import { isMyGo } from "mygo-runtime";
+import { Capture, History, events } from "./mygo";
+import type * as Native from "./mygo";
 import { base64ToBytes, downloadBlob } from "./util";
 
 /** `true` when the page runs inside a MyGo window. */
 export const hasNative = isMyGo();
 
 /** A rectangle in CSS pixels, local to the overlay page for selections. */
-export interface Rect {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
+export type Rect = Native.Rect;
 
 /** Display geometry the overlay page runs on. */
-export interface OverlayInfo {
-  displayX: number;
-  displayY: number;
-  width: number;
-  height: number;
-  scale: number;
-}
+export type OverlayInfo = Native.OverlayInfo;
 
 /** One stored capture, as listed by the `History` service. */
-export interface HistoryEntry {
-  id: string;
-  /** RFC 3339 timestamp. */
-  createdAt: string;
-  width: number;
-  height: number;
-  size: number;
-  /** Absolute URL prepared by Go (`shot://localhost/…` etc.). */
-  url: string;
-  thumbUrl: string;
-}
+export type HistoryEntry = Native.HistoryEntry;
 
 /** What the in-place selection action bar asks Go to do with the selection. */
 export type SelectionAction = "annotate" | "copy" | "pin" | "save";
 
 /** Size and opacity of a pin window, persisted by Go. */
-export interface PinState {
-  width: number;
-  height: number;
-  opacity: number;
-}
+export type PinState = Native.PinWindowState;
 
 /** Payload of `scroll:init`: sent to the scroll control bar window. */
-export interface ScrollInit {
-  /** The selection, in overlay-local CSS pixels (for reference text only). */
-  rect: Rect;
-  /** Whether the session started in automatic mode. */
-  auto: boolean;
-  /** Whether macOS Accessibility is granted (needed for automatic scrolling). */
-  accessibilityGranted: boolean;
-  /** Auto was requested without Accessibility: the session fell back to manual. */
-  autoDenied?: boolean;
-}
+export type ScrollInit = Native.ScrollInitPayload;
 
 /** One `scroll:progress` event of a scrolling-capture session. */
 export interface ScrollProgress {
@@ -76,33 +44,13 @@ export interface ScrollProgress {
 }
 
 /** Payload of `scroll:result`: sent to the result preview window (R9). */
-export interface ScrollResult {
-  /** Absolute URL of the stitched long image (Go-prepared). */
-  url: string;
-  /** Image pixels. */
-  width: number;
-  height: number;
-  frames: number;
-  /** true when the session stopped at the frame/height cap. */
-  capped?: boolean;
-  /** History entry id, when the long image was stored. */
-  historyId?: string;
-}
+export type ScrollResult = Native.ScrollResultPayload;
 
 /** What `Capture.FinishScroll` does with a running session. */
 export type ScrollFinishAction = "finish" | "cancel";
 
 /** A selection captured by `Capture.PrepareSelection`, ready for in-place annotation. */
-export interface OverlayCapture {
-  id: string;
-  /** Go-provided absolute URL of the captured PNG. */
-  url: string;
-  /** Image pixels. */
-  width: number;
-  height: number;
-  /** The selection in overlay-local CSS pixels. */
-  rect: Rect;
-}
+export type OverlayCapture = Native.OverlayCapturePayload;
 
 /** What `Capture.FinishAnnotated` does with the composited PNG. */
 export type FinishAnnotatedAction = "copy" | "pin" | "save" | "cancel";
@@ -142,99 +90,91 @@ export interface Settings {
 
 export function beginRegion(): Promise<void> {
   if (!hasNative) return browserBeginRegion();
-  return call("Capture.BeginRegion");
+  return Capture.beginRegion();
 }
 
 export function cancelRegion(): Promise<void> {
   if (!hasNative) return Promise.resolve();
-  return call("Capture.CancelRegion");
+  return Capture.cancelRegion();
 }
 
-export function finishRegion(rect: Rect): Promise<{ id: string }> {
-  if (!hasNative) return Promise.resolve({ id: "browser-preview" });
-  return call<{ id: string }>("Capture.FinishRegion", rect);
-}
 
 export function captureFullScreen(): Promise<{ id: string }> {
   if (!hasNative) return Promise.resolve({ id: "browser-preview" });
-  return call<{ id: string }>("Capture.CaptureFullScreen");
+  return Capture.captureFullScreen();
 }
 
 export function copyImage(base64: string): Promise<void> {
   if (!hasNative) return browserCopyImage(base64);
-  return call("Capture.CopyImage", base64);
+  return Capture.copyImage(base64);
 }
 
 export function exportImage(base64: string, suggestedName: string): Promise<string> {
   if (!hasNative) return browserDownload(base64, suggestedName);
-  return call<string>("Capture.ExportImage", base64, suggestedName);
+  return Capture.exportImage(base64, suggestedName);
 }
 
 export function saveImageToFolder(base64: string): Promise<string> {
   if (!hasNative) return browserDownload(base64, "Pinstill.png");
-  return call<string>("Capture.SaveImageToFolder", base64);
+  return Capture.saveImageToFolder(base64);
 }
 
 export function pinImage(base64: string): Promise<string> {
   if (!hasNative) return Promise.resolve("browser-preview-pin");
-  return call<string>("Capture.PinImage", base64);
+  return Capture.pinImage(base64);
 }
 
 export function pinClipboard(): Promise<string> {
   if (!hasNative) return Promise.resolve("browser-preview-pin");
-  return call<string>("Capture.PinClipboard");
+  return Capture.pinClipboard();
 }
 
 export function closePin(id: string): Promise<void> {
   if (!hasNative) return Promise.resolve();
-  return call("Capture.ClosePin", id);
+  return Capture.closePin(id);
 }
 
-export function completeSelection(rect: Rect, action: SelectionAction): Promise<void> {
-  if (!hasNative) return Promise.resolve();
-  return call("Capture.CompleteSelection", rect, action);
-}
 
 export function resizePin(id: string, width: number, height: number): Promise<void> {
   if (!hasNative) return Promise.resolve();
-  return call("Capture.ResizePin", id, width, height);
+  return Capture.resizePin(id, width, height);
 }
 
 export function setPinOpacity(id: string, opacity: number): Promise<void> {
   if (!hasNative) return Promise.resolve();
-  return call("Capture.SetPinOpacity", id, opacity);
+  return Capture.setPinOpacity(id, opacity);
 }
 
 export function copyPin(id: string): Promise<void> {
   if (!hasNative) return Promise.resolve();
-  return call("Capture.CopyPin", id);
+  return Capture.copyPin(id);
 }
 
 export function savePin(id: string): Promise<string> {
   if (!hasNative) return Promise.resolve("");
-  return call<string>("Capture.SavePin", id);
+  return Capture.savePin(id);
 }
 
 export function updatePinState(id: string, state: PinState): Promise<void> {
   if (!hasNative) return Promise.resolve();
-  return call("Capture.UpdatePinState", id, state);
+  return Capture.updatePinState(id, state);
 }
 
 export function settings(): Promise<Settings> {
   if (!hasNative) return Promise.resolve({ ...BROWSER_DEFAULT_SETTINGS });
-  return call<Settings>("Capture.Settings");
+  return Capture.settings().then((value) => value as Settings);
 }
 
 export function prepareSelection(rect: Rect): Promise<OverlayCapture> {
   if (!hasNative) return Promise.resolve(browserCapture(rect));
-  return call<OverlayCapture>("Capture.PrepareSelection", rect);
+  return Capture.prepareSelection(rect);
 }
 
 /** Re-capture after the page already hid its chrome (used when resizing the
  * selection): skips most of the compositor wait so the new image appears fast. */
 export function prepareSelectionFast(rect: Rect): Promise<OverlayCapture> {
   if (!hasNative) return Promise.resolve(browserCapture(rect));
-  return call<OverlayCapture>("Capture.PrepareSelectionFast", rect);
+  return Capture.prepareSelectionFast(rect);
 }
 
 export function finishAnnotated(
@@ -242,82 +182,82 @@ export function finishAnnotated(
   dataBase64: string,
 ): Promise<void> {
   if (!hasNative) return Promise.resolve();
-  return call("Capture.FinishAnnotated", action, dataBase64);
+  return Capture.finishAnnotated(action, dataBase64);
 }
 
 // ------------------------------------------------- scrolling capture (R4.2)
 
 export function startScroll(rect: Rect, autoScroll: boolean): Promise<void> {
   if (!hasNative) return Promise.resolve();
-  return call("Capture.StartScroll", rect, autoScroll);
+  return Capture.startScroll(rect, autoScroll);
 }
 
 export function finishScroll(action: ScrollFinishAction): Promise<void> {
   if (!hasNative) return Promise.resolve();
-  return call("Capture.FinishScroll", action);
+  return Capture.finishScroll(action);
 }
 
 export function setScrollAuto(enabled: boolean): Promise<void> {
   if (!hasNative) return Promise.resolve();
-  return call("Capture.SetScrollAuto", enabled);
+  return Capture.setScrollAuto(enabled);
 }
 
 /** Pauses/resumes frame capture for the running scrolling session (R9). */
 export function setScrollPaused(paused: boolean): Promise<void> {
   if (!hasNative) return Promise.resolve();
-  return call("Capture.SetScrollPaused", paused);
+  return Capture.setScrollPaused(paused);
 }
 
 // ------------------------------------------------- scroll result window (R9)
 
 export function copyScrollResult(): Promise<void> {
   if (!hasNative) return Promise.resolve();
-  return call("Capture.CopyScrollResult");
+  return Capture.copyScrollResult();
 }
 
 export function saveScrollResult(): Promise<string> {
   if (!hasNative) return Promise.resolve("");
-  return call<string>("Capture.SaveScrollResult");
+  return Capture.saveScrollResult();
 }
 
 export function pinScrollResult(): Promise<string> {
   if (!hasNative) return Promise.resolve("browser-preview-pin");
-  return call<string>("Capture.PinScrollResult");
+  return Capture.pinScrollResult();
 }
 
 export function closeScrollResult(): Promise<void> {
   if (!hasNative) return Promise.resolve();
-  return call("Capture.CloseScrollResult");
+  return Capture.closeScrollResult();
 }
 
 export function scrollAccessibilityGranted(): Promise<boolean> {
   if (!hasNative) return Promise.resolve(false);
-  return call<boolean>("Capture.ScrollAccessibilityGranted");
+  return Capture.scrollAccessibilityGranted();
 }
 
 export function openScrollAccessibilitySettings(): Promise<void> {
   if (!hasNative) return Promise.resolve();
-  return call("Capture.OpenScrollAccessibilitySettings");
+  return Capture.openScrollAccessibilitySettings();
 }
 
 export function applySettings(settings: Settings): Promise<Record<string, string>> {
   if (!hasNative) return Promise.resolve({});
-  return call<Record<string, string>>("Capture.ApplySettings", settings);
+  return Capture.applySettings({ ...settings, pinOpacity: settings.pinOpacity ?? 100, pinBorder: settings.pinBorder ?? true });
 }
 
 export function permissionGranted(): Promise<boolean> {
   if (!hasNative) return Promise.resolve(true);
-  return call<boolean>("Capture.PermissionGranted");
+  return Capture.permissionGranted();
 }
 
 export function requestScreenPermission(): Promise<boolean> {
   if (!hasNative) return Promise.resolve(true);
-  return call<boolean>("Capture.RequestScreenPermission");
+  return Capture.requestScreenPermission();
 }
 
 export function openPermissionSettings(): Promise<void> {
   if (!hasNative) return Promise.resolve();
-  return call("Capture.OpenPermissionSettings");
+  return Capture.openPermissionSettings();
 }
 
 // ------------------------------------------------- permission centre (R7.1)
@@ -325,13 +265,13 @@ export function openPermissionSettings(): Promise<void> {
 /** System state of the OS login item, independent of the saved preference. */
 export function launchAtLogin(): Promise<boolean> {
   if (!hasNative) return Promise.resolve(false);
-  return call<boolean>("Capture.LaunchAtLogin");
+  return Capture.launchAtLogin();
 }
 
 /** Opens the OS login-items settings pane (macOS; unsupported elsewhere). */
 export function openLoginItemsSettings(): Promise<void> {
   if (!hasNative) return Promise.resolve();
-  return call("Capture.OpenLoginItemsSettings");
+  return Capture.openLoginItemsSettings();
 }
 
 export function overlayInfo(): Promise<OverlayInfo> {
@@ -344,17 +284,17 @@ export function overlayInfo(): Promise<OverlayInfo> {
       scale: window.devicePixelRatio || 1,
     });
   }
-  return call<OverlayInfo>("Capture.OverlayInfo");
+  return Capture.overlayInfo();
 }
 
 export function showMainWindow(): Promise<void> {
   if (!hasNative) return Promise.resolve();
-  return call("Capture.ShowMainWindow");
+  return Capture.showMainWindow();
 }
 
 export function historyList(): Promise<HistoryEntry[]> {
   if (!hasNative) return Promise.resolve(mockHistory().map((entry) => ({ ...entry })));
-  return call<HistoryEntry[]>("History.List");
+  return History.list();
 }
 
 export function historyGet(
@@ -365,30 +305,30 @@ export function historyGet(
     if (!entry) return Promise.reject(new Error(`找不到截图 ${id}`));
     return Promise.resolve({ id: entry.id, width: entry.width, height: entry.height, url: entry.url });
   }
-  return call<{ id: string; width: number; height: number; url: string }>("History.Get", id);
+  return History.get(id);
 }
 
 export function historyCopy(id: string): Promise<void> {
   if (!hasNative) return browserHistoryCopy(id);
-  return call("History.Copy", id);
+  return History.copy(id);
 }
 
 export function historySave(id: string): Promise<string> {
   if (!hasNative) return browserHistorySave(id);
-  return call<string>("History.Save", id);
+  return History.save(id);
 }
 
 export function historyPin(id: string): Promise<string> {
   if (!hasNative) return Promise.resolve("browser-preview-pin");
-  return call<string>("History.Pin", id);
+  return History.pin(id);
 }
 
 export function historyRemove(id: string): Promise<void> {
   if (!hasNative) {
-    mockEntries = mockEntries.filter((entry) => entry.id !== id);
+    mockEntries = mockHistory().filter((entry) => entry.id !== id);
     return Promise.resolve();
   }
-  return call("History.Remove", id);
+  return History.remove(id);
 }
 
 export function historyClear(): Promise<void> {
@@ -396,60 +336,26 @@ export function historyClear(): Promise<void> {
     mockEntries = [];
     return Promise.resolve();
   }
-  return call("History.Clear");
+  return History.clear();
 }
 
 // ---------------------------------------------------------------------------
-// Events (colon-separated names from plan §3.5, raw untyped API).
+// Events from the generated native contract.
 // ---------------------------------------------------------------------------
 
-function subscribe<T>(name: string, listener: (payload: T) => void): () => void {
-  if (!hasNative) return () => {};
-  try {
-    return on<T>(name, listener);
-  } catch {
-    // A page outside a MyGo window has no runtime; keep the subscription a no-op.
-    return () => {};
-  }
+function subscribe<T>(event: { on: (listener: (payload: T) => void) => () => void }, listener: (payload: T) => void): () => void {
+  return hasNative ? event.on(listener) : () => {};
 }
 
-export function onCaptureCancelled(cb: (payload: { reason: string }) => void): () => void {
-  return subscribe("capture:cancelled", cb);
-}
-
-export function onCaptureFailed(
-  cb: (payload: { message: string; permission: boolean }) => void,
-): () => void {
-  return subscribe("capture:failed", cb);
-}
-
-export function onOverlayShown(cb: (payload: OverlayInfo) => void): () => void {
-  return subscribe("overlay:shown", cb);
-}
-
-export function onOverlayCapture(cb: (payload: OverlayCapture) => void): () => void {
-  return subscribe("overlay:capture", cb);
-}
-
-export function onScrollInit(cb: (payload: ScrollInit) => void): () => void {
-  return subscribe("scroll:init", cb);
-}
-
-export function onScrollProgress(cb: (payload: ScrollProgress) => void): () => void {
-  return subscribe("scroll:progress", cb);
-}
-
-export function onScrollResult(cb: (payload: ScrollResult) => void): () => void {
-  return subscribe("scroll:result", cb);
-}
-
-export function onHistoryChanged(cb: () => void): () => void {
-  return subscribe("history:changed", cb);
-}
-
-export function onToast(cb: (payload: { text: string; kind: string }) => void): () => void {
-  return subscribe("toast", cb);
-}
+export const onCaptureCancelled = (cb: (payload: Native.CaptureCancelledPayload) => void) => subscribe(events.captureCancelled, cb);
+export const onCaptureFailed = (cb: (payload: Native.CaptureFailedPayload) => void) => subscribe(events.captureFailed, cb);
+export const onOverlayShown = (cb: (payload: OverlayInfo) => void) => subscribe(events.overlayShown, cb);
+export const onOverlayCapture = (cb: (payload: OverlayCapture) => void) => subscribe(events.overlayCapture, cb);
+export const onScrollInit = (cb: (payload: ScrollInit) => void) => subscribe(events.scrollInit, cb);
+export const onScrollProgress = (cb: (payload: ScrollProgress) => void) => subscribe(events.scrollProgress, (value) => cb({ ...value, status: value.status as ScrollProgress["status"] }));
+export const onScrollResult = (cb: (payload: ScrollResult) => void) => subscribe(events.scrollResult, cb);
+export const onHistoryChanged = (cb: () => void) => subscribe(events.historyChanged, cb);
+export const onToast = (cb: (payload: Native.ToastPayload) => void) => subscribe(events.toast, cb);
 
 // ---------------------------------------------------------------------------
 // Browser-preview fallbacks (the design prototype, made safe).

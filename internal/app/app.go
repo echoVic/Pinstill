@@ -440,11 +440,10 @@ func (a *App) beginRegion() error {
 		// Restore the main window after a cancel only when it was visible
 		// before the capture: closing the window and cancelling a shot must
 		// not pop the history/settings panel back up.
-		visible := mainWin.IsVisible()
+		visible := hideForCapture(mainWin)
 		a.mu.Lock()
 		a.restoreMainAfterCapture = visible
 		a.mu.Unlock()
-		mainWin.Hide()
 	}
 	if overlay == nil {
 		a.mu.Lock()
@@ -703,13 +702,10 @@ func (a *App) captureFullScreen() {
 	}
 	// Keep the app's own windows out of the shot; reopening the window is
 	// only for the case it was visible when the user asked for the capture.
-	mainVisible := mainWin != nil && mainWin.IsVisible()
+	mainVisible := mainWin != nil && hideForCapture(mainWin)
 	a.mu.Lock()
 	a.restoreMainAfterCapture = mainVisible
 	a.mu.Unlock()
-	if mainVisible {
-		mainWin.Hide()
-	}
 	disp := mygo.Screen.DisplayNearestPoint(mygo.Screen.CursorScreenPoint())
 	b := disp.Bounds
 	region := capture.Rect{X: float64(b.X), Y: float64(b.Y), Width: float64(b.Width), Height: float64(b.Height)}
@@ -838,11 +834,26 @@ func (a *App) notifyCaptureFailure(message string) {
 }
 
 // showMain reveals and focuses the main window.
+// Minimized and hidden windows already stay out of the capture. Leaving them
+// alone preserves their presentation without showing/focusing them afterward.
+func hideForCapture(win interface {
+	IsVisible() bool
+	IsMinimized() bool
+	Hide()
+}) bool {
+	if !win.IsVisible() || win.IsMinimized() {
+		return false
+	}
+	win.Hide()
+	return true
+}
+
 func (a *App) showMain() {
 	a.mu.Lock()
 	win := a.main
+	quitting := a.quitting
 	a.mu.Unlock()
-	if win == nil || win.IsDestroyed() {
+	if win == nil || win.IsDestroyed() || quitting {
 		return
 	}
 	mygo.App.Focus()

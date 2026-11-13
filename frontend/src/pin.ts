@@ -26,17 +26,11 @@ import {
   setPinOpacity,
   updatePinState,
 } from "./bridge";
-import { currentWindow, isMyGo, on } from "mygo-runtime";
+import { currentWindow, isMyGo } from "mygo-runtime";
+import { events } from "./mygo";
+import type { PinInitPayload } from "./mygo";
 
-interface PinInit {
-  id?: string;
-  url?: string;
-  width?: number;
-  height?: number;
-  /** 10..100, applied natively by Go. */
-  opacity?: number;
-  border?: boolean;
-}
+type PinInit = Partial<PinInitPayload>;
 
 const MIN_WIDTH = 96;
 const SCREEN_RATIO = 0.9;
@@ -560,10 +554,10 @@ window.addEventListener("keydown", (event) => {
   void closeWindow();
 });
 
-// Native event: `pin:init` (raw name, untyped mygo-runtime `on`).
+// The generated event shares the native pin payload contract.
 if (isMyGo()) {
   try {
-    on<PinInit>("pin:init", (payload) => applyPin(payload));
+    events.pinInit.on((payload) => applyPin(payload));
   } catch {
     // Never let a missing runtime break the page.
   }

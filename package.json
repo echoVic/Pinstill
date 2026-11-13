@@ -7,14 +7,16 @@
     "build": "mygo build",
     "generate": "mygo generate",
     "dev:web": "vite --config vite.config.ts",
-    "build:web": "vite build --config vite.config.ts"
+    "build:web": "vite build --config vite.config.ts",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "mygo-cli": "0.8.3",
-    "vite": "^8.0.0"
+    "mygo-cli": "0.9.0",
+    "vite": "^8.0.0",
+    "typescript": "~5.9.3"
   },
   "dependencies": {
     "lucide": "^1.70.0",
-    "mygo-runtime": "0.8.3"
+    "mygo-runtime": "0.9.0"
   }
 }

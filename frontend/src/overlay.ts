@@ -1603,7 +1603,7 @@ async function recaptureSelection(rect: Rect, previous: Rect): Promise<void> {
     // Keep the user's previous capture usable instead of freezing behind a
     // "正在截取" state: restore the old region and its canvas (annotations are
     // still in the engine).
-    if (phase === "preparing") {
+    if ((phase as Phase) === "preparing") {
       phase = "annotating";
       committedRect = previous;
       canvas.hidden = false;
