@@ -15,11 +15,16 @@ export default defineConfig({
   frontendDist: "dist",
   out: "build",
 
-  // Ad-hoc signing by default so a fresh clone builds without a certificate.
-  // A stable Developer ID signature keeps macOS TCC grants (screen recording,
-  // accessibility) across rebuilds, so for day-to-day use build with:
-  //   MACOS_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)" npm run build
+  // Release signing: `mygo build` signs the app and the dmg with this
+  // Developer ID (hardened runtime + timestamp) and notarizes them, so macOS
+  // keeps the screen recording / accessibility grants across rebuilds.
+  // Override the identity with MACOS_SIGNING_IDENTITY="-" for an ad-hoc build
+  // without a certificate. The notary profile comes from
+  // `xcrun notarytool store-credentials`.
   macos: {
-    signingIdentity: process.env.MACOS_SIGNING_IDENTITY ?? "-",
+    minimumSystemVersion: "13.0",
+    signingIdentity:
+      process.env.MACOS_SIGNING_IDENTITY ?? "Developer ID Application: Zijie Hu (8LH7PFQJ89)",
+    notarize: { keychainProfile: "clipnest-notary" },
   },
 });

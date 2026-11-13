@@ -254,7 +254,7 @@ work/plan.md                  开发记录：接口契约与实测结论
 - [x] 权限中心、登录启动、7 类偏好设置
 - [ ] OCR / 翻译 / 二维码接入
 - [ ] Windows 真机验证与适配
-- [ ] 提供二进制 release
+- [x] 提供二进制 release（[下载 v0.1.0](https://github.com/echoVic/Pinstill/releases/tag/v0.1.0)）
 
 ## 参与贡献
 
