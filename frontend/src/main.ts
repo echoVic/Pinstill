@@ -29,7 +29,6 @@ import {
   permissionGranted,
   requestScreenPermission,
   scrollAccessibilityGranted,
-  showMainWindow,
   type HistoryEntry,
 } from "./bridge";
 import { refreshPinstillIcons } from "./icons";
@@ -1193,7 +1192,8 @@ onCaptureFailed((payload) => {
     void refreshPermissionBanner();
     void refreshPermissionCenter();
   }
-  void showMainWindow().catch(() => {});
+  // Go decides whether the window should be reopened (only when it was
+  // visible before the capture); the page must not force it open.
 });
 onHistoryChanged(() => scheduleHistoryRefresh());
 onToast((payload) => showToast(payload.text, (payload.kind as "info" | "success" | "error") ?? "info"));

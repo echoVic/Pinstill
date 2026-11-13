@@ -56,6 +56,10 @@ type App struct {
 	shortcutKeys map[string]string
 	capturing    bool
 	quitting     bool
+
+	// restoreMainAfterCapture is true when the history/settings window was
+	// visible before the capture: only then may cancel/failure reopen it.
+	restoreMainAfterCapture bool
 }
 
 // New creates the app. Bind must be called before App.Run, Start once the
@@ -111,11 +115,9 @@ func (a *App) Start() {
 		}
 		a.snapshotAllPins()
 	})
-	mygo.App.OnActivate(func(hasVisibleWindows bool) {
-		if !hasVisibleWindows {
-			a.showMain()
-		}
-	})
+	// Activating the app (clicking the menu bar icon, the Dock, ...) must not
+	// open the history/settings window: only the tray menu item, the second
+	// launch path and explicit buttons in the UI do that.
 	if mode := os.Getenv("PINSTILL_SELFTEST"); mode != "" {
 		go a.runSelfTest(mode)
 	}
@@ -435,6 +437,13 @@ func (a *App) beginRegion() error {
 	overlay := a.overlay
 	a.mu.Unlock()
 	if mainWin != nil {
+		// Restore the main window after a cancel only when it was visible
+		// before the capture: closing the window and cancelling a shot must
+		// not pop the history/settings panel back up.
+		visible := mainWin.IsVisible()
+		a.mu.Lock()
+		a.restoreMainAfterCapture = visible
+		a.mu.Unlock()
 		mainWin.Hide()
 	}
 	if overlay == nil {
@@ -498,14 +507,16 @@ func (a *App) overlayInfo() OverlayInfo {
 func (a *App) cancelRegion() {
 	a.mu.Lock()
 	overlay := a.overlay
+	restoreMain := a.restoreMainAfterCapture
+	a.restoreMainAfterCapture = false
+	a.capturing = false
 	a.mu.Unlock()
 	if overlay != nil {
 		overlay.Hide()
 	}
-	a.showMain()
-	a.mu.Lock()
-	a.capturing = false
-	a.mu.Unlock()
+	if restoreMain {
+		a.showMain()
+	}
 	emitToMain(a, EventCaptureCancelled, CaptureCancelledPayload{Reason: "user"})
 }
 
@@ -636,6 +647,7 @@ func (a *App) finishAnnotated(action string, dataBase64 string) error {
 	reset := func() {
 		a.mu.Lock()
 		a.capturing = false
+		a.restoreMainAfterCapture = false
 		a.mu.Unlock()
 	}
 	if action == "cancel" {
@@ -692,6 +704,9 @@ func (a *App) captureFullScreen() {
 	// Keep the app's own windows out of the shot; reopening the window is
 	// only for the case it was visible when the user asked for the capture.
 	mainVisible := mainWin != nil && mainWin.IsVisible()
+	a.mu.Lock()
+	a.restoreMainAfterCapture = mainVisible
+	a.mu.Unlock()
 	if mainVisible {
 		mainWin.Hide()
 	}
@@ -719,6 +734,9 @@ func (a *App) captureFullScreenAction(region capture.Rect, restoreMain bool) {
 	if restoreMain {
 		a.showMain()
 	}
+	a.mu.Lock()
+	a.restoreMainAfterCapture = false
+	a.mu.Unlock()
 	if err != nil {
 		a.failCapture(err, false)
 		return
@@ -788,12 +806,35 @@ func (a *App) failCapture(err error, permission bool) {
 	if permission {
 		message += "。请在系统设置中允许 Pinstill 录制屏幕"
 	}
-	a.showMain()
 	a.mu.Lock()
+	restoreMain := a.restoreMainAfterCapture
+	a.restoreMainAfterCapture = false
 	a.capturing = false
 	a.mu.Unlock()
+	if restoreMain {
+		a.showMain()
+	} else {
+		// The window stays closed; a notification is the only visible place
+		// for the failure of an explicit capture action.
+		a.notifyCaptureFailure(message)
+	}
 	emitToMain(a, EventCaptureFailed, CaptureFailedPayload{Message: message, Permission: permission})
 	a.toast(message, "error")
+}
+
+// notifyCaptureFailure reports a capture failure without opening the main
+// window (which stays closed unless the user asks for it).
+func (a *App) notifyCaptureFailure(message string) {
+	notification := mygo.NewNotification(mygo.NotificationOptions{
+		ID:    "pinstill-capture-failure",
+		Title: "Pinstill 截图失败",
+		Body:  message,
+	})
+	go func() {
+		if err := notification.Show(); err != nil {
+			log.Printf("pinstill: notification: %v", err)
+		}
+	}()
 }
 
 // showMain reveals and focuses the main window.

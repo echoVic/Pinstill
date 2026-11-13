@@ -961,3 +961,22 @@ R8 删除主窗口编辑器后，设置页有若干项变成「惰性」（保�
 - README 重写为开源版：特性 / 截图 / 从源码构建（含签名与权限说明）/ 使用 / 数据与权限 / 架构图 / 开发与测试 / 项目结构 / 已知限制 / 路线图 / 贡献指南 / License / 致谢；新增 `README.en.md` 英文版并在两版之间互链。
 - 新增 `.github/workflows/ci.yml`（Go vet/test + Windows 交叉编译 + 前端 `npm ci`/`build:web`）与 CI badge。
 - `.gitignore` 增加 `.bits/`；提交前复核无个人路径、证书身份、内部资料等敏感内容。
+
+
+## R18：主窗口不再意外弹出（2026-11-13，用户反馈「这个面板总是不小心打开」）
+
+用户反馈历史 / 设置窗口（上次停留的「贴图与桌面」分类）总被不小心打开。根因是多个隐式路径都会 `showMain()`：
+
+1. 取消截图（Esc / 右键）的 `cancelRegion` 无条件 `showMain()`；
+2. `mygo.App.OnActivate` 在「没有可见窗口」时自动 `showMain()`（激活应用 / 点菜单栏图标即触发）；
+3. `failCapture` 失败时也 `showMain()`；
+4. 主窗口前端收到 `capture:failed` 事件后自己又调用 `ShowMainWindow`。
+
+修复：
+
+- 新增 `restoreMainAfterCapture`：截图开始时记录主窗口是否可见，取消 / 失败时**只有当时可见才恢复**；
+- 移除 `OnActivate` 自动弹窗；打开窗口只剩托盘「历史与设置」、二次启动、界面显式按钮；
+- 主窗口前端不再在 `capture:failed` 里强制打开窗口；
+- 窗口未打开时的截图失败改用**系统通知**（`mygo.NewNotification`）提示。
+
+验证：`esc` 自检增加第二段（关闭主窗口 → 截图 → 取消 → 主窗口保持隐藏，`main_after_hidden_cancel=false`）；完整 e2e **23 项 ALL CHECKS PASSED**；签名构建 11:40:39。

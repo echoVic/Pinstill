@@ -423,6 +423,28 @@ func (a *App) selftestEscape() {
 	if a.main != nil {
 		fmt.Printf("SELFTEST esc: main visible=%v\n", a.main.IsVisible())
 	}
+	// Second capture with the history/settings window closed: cancelling must
+	// leave it closed (it used to be reopened by cancel/failure paths).
+	if a.main != nil {
+		a.main.Hide()
+	}
+	time.Sleep(400 * time.Millisecond)
+	if err := a.beginRegion(); err != nil {
+		fmt.Printf("SELFTEST esc: second begin error %v\n", err)
+		mygo.App.Exit(1)
+		return
+	}
+	time.Sleep(900 * time.Millisecond)
+	a.cancelRegion()
+	time.Sleep(600 * time.Millisecond)
+	mainAfterHiddenCancel := a.main != nil && a.main.IsVisible()
+	fmt.Printf("SELFTEST esc: main_after_hidden_cancel=%v\n", mainAfterHiddenCancel)
+	if mainAfterHiddenCancel {
+		fmt.Printf("SELFTEST esc: checks=FAILED\n")
+		mygo.App.Exit(1)
+		return
+	}
+	fmt.Printf("SELFTEST esc: checks=ok\n")
 	mygo.App.Exit(0)
 }
 

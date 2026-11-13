@@ -122,6 +122,8 @@ PINSTILL_SELFTEST=esc "$APP" 2>&1 | tee /tmp/pinstill-selftest-esc.log
 sleep 1.0
 expect 'overlay visible=false' /tmp/pinstill-selftest-esc.log
 expect 'main visible=true' /tmp/pinstill-selftest-esc.log
+expect 'SELFTEST esc: main_after_hidden_cancel=false' /tmp/pinstill-selftest-esc.log
+expect 'SELFTEST esc: checks=ok' /tmp/pinstill-selftest-esc.log
 
 step "Selftest: desktop action flow (drag + toolbar)"
 PINSTILL_SELFTEST=flow "$APP" 2>&1 | tee /tmp/pinstill-selftest-flow.log
