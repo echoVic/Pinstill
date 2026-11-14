@@ -1,5 +1,8 @@
 import { defineConfig } from "mygo-cli";
 
+const signingIdentity = process.env.MACOS_SIGNING_IDENTITY?.trim() || "-";
+const notaryProfile = process.env.MACOS_NOTARY_PROFILE?.trim();
+
 export default defineConfig({
   name: "Pinstill",
   slug: "pinstill",
@@ -15,16 +18,14 @@ export default defineConfig({
   frontendDist: "dist",
   out: "build",
 
-  // Release signing: `mygo build` signs the app and the dmg with this
-  // Developer ID (hardened runtime + timestamp) and notarizes them, so macOS
-  // keeps the screen recording / accessibility grants across rebuilds.
-  // Override the identity with MACOS_SIGNING_IDENTITY="-" for an ad-hoc build
-  // without a certificate. The notary profile comes from
-  // `xcrun notarytool store-credentials`.
+  // Local builds use ad-hoc signing without a developer certificate.
+  // Release builds opt in with MACOS_SIGNING_IDENTITY and, for notarization,
+  // MACOS_NOTARY_PROFILE (from `xcrun notarytool store-credentials`).
   macos: {
     minimumSystemVersion: "13.0",
-    signingIdentity:
-      process.env.MACOS_SIGNING_IDENTITY ?? "Developer ID Application: Zijie Hu (8LH7PFQJ89)",
-    notarize: { keychainProfile: "clipnest-notary" },
+    signingIdentity,
+    notarize: signingIdentity !== "-" && notaryProfile
+      ? { keychainProfile: notaryProfile }
+      : undefined,
   },
 });
