@@ -8,8 +8,8 @@ import (
 )
 
 // loginItemsSettingsURL is the Settings deep link for General > Login Items
-// (macOS 13+). The older users pane is not used: Pinstill targets Sonoma and
-// later, where login items live in their own pane.
+// (macOS 13+). Pinstill targets Ventura and later, where login items live in
+// their own pane.
 const loginItemsSettingsURL = "x-apple.systempreferences:com.apple.LoginItems-Settings.extension"
 
 // openLoginItemsSettings opens System Settings > General > Login Items, where

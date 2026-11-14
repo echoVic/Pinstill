@@ -4,25 +4,26 @@ package main
 import (
 	"log"
 	"os"
-	"strings"
 
 	"github.com/echoVic/Pinstill/internal/app"
 	"github.com/egoist/mygo"
 )
 
 func main() {
-	// Carry captures, pins and settings over from the pre-rename builds.
-	app.MigrateLegacyData()
-	// The README screenshots must never read the user's captures: the
-	// showcase selftest refuses to run outside an isolated data directory.
-	if os.Getenv("PINSTILL_SELFTEST") == "showcase" && strings.TrimSpace(os.Getenv("PINSTILL_DATA_DIR")) == "" {
-		log.Fatal("PINSTILL_SELFTEST=showcase needs PINSTILL_DATA_DIR set to an isolated directory")
+	// Native tests can delete history and pins. Validate isolation before the
+	// single-instance lock, migration, MyGo initialization, or storage setup.
+	if os.Getenv("PINSTILL_SELFTEST") != "" {
+		if err := app.ValidateSelftestDataDir(os.Getenv("PINSTILL_DATA_DIR")); err != nil {
+			log.Fatalf("PINSTILL_SELFTEST needs an isolated PINSTILL_DATA_DIR: %v", err)
+		}
 	}
 	// A screenshot utility must have one instance: hotkeys, the tray icon
 	// and the pin windows all belong to it.
 	if !mygo.App.RequestSingleInstanceLock() {
 		return
 	}
+	// Carry captures, pins and settings over from the pre-rename builds.
+	app.MigrateLegacyData()
 	mygo.App.SetName("Pinstill")
 	mygo.App.SetVersion("0.1.0")
 

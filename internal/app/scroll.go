@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/echoVic/Pinstill/internal/capture"
+	"github.com/echoVic/Pinstill/internal/imagebudget"
 	"github.com/echoVic/Pinstill/internal/stitch"
 	"github.com/egoist/mygo"
 )
@@ -36,6 +37,7 @@ const (
 
 // scrollSession is one in-progress scrolling capture.
 type scrollSession struct {
+	id        string
 	mu        sync.Mutex
 	rect      Rect
 	region    capture.Rect
@@ -48,6 +50,7 @@ type scrollSession struct {
 	stop      chan struct{}
 	done      chan struct{}
 	stopped   bool
+	cancelled bool
 	finalized bool
 }
 
@@ -91,6 +94,7 @@ func (s *scrollSession) isFinalized() bool {
 // actions while the overlay is hidden.
 func (a *App) createScrollControl() {
 	win := mygo.NewWindow(mygo.WindowOptions{
+		Page:              mygo.PageOptions{Session: a.pageSession},
 		Title:             "Pinstill 滚动截图",
 		Width:             scrollControlWidth,
 		Height:            scrollControlHeight,
@@ -119,6 +123,7 @@ func (a *App) createScrollControl() {
 			}
 		}()
 	})
+	win.SetContentProtection(true)
 	a.control = win
 }
 
@@ -127,6 +132,7 @@ func (a *App) createScrollControl() {
 // which part of the screen is being captured.
 func (a *App) createScrollFrame() {
 	win := mygo.NewWindow(mygo.WindowOptions{
+		Page:              mygo.PageOptions{Session: a.pageSession},
 		Title:             "Pinstill 滚动截图范围",
 		Width:             320,
 		Height:            240,
@@ -144,6 +150,7 @@ func (a *App) createScrollFrame() {
 		URL:               "/frame.html",
 	})
 	win.SetIgnoreMouseEvents(true)
+	win.SetContentProtection(true)
 	a.mu.Lock()
 	a.scrollFrame = win
 	a.mu.Unlock()
@@ -304,7 +311,20 @@ func (a *App) startScroll(rect Rect, autoScroll bool) error {
 	if overlay != nil {
 		overlay.Hide()
 	}
+	a.mu.Lock()
+	if err := a.releaseOverlayCacheLocked(); err != nil {
+		a.mu.Unlock()
+		if overlay != nil {
+			overlay.Show()
+			overlay.Focus()
+		}
+		return err
+	}
+	a.scrollSequence++
+	id := fmt.Sprintf("scroll-%d", a.scrollSequence)
+	a.mu.Unlock()
 	session := &scrollSession{
+		id:     id,
 		rect:   rect,
 		region: region,
 		auto:   effectiveAuto,
@@ -313,18 +333,31 @@ func (a *App) startScroll(rect Rect, autoScroll bool) error {
 		stop:   make(chan struct{}),
 		done:   make(chan struct{}),
 	}
-	a.mu.Lock()
-	a.scroll = session
-	a.mu.Unlock()
-	a.placeScrollControl(region)
-	control.Show()
-	a.showScrollFrame(region)
-	emitToWindow(a, control, EventScrollInit, ScrollInitPayload{
-		Rect:                 rect,
-		Auto:                 effectiveAuto,
-		AutoDenied:           autoDenied,
-		AccessibilityGranted: capture.AccessibilityGranted(),
+	var startErr error
+	a.runScrollUI(func() {
+		a.mu.Lock()
+		if !a.capturing || a.scroll != nil || a.quitting {
+			a.mu.Unlock()
+			startErr = errors.New("截图请求已取消")
+			return
+		}
+		a.scroll = session
+		a.captureGeneration++
+		a.mu.Unlock()
+		a.placeScrollControl(region)
+		control.Show()
+		a.showScrollFrame(region)
+		emitToWindow(a, control, EventScrollInit, ScrollInitPayload{
+			SessionID:            session.id,
+			Rect:                 rect,
+			Auto:                 effectiveAuto,
+			AutoDenied:           autoDenied,
+			AccessibilityGranted: capture.AccessibilityGranted(),
+		})
 	})
+	if startErr != nil {
+		return startErr
+	}
 	go a.scrollLoop(session)
 	return nil
 }
@@ -350,7 +383,7 @@ func (a *App) scrollLoop(session *scrollSession) {
 			session.setStatus("running")
 			a.emitScrollProgress(session)
 		}
-		frame, err := a.captureRegion(session.region, capture.CaptureOptions{IncludeCursor: false})
+		frame, err := a.captureScrollFrame(session)
 		if err != nil {
 			a.failScroll(session, "截图失败: "+err.Error())
 			return
@@ -389,7 +422,7 @@ func (a *App) scrollLoop(session *scrollSession) {
 			a.finalizeScroll(session, "stalled")
 			return
 		}
-		if session.frames >= scrollMaxFrames || session.height >= scrollMaxHeight {
+		if scrollReachedLimit(session) {
 			a.finalizeScroll(session, "max")
 			return
 		}
@@ -410,64 +443,98 @@ func (a *App) scrollLoop(session *scrollSession) {
 	}
 }
 
+func scrollReachedLimit(session *scrollSession) bool {
+	return session.frames >= scrollMaxFrames || session.height >= scrollMaxHeight || session.acc.Result().ReachedMax
+}
+
 // failScroll reports a scroll session that could not continue.
 func (a *App) failScroll(session *scrollSession, message string) {
 	session.setStatus("error")
 	a.emitScrollProgress(session)
-	a.mu.Lock()
-	control := a.control
-	a.mu.Unlock()
 	time.Sleep(700 * time.Millisecond)
-	if control != nil && !control.IsDestroyed() {
-		control.Hide()
-	}
-	a.toast(message, "error")
-	a.clearScrollSession()
+	a.runScrollUI(func() {
+		if !a.scrollResultIsCurrent(session) {
+			return
+		}
+		a.toast(message, "error")
+		a.clearScrollSessionOnUI(session)
+	})
 }
 
 // finalizeScroll stitches, stores and previews a finished scrolling capture.
 // It runs at the end of the capture loop (never for a cancel); the session is
 // cleared once the preview window is up.
 func (a *App) finalizeScroll(session *scrollSession, status string) {
+	a.mu.Lock()
+	active := a.scroll == session
+	a.mu.Unlock()
+	if !active {
+		return
+	}
 	session.mu.Lock()
-	if session.finalized || session.stopped {
+	// A manual finish first stops and joins the capture loop. That stop is
+	// not a cancellation; automatic finalization must still respect it.
+	if session.finalized || (session.stopped && status != "finish") {
 		session.mu.Unlock()
 		return
 	}
 	session.finalized = true
 	frames := session.frames
 	session.mu.Unlock()
-	a.mu.Lock()
-	control := a.control
-	a.mu.Unlock()
-	if control != nil && !control.IsDestroyed() {
-		control.Hide()
-	}
+	a.runScrollUI(func() {
+		if !a.scrollResultIsCurrent(session) {
+			return
+		}
+		a.mu.Lock()
+		control := a.control
+		a.mu.Unlock()
+		if control != nil && !control.IsDestroyed() {
+			control.Hide()
+		}
+	})
 	res := session.acc.Result()
 	if res.Image == nil || res.Image.Bounds().Dy() < 2 {
 		a.toast("滚动截图没有抓到有效画面", "error")
-		a.clearScrollSession()
+		a.clearScrollSession(session)
 		return
 	}
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, res.Image); err != nil {
+	encoded, err := imagebudget.EncodePNG(res.Image)
+	if err != nil {
 		a.toast("长图编码失败: "+err.Error(), "error")
-		a.clearScrollSession()
+		a.clearScrollSession(session)
 		return
 	}
 	capped := status == "max"
-	if err := a.showScrollResult(buf.Bytes(), frames, capped); err != nil {
+	if err := a.showScrollResultFor(session, encoded, frames, capped); err != nil && a.scrollResultIsCurrent(session) {
 		a.toast("滚动截图保存失败: "+err.Error(), "error")
 	}
-	a.clearScrollSession()
+	a.clearScrollSession(session)
 }
 
 // clearScrollSession releases the session and the capture state.
-func (a *App) clearScrollSession() {
+func (a *App) clearScrollSession(session *scrollSession) {
+	a.runScrollUI(func() { a.clearScrollSessionOnUI(session) })
+}
+
+// UI-thread serialization keeps an old hide from crossing a new session's show.
+func (a *App) clearScrollSessionOnUI(session *scrollSession) {
+	a.mu.Lock()
+	active := a.scroll == session
+	control := a.control
+	a.mu.Unlock()
+	if !active {
+		return
+	}
+	if control != nil && !control.IsDestroyed() {
+		control.Hide()
+	}
 	a.hideScrollFrame()
 	a.mu.Lock()
-	a.scroll = nil
-	a.capturing = false
+	if a.scroll == session {
+		a.scroll = nil
+		a.capturing = false
+		a.restoreMainAfterCapture = false
+	}
 	a.mu.Unlock()
 }
 
@@ -478,10 +545,11 @@ func (a *App) emitScrollProgress(session *scrollSession) {
 	a.mu.Unlock()
 	frames, height, status, auto := session.snapshot()
 	emitToWindow(a, control, EventScrollProgress, ScrollProgressPayload{
-		Frames: frames,
-		Height: height,
-		Status: status,
-		Auto:   auto,
+		SessionID: session.id,
+		Frames:    frames,
+		Height:    height,
+		Status:    status,
+		Auto:      auto,
 	})
 }
 
@@ -529,34 +597,44 @@ func (a *App) setScrollPaused(paused bool) error {
 // finishScroll ends the session: "finish" stitches and previews immediately,
 // "cancel" discards it.
 func (a *App) finishScroll(action string) error {
+	return a.finishScrollIdentity("", action)
+}
+
+func (a *App) finishScrollIdentity(id, action string) error {
 	a.scrollMu.Lock()
 	defer a.scrollMu.Unlock()
 	a.mu.Lock()
 	session := a.scroll
-	control := a.control
 	a.mu.Unlock()
 	if session == nil {
 		return errors.New("没有进行中的滚动截图")
 	}
+	if id != "" && session.id != id {
+		return errors.New("滚动截图会话已结束")
+	}
 	if action != "finish" && action != "cancel" {
 		return fmt.Errorf("未知的滚动截图动作 %q", action)
 	}
-	session.mu.Lock()
-	if !session.stopped {
-		session.stopped = true
-		close(session.stop)
-	}
-	session.mu.Unlock()
+	// Cancellation and result publication share the UI queue, so cancellation
+	// cannot slip between the final identity check and opening the preview.
+	a.runScrollUI(func() {
+		session.mu.Lock()
+		if action == "cancel" {
+			session.cancelled = true
+		}
+		if !session.stopped {
+			session.stopped = true
+			close(session.stop)
+		}
+		session.mu.Unlock()
+	})
 	select {
 	case <-session.done:
 	case <-time.After(10 * time.Second):
-		log.Printf("pinstill: scroll loop did not stop in time")
+		return errors.New("滚动截图仍在停止中，请稍后重试")
 	}
 	if action == "cancel" {
-		if control != nil && !control.IsDestroyed() {
-			control.Hide()
-		}
-		a.clearScrollSession()
+		a.clearScrollSession(session)
 		return nil
 	}
 	if session.isFinalized() {
@@ -568,33 +646,38 @@ func (a *App) finishScroll(action string) error {
 }
 
 // applyCaptureAction performs one of the capture actions on finished pixels.
-func (a *App) applyCaptureAction(action string, pngBytes []byte, payload capturePayload) {
-	a.playSoundIfEnabled(a.settingsSnapshot())
+func (a *App) applyCaptureAction(action string, pngBytes []byte, payload capturePayload) (CaptureActionResult, error) {
 	switch action {
 	case "copy":
 		if err := mygo.Clipboard.WriteImage(pngBytes); err != nil {
-			a.toast("写入剪贴板失败: "+err.Error(), "error")
+			return CaptureActionResult{}, fmt.Errorf("写入剪贴板失败: %w", err)
 		} else {
 			a.toast("截图已复制到剪贴板", "success")
 		}
 	case "pin":
 		if _, err := a.pinPNG(pngBytes, payload.Width, payload.Height); err != nil {
-			a.toast("固定到屏幕失败: "+err.Error(), "error")
+			return CaptureActionResult{}, fmt.Errorf("固定到屏幕失败: %w", err)
 		} else {
 			a.toast("已固定到屏幕", "success")
 		}
 	case "save":
 		if path, err := a.savePNGBytes(pngBytes); err != nil {
-			a.toast("保存失败: "+err.Error(), "error")
+			return CaptureActionResult{}, fmt.Errorf("保存失败: %w", err)
 		} else if path != "" {
 			a.toast("已保存到 "+path, "success")
+		} else {
+			return CaptureActionResult{Cancelled: true}, nil
 		}
+	default:
+		return CaptureActionResult{}, fmt.Errorf("未知的截图动作 %q", action)
 	}
+	a.playSoundIfEnabled(a.settingsSnapshot())
+	return CaptureActionResult{Completed: true}, nil
 }
 
 // pngToRGBA decodes a PNG frame into an RGBA image.
 func pngToRGBA(data []byte) (*image.RGBA, error) {
-	img, err := png.Decode(bytes.NewReader(data))
+	img, err := imagebudget.DecodePNG(data)
 	if err != nil {
 		return nil, err
 	}

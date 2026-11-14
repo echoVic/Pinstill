@@ -1,10 +1,8 @@
 package app
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
-	"image/png"
 	"log"
 	"net/http"
 	"os"
@@ -15,6 +13,7 @@ import (
 	"time"
 
 	"github.com/echoVic/Pinstill/internal/capture"
+	"github.com/echoVic/Pinstill/internal/imagebudget"
 	"github.com/echoVic/Pinstill/internal/pin"
 	"github.com/echoVic/Pinstill/internal/store"
 	"github.com/egoist/mygo"
@@ -22,13 +21,16 @@ import (
 
 // App owns the desktop windows and the capture workflow.
 type App struct {
-	mu sync.Mutex
+	mu         sync.Mutex
+	settingsMu sync.Mutex
+	finishMu   sync.Mutex
 
-	historyDir string
-	sessionDir string
-	shotBase   string
-	store      *store.Store
-	pinStore   *pin.Store
+	historyDir  string
+	sessionDir  string
+	shotBase    string
+	store       *store.Store
+	pinStore    *pin.Store
+	pageSession *mygo.Session
 
 	main           *mygo.Window
 	overlay        *mygo.Window
@@ -39,16 +41,24 @@ type App struct {
 	overlayRect    mygo.Rectangle
 
 	// resultPNG/resultMeta back the scrolling-capture preview window.
-	resultPNG  []byte
-	resultMeta ScrollResultPayload
+	resultPNG           []byte
+	resultMeta          ScrollResultPayload
+	resultSessionFile   string
+	overlaySessionFile  string
+	pendingPreviewFiles []string
+	annotationDigest    [32]byte
+	annotationPayload   capturePayload
+	captureAction       func(string, []byte, capturePayload) (CaptureActionResult, error)
 
 	pins      map[string]*mygo.Window
 	pinStates map[string]pin.State
 	pinTimers map[string]*time.Timer
 	pinSeq    int
 
-	scroll   *scrollSession
-	scrollMu sync.Mutex
+	scroll         *scrollSession
+	scrollMu       sync.Mutex
+	scrollSequence uint64
+	scrollUI       func(func()) // optional synthetic dispatcher; native transitions run on the UI thread
 
 	tray         *mygo.Tray
 	hotkeysFired int
@@ -56,6 +66,8 @@ type App struct {
 	shortcutKeys map[string]string
 	capturing    bool
 	quitting     bool
+	// Invalidates delayed selection work when its request or session ends.
+	captureGeneration uint64
 
 	// restoreMainAfterCapture is true when the history/settings window was
 	// visible before the capture: only then may cancel/failure reopen it.
@@ -65,13 +77,19 @@ type App struct {
 // New creates the app. Bind must be called before App.Run, Start once the
 // application is ready.
 func New() *App {
-	return &App{
+	a := &App{
 		settings:     DefaultSettings(),
 		pins:         map[string]*mygo.Window{},
 		pinStates:    map[string]pin.State{},
 		pinTimers:    map[string]*time.Timer{},
 		shortcutKeys: map[string]string{},
 	}
+	if os.Getenv("PINSTILL_SELFTEST") != "" {
+		// All test windows share preferences with each other, but never with
+		// the installed app's persistent WebView data store.
+		a.pageSession = mygo.NewEphemeralSession()
+	}
+	return a
 }
 
 // Bind registers the services pages call.
@@ -85,6 +103,8 @@ func (a *App) Bind() {
 func (a *App) Start() {
 	if err := a.initStorage(); err != nil {
 		log.Printf("pinstill: storage: %v", err)
+		mygo.App.Exit(1)
+		return
 	}
 	a.registerProtocol()
 	a.createOverlay()
@@ -100,20 +120,11 @@ func (a *App) Start() {
 	// History pruning waits for ApplySettings: the page owns the user's
 	// retention settings, and pruning with the defaults first could delete
 	// captures the user asked to keep.
-	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) {
-		a.mu.Lock()
-		a.quitting = true
-		session := a.scroll
-		a.mu.Unlock()
-		if session != nil {
-			session.mu.Lock()
-			if !session.stopped {
-				session.stopped = true
-				close(session.stop)
-			}
-			session.mu.Unlock()
+	mygo.App.OnBeforeQuit(func(e *mygo.QuitEvent) {
+		if err := a.prepareQuit(a.snapshotAllPins); err != nil {
+			e.PreventDefault()
+			a.toast("贴图状态保存失败，退出已取消: "+err.Error(), "error")
 		}
-		a.snapshotAllPins()
 	})
 	// Activating the app (clicking the menu bar icon, the Dock, ...) must not
 	// open the history/settings window: only the tray menu item, the second
@@ -121,6 +132,31 @@ func (a *App) Start() {
 	if mode := os.Getenv("PINSTILL_SELFTEST"); mode != "" {
 		go a.runSelfTest(mode)
 	}
+}
+
+func (a *App) prepareQuit(snapshot func() error) error {
+	a.mu.Lock()
+	a.quitting = true
+	a.mu.Unlock()
+	if err := snapshot(); err != nil {
+		a.mu.Lock()
+		a.quitting = false
+		a.mu.Unlock()
+		return err
+	}
+	a.mu.Lock()
+	session := a.scroll
+	a.captureGeneration++
+	a.mu.Unlock()
+	if session != nil {
+		session.mu.Lock()
+		if !session.stopped {
+			session.stopped = true
+			close(session.stop)
+		}
+		session.mu.Unlock()
+	}
+	return nil
 }
 
 // ShowMain reveals the main window; it is what a second launch does.
@@ -209,6 +245,7 @@ func imagesOnly(next http.Handler) http.Handler {
 
 func (a *App) createMainWindow() {
 	win := mygo.NewWindow(mygo.WindowOptions{
+		Page:            mygo.PageOptions{Session: a.pageSession},
 		Title:           "Pinstill",
 		Width:           1360,
 		Height:          880,
@@ -236,6 +273,7 @@ func (a *App) createMainWindow() {
 
 func (a *App) createOverlay() {
 	win := mygo.NewWindow(mygo.WindowOptions{
+		Page:              mygo.PageOptions{Session: a.pageSession},
 		Title:             "Pinstill 选区",
 		Width:             960,
 		Height:            600,
@@ -262,6 +300,7 @@ func (a *App) createOverlay() {
 		e.PreventDefault()
 		go a.cancelRegion()
 	})
+	win.SetContentProtection(true)
 	a.overlay = win
 }
 
@@ -333,94 +372,28 @@ func (a *App) settingsSnapshot() Settings {
 // registerShortcuts replaces the app's global shortcuts with the ones in s
 // and returns the failures keyed by setting name.
 func (a *App) registerShortcuts(s Settings) map[string]string {
-	a.mu.Lock()
-	old := a.shortcutKeys
-	a.shortcutKeys = map[string]string{}
-	a.mu.Unlock()
-	for _, acc := range old {
-		mygo.GlobalShortcut.Unregister(acc)
-	}
-	errs := map[string]string{}
-	add := func(key, accelerator string, fn func()) {
-		accelerator = strings.TrimSpace(accelerator)
-		if accelerator == "" {
-			return
-		}
-		if err := mygo.GlobalShortcut.Register(accelerator, fn); err != nil {
-			errs[key] = err.Error()
-			return
-		}
-		a.mu.Lock()
-		a.shortcutKeys[key] = accelerator
-		a.mu.Unlock()
-	}
-	add("captureKey", s.CaptureKey, func() {
-		a.mu.Lock()
-		a.hotkeysFired++
-		a.mu.Unlock()
-		go a.beginRegion()
-	})
-	add("pinKey", s.PinKey, func() {
-		go func() {
-			if _, err := a.pinClipboard(); err != nil {
-				a.toast(err.Error(), "error")
-			}
-		}()
-	})
-	add("ocrKey", s.OcrKey, func() { go a.toast("文字识别服务待接入，可先使用截图与标注", "info") })
-	return errs
+	return a.reconcileShortcuts(s)
 }
 
 // applySettings stores the settings and applies everything native.
 func (a *App) applySettings(s Settings) map[string]string {
-	a.mu.Lock()
-	a.settings = s
-	a.mu.Unlock()
-	errs := a.registerShortcuts(s)
-	if mygo.App.OpenAtLogin() != s.LaunchAtLogin {
-		if err := mygo.App.SetOpenAtLogin(s.LaunchAtLogin); err != nil && s.LaunchAtLogin {
-			errs["launchAtLogin"] = err.Error()
-		} else if err != nil {
-			log.Printf("pinstill: disable login item: %v", err)
-		}
-	}
-	a.mu.Lock()
-	keep := s.KeepHistory
-	a.mu.Unlock()
-	if keep {
-		a.pruneHistory()
-	} else if a.store != nil {
-		if err := a.store.Clear(); err != nil {
-			log.Printf("pinstill: clear history: %v", err)
-		}
-		a.emitHistoryChanged()
-	}
-	return errs
-}
-
-func (a *App) pruneHistory() {
-	if a.store == nil {
-		return
-	}
-	s := a.settingsSnapshot()
-	if !s.KeepHistory {
-		return
-	}
-	limit := int64(s.HistoryLimitMB) * 1024 * 1024
-	if _, err := a.store.Prune(s.RetentionDays, limit); err != nil {
-		log.Printf("pinstill: prune history: %v", err)
-	}
+	return a.applyEffectiveSettings(s)
 }
 
 // beginRegion hides the main window and shows the selection overlay on the
 // display under the pointer.
 func (a *App) beginRegion() error {
 	a.mu.Lock()
+	if a.quitting {
+		a.mu.Unlock()
+		return errors.New("应用正在退出")
+	}
 	if a.capturing {
 		a.mu.Unlock()
 		return nil
 	}
 	a.capturing = true
+	a.captureGeneration++
 	a.mu.Unlock()
 
 	if !capture.Supported() {
@@ -503,12 +476,18 @@ func (a *App) overlayInfo() OverlayInfo {
 }
 
 // cancelRegion hides the overlay and brings the main window back.
-func (a *App) cancelRegion() {
+func (a *App) cancelRegion() bool {
 	a.mu.Lock()
+	if a.scroll != nil {
+		a.mu.Unlock()
+		return false
+	}
 	overlay := a.overlay
 	restoreMain := a.restoreMainAfterCapture
 	a.restoreMainAfterCapture = false
 	a.capturing = false
+	a.captureGeneration++
+	reportCacheCleanup(a.releaseOverlayCacheLocked())
 	a.mu.Unlock()
 	if overlay != nil {
 		overlay.Hide()
@@ -517,6 +496,7 @@ func (a *App) cancelRegion() {
 		a.showMain()
 	}
 	emitToMain(a, EventCaptureCancelled, CaptureCancelledPayload{Reason: "user"})
+	return true
 }
 
 // captureRegion wraps the native capture. Selftests can run without the
@@ -555,12 +535,14 @@ func (a *App) prepareSelectionWithDelay(rect Rect, chromeDelay time.Duration) (O
 	a.mu.Lock()
 	disp := a.overlayDisplay
 	origin := a.overlayRect
-	capturing := a.capturing
 	overlay := a.overlay
-	a.mu.Unlock()
-	if !capturing {
+	if !a.capturing || a.scroll != nil {
+		a.mu.Unlock()
 		return OverlayCapturePayload{}, errors.New("没有进行中的截图")
 	}
+	a.captureGeneration++
+	generation := a.captureGeneration
+	a.mu.Unlock()
 	if overlay != nil {
 		if live := overlay.ContentBounds(); live.Width > 0 && live.Height > 0 {
 			origin = live
@@ -579,8 +561,14 @@ func (a *App) prepareSelectionWithDelay(rect Rect, chromeDelay time.Duration) (O
 	// Give the page a moment to hide its selection border and badges so they
 	// are not part of the capture.
 	time.Sleep(chromeDelay)
+	if !a.selectionIsCurrent(generation) {
+		return OverlayCapturePayload{}, errors.New("截图请求已取消")
+	}
 	s := a.settingsSnapshot()
 	pngBytes, err := a.captureRegion(region, capture.CaptureOptions{IncludeCursor: s.IncludeCursor})
+	if !a.selectionIsCurrent(generation) {
+		return OverlayCapturePayload{}, errors.New("截图请求已取消")
+	}
 	if err != nil {
 		a.failSelection(err, false)
 		return OverlayCapturePayload{}, err
@@ -596,24 +584,38 @@ func (a *App) prepareSelectionWithDelay(rect Rect, chromeDelay time.Duration) (O
 		a.failSelection(err, false)
 		return OverlayCapturePayload{}, err
 	}
-	id := captureID(time.Now())
-	sessionFile := id + ".png"
-	if err := os.WriteFile(filepath.Join(a.sessionDir, sessionFile), pngBytes, 0o644); err != nil {
+	// Cancellation and publication must not cross: either this write belongs
+	// to the active request, or no session file is created for it.
+	a.mu.Lock()
+	if !a.capturing || a.captureGeneration != generation {
+		a.mu.Unlock()
+		return OverlayCapturePayload{}, errors.New("截图请求已取消")
+	}
+	sessionFile, err := a.writePreviewLocked(&a.overlaySessionFile, pngBytes)
+	if err == nil {
+		a.annotationDigest = [32]byte{}
+		a.annotationPayload = capturePayload{}
+	}
+	a.mu.Unlock()
+	if err != nil {
 		err = fmt.Errorf("截图写入失败: %w", err)
 		a.failSelection(err, false)
 		return OverlayCapturePayload{}, err
 	}
 	payload := OverlayCapturePayload{
-		ID:     id,
+		ID:     strings.TrimSuffix(sessionFile, ".png"),
 		URL:    a.shotURL("/s/" + sessionFile),
 		Width:  width,
 		Height: height,
 		Rect:   rect,
 	}
-	if overlay != nil {
-		emitToWindow(a, overlay, EventOverlayCapture, payload)
-	}
 	return payload, nil
+}
+
+func (a *App) selectionIsCurrent(generation uint64) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.capturing && !a.quitting && a.captureGeneration == generation
 }
 
 // failSelection reports a failed in-place capture to the overlay, which stays
@@ -628,7 +630,6 @@ func (a *App) failSelection(err error, permission bool) {
 		message = "截图内容为空，可能缺少屏幕录制权限。请在系统设置 → 隐私与安全性 → 屏幕录制中允许 Pinstill"
 	}
 	a.mu.Lock()
-	a.capturing = false
 	overlay := a.overlay
 	a.mu.Unlock()
 	emitToWindow(a, overlay, EventCaptureFailed, CaptureFailedPayload{Message: message, Permission: permission})
@@ -636,52 +637,8 @@ func (a *App) failSelection(err error, permission bool) {
 
 // finishAnnotated completes the in-place annotation: the page sends the
 // composited PNG and the action the user picked.
-func (a *App) finishAnnotated(action string, dataBase64 string) error {
-	a.mu.Lock()
-	overlay := a.overlay
-	a.mu.Unlock()
-	if overlay != nil {
-		overlay.Hide()
-	}
-	reset := func() {
-		a.mu.Lock()
-		a.capturing = false
-		a.restoreMainAfterCapture = false
-		a.mu.Unlock()
-	}
-	if action == "cancel" {
-		reset()
-		emitToMain(a, EventCaptureCancelled, CaptureCancelledPayload{Reason: "user"})
-		return nil
-	}
-	switch action {
-	case "copy", "pin", "save":
-	default:
-		reset()
-		return fmt.Errorf("未知的标注动作 %q", action)
-	}
-	raw, err := decodeImageBase64(dataBase64)
-	if err != nil {
-		log.Printf("pinstill: finishAnnotated %s: bad base64 (%d chars): %v", action, len(dataBase64), err)
-		reset()
-		a.toast("标注数据无法解码: "+err.Error(), "error")
-		return err
-	}
-	if _, err := png.Decode(bytes.NewReader(raw)); err != nil {
-		reset()
-		err = errors.New("标注后的图片不是有效 PNG")
-		a.toast(err.Error(), "error")
-		return err
-	}
-	payload, err := a.storeCapture(raw)
-	if err != nil {
-		reset()
-		a.toast(err.Error(), "error")
-		return err
-	}
-	a.applyCaptureAction(action, raw, payload)
-	reset()
-	return nil
+func (a *App) finishAnnotated(action string, dataBase64 string) (CaptureActionResult, error) {
+	return a.finishAnnotation(action, dataBase64)
 }
 
 // captureFullScreen captures the whole display under the pointer, stores it
@@ -689,11 +646,13 @@ func (a *App) finishAnnotated(action string, dataBase64 string) error {
 // overlay and no editor, so "inplace" falls back to the clipboard.
 func (a *App) captureFullScreen() {
 	a.mu.Lock()
-	if a.capturing {
+	if a.capturing || a.quitting {
 		a.mu.Unlock()
 		return
 	}
 	a.capturing = true
+	a.captureGeneration++
+	generation := a.captureGeneration
 	mainWin := a.main
 	a.mu.Unlock()
 	if !capture.Supported() {
@@ -709,15 +668,21 @@ func (a *App) captureFullScreen() {
 	disp := mygo.Screen.DisplayNearestPoint(mygo.Screen.CursorScreenPoint())
 	b := disp.Bounds
 	region := capture.Rect{X: float64(b.X), Y: float64(b.Y), Width: float64(b.Width), Height: float64(b.Height)}
-	go a.captureFullScreenAction(region, mainVisible)
+	go a.captureFullScreenAction(region, mainVisible, generation)
 }
 
 // captureFullScreenAction grabs the display after the app windows left the
 // compositor, stores the capture and runs the after-capture action.
-func (a *App) captureFullScreenAction(region capture.Rect, restoreMain bool) {
+func (a *App) captureFullScreenAction(region capture.Rect, restoreMain bool, generation uint64) {
 	time.Sleep(250 * time.Millisecond)
+	if !a.selectionIsCurrent(generation) {
+		return
+	}
 	s := a.settingsSnapshot()
 	pngBytes, err := a.captureRegion(region, capture.CaptureOptions{IncludeCursor: s.IncludeCursor})
+	if !a.selectionIsCurrent(generation) {
+		return
+	}
 	if err != nil {
 		a.failCapture(err, false)
 		return
@@ -727,6 +692,9 @@ func (a *App) captureFullScreenAction(region capture.Rect, restoreMain bool) {
 		return
 	}
 	payload, err := a.storeCapture(pngBytes)
+	if !a.selectionIsCurrent(generation) {
+		return
+	}
 	if restoreMain {
 		a.showMain()
 	}
@@ -737,42 +705,61 @@ func (a *App) captureFullScreenAction(region capture.Rect, restoreMain bool) {
 		a.failCapture(err, false)
 		return
 	}
-	a.playSoundIfEnabled(s)
+	action := "copy"
 	if s.AfterCapture == "pin" {
-		if _, err := a.pinPNG(pngBytes, payload.Width, payload.Height); err != nil {
-			a.toast("固定到屏幕失败: "+err.Error(), "error")
-		} else {
-			a.toast("整屏截图已固定到屏幕", "success")
-		}
-	} else if err := mygo.Clipboard.WriteImage(pngBytes); err != nil {
-		a.toast("写入剪贴板失败: "+err.Error(), "error")
-	} else {
-		a.toast("整屏截图已复制到剪贴板", "success")
+		action = "pin"
+	}
+	actionFn := a.captureAction
+	if actionFn == nil {
+		actionFn = a.applyCaptureAction
+	}
+	if _, err := actionFn(action, pngBytes, payload); err != nil {
+		a.toast(err.Error(), "error")
 	}
 	a.mu.Lock()
-	a.capturing = false
+	if a.captureGeneration == generation {
+		a.capturing = false
+	}
 	a.mu.Unlock()
 }
 
-// storeCapture writes a capture to the session cache and, when the user
-// keeps history, to the persistent history. It is shared by the overlay
+// storeCapture validates a capture and, when the user keeps history, writes
+// it to persistent history. Preview files have their own ownership. Shared by the overlay
 // actions, full-screen captures and the selftests.
 func (a *App) storeCapture(pngBytes []byte) (capturePayload, error) {
+	// Keep a history write and its retention decision atomic with settings
+	// changes, especially disabling and clearing history.
+	a.settingsMu.Lock()
+	defer a.settingsMu.Unlock()
 	s := a.settingsSnapshot()
-	width, height := imageDimensions(pngBytes)
-	if width == 0 || height == 0 {
-		return capturePayload{}, errors.New("截图数据无效")
+	img, err := imagebudget.DecodePNG(pngBytes)
+	if err != nil {
+		return capturePayload{}, fmt.Errorf("截图数据无效: %w", err)
 	}
+	width, height := img.Bounds().Dx(), img.Bounds().Dy()
 	id := captureID(time.Now())
-	sessionFile := id + ".png"
-	if err := os.WriteFile(filepath.Join(a.sessionDir, sessionFile), pngBytes, 0o644); err != nil {
-		return capturePayload{}, fmt.Errorf("截图写入失败: %w", err)
-	}
 	payload := capturePayload{ID: id, Width: width, Height: height}
-	if s.KeepHistory && a.store != nil {
-		if _, err := a.store.Save(pngBytes, time.Now()); err != nil {
-			log.Printf("pinstill: save history: %v", err)
-		} else {
+	if s.KeepHistory {
+		if a.store == nil {
+			return capturePayload{}, errors.New("历史记录存储不可用，请重试或在设置中关闭历史记录")
+		}
+		entry, err := a.store.Save(pngBytes, time.Now())
+		if err != nil && entry.ID == "" {
+			return capturePayload{}, fmt.Errorf("历史记录写入失败，请重试或关闭历史记录: %w", err)
+		}
+		// A nonempty entry on error means the index was committed. Preserve
+		// its identity so a retry never saves the same annotation again.
+		if err != nil {
+			a.toast("截图已保存，但磁盘同步失败: "+err.Error(), "error")
+		}
+		{
+			_, pruneErr := a.store.Prune(s.RetentionDays, historyByteLimit(s.HistoryLimitMB))
+			if pruneErr != nil {
+				a.toast("截图已保存，但历史清理失败: "+pruneErr.Error(), "error")
+			}
+			if _, retained := a.store.Get(entry.ID); retained {
+				payload.HistoryID = entry.ID
+			}
 			a.emitHistoryChanged()
 		}
 	}
@@ -902,7 +889,7 @@ func clampToDisplay(r capture.Rect, b mygo.Rectangle) capture.Rect {
 
 // copyImagePNG writes a PNG to the system clipboard.
 func (a *App) copyImagePNG(pngBytes []byte) error {
-	if _, err := png.Decode(bytes.NewReader(pngBytes)); err != nil {
+	if _, err := imagebudget.DecodePNG(pngBytes); err != nil {
 		return errors.New("剪贴板数据不是有效 PNG")
 	}
 	return mygo.Clipboard.WriteImage(pngBytes)

@@ -5,6 +5,7 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // legacyPaths lists data directories written by the pre-rename builds and
@@ -21,6 +22,9 @@ var legacyPaths = [][2]string{
 // new one. It never overwrites an existing directory and stays silent when
 // there is nothing to move.
 func MigrateLegacyData() {
+	if strings.TrimSpace(os.Getenv("PINSTILL_DATA_DIR")) != "" {
+		return
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return

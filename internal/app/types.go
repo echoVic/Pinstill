@@ -5,6 +5,7 @@ import (
 	"image"
 	"time"
 
+	"github.com/echoVic/Pinstill/internal/imagebudget"
 	"github.com/egoist/mygo"
 )
 
@@ -20,6 +21,12 @@ type Rect struct {
 // CaptureResult identifies a capture handled by the app.
 type CaptureResult struct {
 	ID string `json:"id"`
+}
+
+// CaptureActionResult distinguishes a completed action from a canceled save.
+type CaptureActionResult struct {
+	Completed bool `json:"completed"`
+	Cancelled bool `json:"cancelled"`
 }
 
 // OverlayInfo tells the overlay page where the selection surface is.
@@ -68,9 +75,10 @@ type ToastPayload struct {
 // identity and pixel size the actions need. It is internal to the app (the
 // pages no longer receive captured images).
 type capturePayload struct {
-	ID     string
-	Width  int
-	Height int
+	ID        string
+	HistoryID string
+	Width     int
+	Height    int
 }
 
 // HistoryEntry is one persisted capture shown in the history view.
@@ -101,16 +109,27 @@ type PinWindowState struct {
 	Opacity float64 `json:"opacity"`
 }
 
+// PinArchiveEntry is a saved pin intentionally kept closed at startup.
+type PinArchiveEntry struct {
+	ID        string `json:"id"`
+	URL       string `json:"url"`
+	Width     int    `json:"width"`
+	Height    int    `json:"height"`
+	CreatedAt string `json:"createdAt"`
+}
+
 // ScrollInitPayload configures the scroll control window for one session.
 type ScrollInitPayload struct {
-	Rect                 Rect `json:"rect"`
-	Auto                 bool `json:"auto"`
-	AutoDenied           bool `json:"autoDenied"`
-	AccessibilityGranted bool `json:"accessibilityGranted"`
+	SessionID            string `json:"sessionId"`
+	Rect                 Rect   `json:"rect"`
+	Auto                 bool   `json:"auto"`
+	AutoDenied           bool   `json:"autoDenied"`
+	AccessibilityGranted bool   `json:"accessibilityGranted"`
 }
 
 // ScrollResultPayload tells the preview window which long image to show.
 type ScrollResultPayload struct {
+	ID        string `json:"id"`
 	URL       string `json:"url"`
 	Width     int    `json:"width"`
 	Height    int    `json:"height"`
@@ -121,10 +140,11 @@ type ScrollResultPayload struct {
 
 // ScrollProgressPayload reports how a scrolling capture is going.
 type ScrollProgressPayload struct {
-	Frames int    `json:"frames"`
-	Height int    `json:"height"`
-	Status string `json:"status"`
-	Auto   bool   `json:"auto"`
+	SessionID string `json:"sessionId"`
+	Frames    int    `json:"frames"`
+	Height    int    `json:"height"`
+	Status    string `json:"status"`
+	Auto      bool   `json:"auto"`
 }
 
 // HistoryCapture is a persisted capture loaded into the editor.
@@ -197,9 +217,6 @@ var (
 	EventScrollProgress = mygo.NewEvent[ScrollProgressPayload]("scroll:progress")
 	// EventScrollResult hands the stitched long image to the preview window.
 	EventScrollResult = mygo.NewEvent[ScrollResultPayload]("scroll:result")
-	// EventOverlayCapture is emitted to the overlay window with the image it
-	// now annotates in place.
-	EventOverlayCapture = mygo.NewEvent[OverlayCapturePayload]("overlay:capture")
 	// EventPinInit is emitted to a pin window to show its image.
 	EventPinInit = mygo.NewEvent[PinInitPayload]("pin:init")
 	// EventHistoryChanged is emitted when the persisted history changed.
@@ -209,9 +226,12 @@ var (
 )
 
 // imageDimensions returns a PNG's pixel size without keeping it decoded.
-func imageDimensions(png []byte) (int, int) {
-	cfg, _, err := image.DecodeConfig(bytes.NewReader(png))
-	if err != nil {
+func imageDimensions(data []byte) (int, int) {
+	if len(data) > imagebudget.MaxEncodedBytes {
+		return 0, 0
+	}
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil || imagebudget.CheckDimensions(cfg.Width, cfg.Height) != nil {
 		return 0, 0
 	}
 	return cfg.Width, cfg.Height

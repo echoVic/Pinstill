@@ -2,7 +2,12 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -372,20 +377,28 @@ func TestNormalizeExport(t *testing.T) {
 			wantErr:  true,
 		},
 		{
-			// Same-format passthrough does not validate the body: a JPEG target
-			// with JPEG-looking bytes is returned as-is.
-			name:      "truncated JPEG passes through for JPEG target",
-			raw:       []byte{0xFF, 0xD8, 0xFF, 0x00},
-			settings:  Settings{Format: "JPEG", Quality: 90},
-			wantExt:   "jpg",
-			sameBytes: true,
+			name:     "truncated JPEG rejected for JPEG target",
+			raw:      []byte{0xFF, 0xD8, 0xFF, 0x00},
+			settings: Settings{Format: "JPEG", Quality: 90},
+			wantErr:  true,
 		},
 		{
-			name:      "PNG magic only passes through unchanged for PNG target",
-			raw:       pngMagic,
-			settings:  Settings{Format: "PNG"},
-			wantExt:   "png",
-			sameBytes: true,
+			name:     "PNG magic only rejected for PNG target",
+			raw:      pngMagic,
+			settings: Settings{Format: "PNG"},
+			wantErr:  true,
+		},
+		{
+			name:     "PNG with complete header but truncated body rejected",
+			raw:      pngData[:len(pngData)-16],
+			settings: Settings{Format: "PNG"},
+			wantErr:  true,
+		},
+		{
+			name:     "JPEG with complete header but truncated body rejected",
+			raw:      jpegData[:len(jpegData)-16],
+			settings: Settings{Format: "JPEG"},
+			wantErr:  true,
 		},
 		{
 			name:     "PNG magic only fails when converting to JPEG",
@@ -427,6 +440,175 @@ func TestNormalizeExport(t *testing.T) {
 				if !gnHasJPEGMagic(out) {
 					t.Fatalf("normalizeExport() output has no JPEG magic: %x", out[:min(3, len(out))])
 				}
+			}
+		})
+	}
+}
+
+func TestSaveImageToFolderRejectsTruncatedImages(t *testing.T) {
+	for _, format := range []string{"PNG", "JPEG"} {
+		t.Run(format, func(t *testing.T) {
+			folder := filepath.Join(t.TempDir(), "exports")
+			s := &CaptureService{app: &App{settings: Settings{Format: format, Folder: folder}}}
+			raw := gnPNGData(t, 4, 3)
+			if format == "JPEG" {
+				raw = gnJPEGData(t, 4, 3, 90)
+			}
+			path, err := s.saveImageToFolder(base64.StdEncoding.EncodeToString(raw[:len(raw)-16]))
+			if err == nil || path != "" {
+				t.Fatalf("truncated %s export = (%q, %v), want empty path and error", format, path, err)
+			}
+			if _, err := os.Stat(folder); !os.IsNotExist(err) {
+				t.Fatalf("invalid export created its output folder: %v", err)
+			}
+		})
+	}
+}
+
+func TestSaveImageToFolderConcurrent(t *testing.T) {
+	const count = 48
+	folder := t.TempDir()
+	settings := Settings{Format: "PNG", Folder: folder, FilenamePrefix: "Concurrent"}
+	start := make(chan struct{})
+	type result struct {
+		path string
+		raw  []byte
+		err  error
+	}
+	results := make(chan result, count)
+	for i := 0; i < count; i++ {
+		raw := gnPNGData(t, 12+i, 8)
+		go func() {
+			// Separate service instances must still agree on file ownership.
+			s := &CaptureService{app: &App{settings: settings}}
+			<-start
+			path, err := s.saveImageToFolder(base64.StdEncoding.EncodeToString(raw))
+			results <- result{path, raw, err}
+		}()
+	}
+	close(start)
+	saved := make([]result, 0, count)
+	for i := 0; i < count; i++ {
+		saved = append(saved, <-results)
+	}
+	paths := make(map[string]bool)
+	for _, r := range saved {
+		if r.err != nil {
+			t.Errorf("SaveImageToFolder() error = %v", r.err)
+			continue
+		}
+		if paths[r.path] {
+			t.Errorf("simultaneous exports returned the same path: %s", filepath.Base(r.path))
+		}
+		paths[r.path] = true
+		data, err := os.ReadFile(r.path)
+		if err != nil || !bytes.Equal(data, r.raw) {
+			t.Errorf("export %s lost its original image bytes (read error: %v)", filepath.Base(r.path), err)
+		}
+	}
+	if len(paths) != count {
+		t.Errorf("saved %d distinct images, want %d", len(paths), count)
+	}
+}
+
+func TestSaveImageToFolderReturnsFilesystemError(t *testing.T) {
+	const childEnv = "PINSTILL_TEST_EXPORT_ERROR_DIR"
+	if folder := os.Getenv(childEnv); folder != "" {
+		s := &CaptureService{app: &App{settings: Settings{
+			Format: "PNG", Folder: folder, FilenamePrefix: strings.Repeat("x", 300),
+		}}}
+		path, err := s.saveImageToFolder(base64.StdEncoding.EncodeToString(gnPNGData(t, 4, 3)))
+		if err == nil || path != "" {
+			t.Fatalf("export with overlong filename = (%q, %v), want empty path and error", path, err)
+		}
+		return
+	}
+	// Bound the old infinite retry loop in a disposable subprocess. A long
+	// filename fails regardless of root privileges, unlike chmod-based tests.
+	folder := t.TempDir()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestSaveImageToFolderReturnsFilesystemError$")
+	cmd.Env = append(os.Environ(), childEnv+"="+folder)
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("export never returned a non-ENOENT filesystem error: %v", ctx.Err())
+	}
+	if err != nil {
+		t.Fatalf("filesystem-error subprocess failed: %v\n%s", err, output)
+	}
+	entries, err := os.ReadDir(folder)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("failed export left files: %v (error: %v)", entries, err)
+	}
+}
+
+func TestWriteDialogExport(t *testing.T) {
+	const oldSelected = "original selected JPEG contents"
+	const oldAdjusted = "original adjusted destination contents, longer than the replacement"
+	const replacement = "new export"
+	for _, tt := range []struct {
+		name     string
+		selected string
+		initial  map[string]string
+		want     map[string]string
+		conflict bool
+	}{
+		{
+			name:     "adjusted destination conflict preserves both files",
+			selected: "foo.jpeg",
+			initial:  map[string]string{"foo.jpeg": oldSelected, "foo.jpg": oldAdjusted},
+			want:     map[string]string{"foo.jpeg": oldSelected, "foo.jpg": oldAdjusted},
+			conflict: true,
+		},
+		{
+			name:     "adjusted destination created exactly without changing selected file",
+			selected: "foo.jpeg",
+			initial:  map[string]string{"foo.jpeg": oldSelected},
+			want:     map[string]string{"foo.jpeg": oldSelected, "foo.jpg": replacement},
+		},
+		{
+			name:     "confirmed same path overwrites and truncates existing file",
+			selected: "foo.jpg",
+			initial:  map[string]string{"foo.jpeg": oldSelected, "foo.jpg": oldAdjusted},
+			want:     map[string]string{"foo.jpeg": oldSelected, "foo.jpg": replacement},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			folder := t.TempDir()
+			for name, data := range tt.initial {
+				if err := os.WriteFile(filepath.Join(folder, name), []byte(data), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			adjusted := filepath.Join(folder, "foo.jpg")
+			path, err := writeDialogExport(filepath.Join(folder, tt.selected), "jpg", []byte(replacement))
+			if tt.conflict {
+				if path != "" || !errors.Is(err, os.ErrExist) {
+					t.Errorf("conflicting export = (%q, %v), want empty path and file-exists error", path, err)
+				}
+				if err != nil && !strings.Contains(err.Error(), adjusted) {
+					t.Errorf("conflict error does not identify adjusted destination: %v", err)
+				}
+			} else if err != nil || path != adjusted {
+				t.Errorf("export = (%q, %v), want (%q, nil)", path, err, adjusted)
+			}
+			// Compare the whole directory to also reject an automatic suffix or
+			// any unexpected output left after a conflict.
+			entries, err := os.ReadDir(folder)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := make(map[string]string)
+			for _, entry := range entries {
+				data, err := os.ReadFile(filepath.Join(folder, entry.Name()))
+				if err != nil {
+					t.Fatal(err)
+				}
+				got[entry.Name()] = string(data)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("files after export = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -489,9 +671,9 @@ func TestToPNG(t *testing.T) {
 		{name: "invalid base64", input: "$$$", wantErr: true},
 		{name: "unsupported bytes", input: encode([]byte("GIF89a")), wantErr: true},
 		{name: "empty input", input: "", wantErr: true},
-		// Current behavior: a bare PNG signature is passed through without a
-		// full decode, so callers must not rely on toPNG validating the body.
-		{name: "PNG magic only passes through", input: encode(gnPNGMagic()), wantSame: true},
+		{name: "PNG magic only rejected", input: encode(gnPNGMagic()), wantErr: true},
+		{name: "PNG with truncated body rejected", input: encode(pngData[:len(pngData)-16]), wantErr: true},
+		{name: "JPEG with truncated body rejected", input: encode(jpegData[:len(jpegData)-16]), wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

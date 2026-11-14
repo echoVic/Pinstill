@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -25,6 +26,13 @@ func scrollResultWindowSize(display mygo.Display) (int, int) {
 // user keeps it), then handed to the window; the bytes are kept in memory so
 // the copy/save/pin actions do not read the file again.
 func (a *App) showScrollResult(pngBytes []byte, frames int, capped bool) error {
+	return a.showScrollResultFor(nil, pngBytes, frames, capped)
+}
+
+func (a *App) showScrollResultFor(session *scrollSession, pngBytes []byte, frames int, capped bool) error {
+	if session != nil && !a.scrollResultIsCurrent(session) {
+		return nil
+	}
 	if len(pngBytes) == 0 {
 		return errors.New("滚动截图结果为空")
 	}
@@ -36,19 +44,61 @@ func (a *App) showScrollResult(pngBytes []byte, frames int, capped bool) error {
 	if err != nil {
 		return err
 	}
-	url := a.shotURL("/s/" + payload.ID + ".png")
+	if session != nil && !a.scrollResultIsCurrent(session) {
+		return nil
+	}
+	a.mu.Lock()
+	if err := a.releasePendingPreviewsLocked(); err != nil {
+		a.mu.Unlock()
+		return err
+	}
+	// Stage separately: a cancelled finalizer must not evict the open result.
+	var staged string
+	sessionFile, err := a.writePreviewLocked(&staged, pngBytes)
+	a.mu.Unlock()
+	if err != nil {
+		return fmt.Errorf("长图预览写入失败: %w", err)
+	}
+	url := a.shotURL("/s/" + sessionFile)
 	meta := ScrollResultPayload{
-		URL:    url,
-		Width:  width,
-		Height: height,
-		Frames: frames,
-		Capped: capped,
+		ID:        sessionFile,
+		HistoryID: payload.HistoryID,
+		URL:       url,
+		Width:     width,
+		Height:    height,
+		Frames:    frames,
+		Capped:    capped,
 	}
-	if a.store != nil {
-		if entries := a.store.List(); len(entries) > 0 {
-			meta.HistoryID = entries[0].ID
+	var publishErr error
+	a.runScrollUI(func() {
+		if session != nil && !a.scrollResultIsCurrent(session) {
+			a.mu.Lock()
+			if err := a.releaseCacheFileLocked(&staged); err != nil {
+				a.pendingPreviewFiles = append(a.pendingPreviewFiles, staged)
+				reportCacheCleanup(err)
+			}
+			a.mu.Unlock()
+			return
 		}
-	}
+		a.mu.Lock()
+		if err := a.releaseCacheFileLocked(&a.resultSessionFile); err != nil {
+			if cleanupErr := a.releaseCacheFileLocked(&staged); cleanupErr != nil {
+				a.pendingPreviewFiles = append(a.pendingPreviewFiles, staged)
+			}
+			a.mu.Unlock()
+			publishErr = err
+			return
+		}
+		a.resultSessionFile = staged
+		a.mu.Unlock()
+		a.publishScrollResult(pngBytes, meta)
+	})
+	return publishErr
+}
+
+// Window replacement is one UI-thread operation. Disk writes happen before it
+// so settings/native callbacks never wait on a lock held by this callback.
+func (a *App) publishScrollResult(pngBytes []byte, meta ScrollResultPayload) {
 
 	// Only one preview window at a time.
 	a.mu.Lock()
@@ -69,6 +119,7 @@ func (a *App) showScrollResult(pngBytes []byte, frames int, capped bool) error {
 	x := area.X + (area.Width-winWidth)/2
 	y := area.Y + (area.Height-winHeight)/2
 	win := mygo.NewWindow(mygo.WindowOptions{
+		Page:              mygo.PageOptions{Session: a.pageSession},
 		Title:             "Pinstill 滚动截图",
 		Width:             winWidth,
 		Height:            winHeight,
@@ -87,14 +138,24 @@ func (a *App) showScrollResult(pngBytes []byte, frames int, capped bool) error {
 		URL:               "/result.html",
 	})
 	win.OnReadyToShow(func() {
-		win.Show()
-		win.Focus()
+		a.mu.Lock()
+		current := a.result == win && !a.quitting
+		a.mu.Unlock()
+		if current {
+			win.Show()
+			win.Focus()
+		}
 	})
 	win.OnClosed(func() {
 		a.mu.Lock()
-		a.result = nil
-		a.resultPNG = nil
-		a.resultMeta = ScrollResultPayload{}
+		if a.result == win {
+			if a.resultSessionFile == meta.ID {
+				reportCacheCleanup(a.releaseCacheFileLocked(&a.resultSessionFile))
+			}
+			a.result = nil
+			a.resultPNG = nil
+			a.resultMeta = ScrollResultPayload{}
+		}
 		a.mu.Unlock()
 	})
 
@@ -105,17 +166,16 @@ func (a *App) showScrollResult(pngBytes []byte, frames int, capped bool) error {
 	a.mu.Unlock()
 
 	_ = EventScrollResult.Emit(win, meta)
-	return nil
 }
 
 // scrollResultPNG returns the stitched image the preview window shows.
-func (a *App) scrollResultPNG() ([]byte, error) {
+func (a *App) scrollResultPNG(id string) ([]byte, *mygo.Window, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if len(a.resultPNG) == 0 {
-		return nil, errors.New("没有可用的滚动截图结果")
+	if id == "" || id != a.resultMeta.ID || len(a.resultPNG) == 0 {
+		return nil, nil, errors.New("没有可用的滚动截图结果")
 	}
-	return a.resultPNG, nil
+	return a.resultPNG, a.result, nil
 }
 
 // scrollResultMeta returns the preview metadata (empty when no preview is up).
@@ -128,7 +188,11 @@ func (a *App) scrollResultMeta() ScrollResultPayload {
 // copyScrollResult puts the stitched image on the clipboard and closes the
 // preview window afterwards.
 func (a *App) copyScrollResult() error {
-	pngBytes, err := a.scrollResultPNG()
+	return a.copyScrollResultFor(a.scrollResultMeta().ID)
+}
+
+func (a *App) copyScrollResultFor(id string) error {
+	pngBytes, win, err := a.scrollResultPNG(id)
 	if err != nil {
 		return err
 	}
@@ -136,14 +200,18 @@ func (a *App) copyScrollResult() error {
 		return err
 	}
 	a.toast("长图已复制到剪贴板", "success")
-	a.closeScrollResultSoon()
+	a.closeScrollResultSoon(win)
 	return nil
 }
 
 // saveScrollResult saves the stitched image through the system dialog and
 // closes the preview once a file was written.
 func (a *App) saveScrollResult() (string, error) {
-	pngBytes, err := a.scrollResultPNG()
+	return a.saveScrollResultFor(a.scrollResultMeta().ID)
+}
+
+func (a *App) saveScrollResultFor(id string) (string, error) {
+	pngBytes, win, err := a.scrollResultPNG(id)
 	if err != nil {
 		return "", err
 	}
@@ -153,43 +221,55 @@ func (a *App) saveScrollResult() (string, error) {
 	}
 	if path != "" {
 		a.toast("长图已保存到 "+path, "success")
-		a.closeScrollResultSoon()
+		a.closeScrollResultSoon(win)
 	}
 	return path, nil
 }
 
 // pinScrollResult opens the stitched image as a desktop pin.
 func (a *App) pinScrollResult() (string, error) {
-	pngBytes, err := a.scrollResultPNG()
+	return a.pinScrollResultFor(a.scrollResultMeta().ID)
+}
+
+func (a *App) pinScrollResultFor(id string) (string, error) {
+	pngBytes, win, err := a.scrollResultPNG(id)
 	if err != nil {
 		return "", err
 	}
 	width, height := imageDimensions(pngBytes)
-	id, err := a.pinPNG(pngBytes, width, height)
+	pinID, err := a.pinPNG(pngBytes, width, height)
 	if err != nil {
 		return "", err
 	}
 	a.toast("长图已贴到桌面", "success")
-	a.closeScrollResultSoon()
-	return id, nil
+	a.closeScrollResultSoon(win)
+	return pinID, nil
 }
 
 // closeScrollResult closes the preview window (its close handler clears the
 // cached image).
 func (a *App) closeScrollResult() {
-	a.mu.Lock()
-	win := a.result
-	a.mu.Unlock()
+	_ = a.closeScrollResultFor(a.scrollResultMeta().ID)
+}
+
+func (a *App) closeScrollResultFor(id string) error {
+	_, win, err := a.scrollResultPNG(id)
+	if err != nil {
+		return err
+	}
 	if win != nil && !win.IsDestroyed() {
 		win.Close()
 	}
+	return nil
 }
 
 // closeScrollResultSoon closes the preview after the page action returned, so
 // the binding call can still resolve before its window goes away.
-func (a *App) closeScrollResultSoon() {
+func (a *App) closeScrollResultSoon(win *mygo.Window) {
 	go func() {
 		time.Sleep(180 * time.Millisecond)
-		a.closeScrollResult()
+		if win != nil && !win.IsDestroyed() {
+			win.Close()
+		}
 	}()
 }

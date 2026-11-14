@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/echoVic/Pinstill/internal/imagebudget"
 	"image"
 	"image/color"
 	"image/png"
@@ -23,6 +24,9 @@ func decodeImageBase64(data string) ([]byte, error) {
 	if i := strings.Index(data, ","); strings.HasPrefix(data, "data:") && i >= 0 {
 		data = data[i+1:]
 	}
+	if base64.StdEncoding.DecodedLen(len(data)) > imagebudget.MaxEncodedBytes {
+		return nil, errors.New("图片数据超过 64 MiB 限制")
+	}
 	raw, err := base64.StdEncoding.DecodeString(data)
 	if err != nil {
 		return nil, fmt.Errorf("图片数据无法解码: %w", err)
@@ -37,7 +41,7 @@ func decodeImageBase64(data string) ([]byte, error) {
 // how macOS delivers a capture taken without the screen recording
 // permission.
 func blankPNG(pngBytes []byte) bool {
-	img, err := png.Decode(bytes.NewReader(pngBytes))
+	img, err := imagebudget.DecodePNG(pngBytes)
 	if err != nil {
 		return false
 	}
@@ -55,6 +59,18 @@ func blankPNG(pngBytes []byte) bool {
 			}
 		}
 	}
+	// Sampling quickly finds typical captures, but a visible pixel between
+	// samples must not be mistaken for a screen-recording permission failure.
+	if stepX > 1 || stepY > 1 {
+		for y := b.Min.Y; y < b.Max.Y; y++ {
+			for x := b.Min.X; x < b.Max.X; x++ {
+				_, _, _, a := img.At(x, y).RGBA()
+				if a != 0 {
+					return false
+				}
+			}
+		}
+	}
 	return true
 }
 
@@ -64,7 +80,15 @@ func playCaptureSound() {
 		return
 	}
 	cmd := exec.Command("/usr/bin/afplay", "/System/Library/Sounds/Glass.aiff")
-	_ = cmd.Start()
+	startCaptureSound(cmd)
+}
+
+func startCaptureSound(cmd *exec.Cmd) {
+	if err := cmd.Start(); err != nil {
+		return
+	}
+	// Playback stays asynchronous, but every started process must be reaped.
+	go func() { _ = cmd.Wait() }()
 }
 
 // randomSuffix returns four random lowercase hex characters.
@@ -96,16 +120,32 @@ func expandHome(path string) (string, error) {
 	return path, nil
 }
 
-// uniquePath makes path unused by appending a counter before the extension.
-func uniquePath(path string) string {
+// writeUniqueFile exclusively creates path, appending a counter before the
+// extension on collisions. Choosing the name and creating it must be one
+// filesystem operation so simultaneous exports cannot overwrite each other.
+func writeUniqueFile(path string, data []byte) (string, error) {
 	ext := filepath.Ext(path)
 	base := strings.TrimSuffix(path, ext)
 	candidate := path
 	for i := 2; ; i++ {
-		if _, err := os.Stat(candidate); os.IsNotExist(err) {
-			return candidate
+		file, err := os.OpenFile(candidate, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if os.IsExist(err) {
+			candidate = fmt.Sprintf("%s-%d%s", base, i, ext)
+			continue
 		}
-		candidate = fmt.Sprintf("%s-%d%s", base, i, ext)
+		if err != nil {
+			return "", err
+		}
+		if _, err := file.Write(data); err != nil {
+			_ = file.Close()
+			_ = os.Remove(candidate)
+			return "", err
+		}
+		if err := file.Close(); err != nil {
+			_ = os.Remove(candidate)
+			return "", err
+		}
+		return candidate, nil
 	}
 }
 

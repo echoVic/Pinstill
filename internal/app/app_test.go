@@ -1,7 +1,10 @@
 package app
 
 import (
+	"errors"
+	"os"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/echoVic/Pinstill/internal/capture"
@@ -278,5 +281,101 @@ func TestCopyImagePNGRejectsInvalidData(t *testing.T) {
 	a := &App{}
 	if err := a.copyImagePNG([]byte("definitely not a png")); err == nil {
 		t.Fatal("copyImagePNG(garbage) returned nil error")
+	}
+}
+
+func TestStoreCaptureEnforcesHistoryRetention(t *testing.T) {
+	a := newTestApp(t)
+	a.sessionDir = t.TempDir()
+	a.settings.RetentionDays = 7
+	old, err := a.store.Save(gnPNGData(t, 32, 32), time.Now().AddDate(0, 0, -8))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.storeCapture(gnPNGData(t, 24, 24)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := a.store.Get(old.ID); ok {
+		t.Fatal("new capture retained an expired history entry")
+	}
+	if entries := a.store.List(); len(entries) != 1 || entries[0].Width != 24 {
+		t.Fatalf("history should contain only the new capture: %+v", entries)
+	}
+}
+
+func TestFailedSelectionCanBeRetried(t *testing.T) {
+	t.Setenv("PINSTILL_SELFTEST_FAKE_CAPTURE", "1")
+	a := newTestApp(t)
+	a.sessionDir = t.TempDir()
+	a.capturing = true
+	a.overlayDisplay = mygo.Display{Bounds: mygo.Rectangle{Width: 1920, Height: 1080}}
+	a.failSelection(errors.New("temporary capture failure"), false)
+	if _, err := a.prepareSelectionWithDelay(Rect{Width: 100, Height: 100}, 0); err != nil {
+		t.Fatalf("retry in the still-open overlay failed: %v", err)
+	}
+}
+
+func TestCancelledPreparationDoesNotWriteIntoNextCapture(t *testing.T) {
+	t.Setenv("PINSTILL_SELFTEST_FAKE_CAPTURE", "1")
+	for _, restart := range []bool{false, true} {
+		synctest.Test(t, func(t *testing.T) {
+			a := newTestApp(t)
+			a.sessionDir = t.TempDir()
+			a.capturing = true
+			a.overlayDisplay = mygo.Display{Bounds: mygo.Rectangle{Width: 1920, Height: 1080}}
+			done := make(chan error, 1)
+			go func() {
+				_, err := a.prepareSelectionWithDelay(Rect{Width: 100, Height: 100}, time.Second)
+				done <- err
+			}()
+			synctest.Wait() // Request is waiting for the compositor delay.
+			a.cancelRegion()
+			if restart {
+				// Start a new session without opening native windows.
+				a.mu.Lock()
+				a.capturing = true
+				a.mu.Unlock()
+			}
+			time.Sleep(2 * time.Second)
+			if err := <-done; err == nil {
+				t.Error("cancelled preparation returned a usable capture")
+			}
+			files, err := os.ReadDir(a.sessionDir)
+			if err != nil || len(files) != 0 {
+				t.Fatalf("cancelled preparation left session images: %v (%v)", files, err)
+			}
+		})
+	}
+}
+
+func TestSelfTestsUseSeparatePageStorage(t *testing.T) {
+	t.Setenv("PINSTILL_SELFTEST", "history")
+	a := New()
+	if a.pageSession == nil || !a.pageSession.IsEphemeral() {
+		t.Fatal("selftest must not share the default persistent WebView store")
+	}
+	t.Setenv("PINSTILL_SELFTEST", "")
+	if a := New(); a.pageSession != nil {
+		t.Fatal("normal launch must continue using the existing persistent WebView store")
+	}
+}
+
+func TestStoreCaptureIdentifiesItsOwnHistoryEntry(t *testing.T) {
+	a := newTestApp(t)
+	a.sessionDir = t.TempDir()
+	for _, keep := range []bool{true, false} {
+		a.settings.KeepHistory = keep
+		payload, err := a.storeCapture(gnPNGData(t, 24, 16))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if keep {
+			entry, ok := a.store.Get(payload.HistoryID)
+			if !ok || entry.Width != payload.Width || entry.Height != payload.Height {
+				t.Fatalf("capture does not identify the history image it saved: %+v", payload)
+			}
+		} else if payload.HistoryID != "" {
+			t.Fatal("capture with history disabled must not identify an older history image")
+		}
 	}
 }

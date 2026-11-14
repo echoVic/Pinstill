@@ -3,10 +3,17 @@ package app
 import (
 	"bytes"
 	"encoding/base64"
+	"errors"
 	"image/png"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestDecodeImageBase64(t *testing.T) {
@@ -61,6 +68,7 @@ func TestBlankPNG(t *testing.T) {
 		{name: "opaque gradient", png: gnPNGData(t, 10, 10), want: false},
 		{name: "single visible pixel", png: gnTransparentPNGWithPixel(t, 10, 10, 3, 4), want: false},
 		{name: "single visible pixel at origin", png: gnTransparentPNGWithPixel(t, 100, 100, 0, 0), want: false},
+		{name: "single visible pixel between samples", png: gnTransparentPNGWithPixel(t, 200, 200, 1, 1), want: false},
 		{name: "undecodable bytes", png: []byte("definitely not a png"), want: false},
 		{name: "empty bytes", png: nil, want: false},
 		{name: "jpeg bytes", png: gnJPEGData(t, 10, 10, 80), want: false},
@@ -106,34 +114,34 @@ func TestExpandHome(t *testing.T) {
 	}
 }
 
-func TestUniquePath(t *testing.T) {
+func TestWriteUniqueFile(t *testing.T) {
 	dir := t.TempDir()
 	base := filepath.Join(dir, "Pinstill-2026-11-09.png")
-
-	if got := uniquePath(base); got != base {
-		t.Fatalf("uniquePath(unused) = %q, want %q", got, base)
-	}
-	if err := os.WriteFile(base, []byte("x"), 0o644); err != nil {
-		t.Fatalf("os.WriteFile() error = %v", err)
-	}
 	second := filepath.Join(dir, "Pinstill-2026-11-09-2.png")
-	if got := uniquePath(base); got != second {
-		t.Fatalf("uniquePath(existing) = %q, want %q", got, second)
-	}
-	if err := os.WriteFile(second, []byte("x"), 0o644); err != nil {
-		t.Fatalf("os.WriteFile() error = %v", err)
-	}
 	third := filepath.Join(dir, "Pinstill-2026-11-09-3.png")
-	if got := uniquePath(base); got != third {
-		t.Fatalf("uniquePath(existing twice) = %q, want %q", got, third)
+	written := make(map[string]string)
+	for i, want := range []string{base, second, third} {
+		data := []byte{byte('a' + i)}
+		got, err := writeUniqueFile(base, data)
+		if err != nil || got != want {
+			t.Fatalf("writeUniqueFile() = (%q, %v), want %q", got, err, want)
+		}
+		written[got] = string(data)
+	}
+	for path, want := range written {
+		data, err := os.ReadFile(path)
+		if err != nil || string(data) != want {
+			t.Fatalf("saved data at %s = %q, %v; want %q", path, data, err, want)
+		}
 	}
 
 	noExtension := filepath.Join(dir, "Pinstill")
 	if err := os.WriteFile(noExtension, []byte("x"), 0o644); err != nil {
 		t.Fatalf("os.WriteFile() error = %v", err)
 	}
-	if got, want := uniquePath(noExtension), filepath.Join(dir, "Pinstill-2"); got != want {
-		t.Fatalf("uniquePath(no extension) = %q, want %q", got, want)
+	got, err := writeUniqueFile(noExtension, []byte("new"))
+	if want := filepath.Join(dir, "Pinstill-2"); err != nil || got != want {
+		t.Fatalf("writeUniqueFile(no extension) = (%q, %v), want %q", got, err, want)
 	}
 }
 
@@ -149,6 +157,73 @@ func TestRandomSuffix(t *testing.T) {
 				t.Fatalf("randomSuffix() = %q, want lowercase hex characters", got)
 			}
 		}
+	}
+}
+
+func TestStartCaptureSoundReapsChild(t *testing.T) {
+	const childEnv = "PINSTILL_TEST_SOUND_EXIT"
+	if code := os.Getenv(childEnv); code != "" {
+		// This child only waits for stdin to close, then exits. No audio or
+		// other native integration is launched by the test.
+		_, _ = io.Copy(io.Discard, os.Stdin)
+		exitCode, _ := strconv.Atoi(code)
+		os.Exit(exitCode)
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("signal 0 liveness probe is unavailable on Windows; capture sound is macOS-only")
+	}
+	for _, exitCode := range []string{"0", "7"} {
+		t.Run("exit_"+exitCode, func(t *testing.T) {
+			cmd := exec.Command(os.Args[0], "-test.run=^TestStartCaptureSoundReapsChild$")
+			cmd.Env = append(os.Environ(), childEnv+"="+exitCode)
+			input, err := cmd.StdinPipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			returned := make(chan struct{})
+			go func() {
+				startCaptureSound(cmd)
+				close(returned)
+			}()
+			select {
+			case <-returned:
+			case <-time.After(5 * time.Second):
+				_ = input.Close()
+				<-returned
+				t.Fatal("sound launch blocked until playback finished")
+			}
+			if cmd.Process == nil {
+				_ = input.Close()
+				t.Fatal("sound subprocess was not started")
+			}
+			t.Cleanup(func() {
+				_ = input.Close()
+				_ = cmd.Process.Kill()
+				_, _ = cmd.Process.Wait()
+			})
+			if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
+				t.Fatalf("sound subprocess did not remain alive while waiting for stdin: %v", err)
+			}
+			if err := input.Close(); err != nil {
+				t.Fatal(err)
+			}
+			timeout := time.NewTimer(5 * time.Second)
+			defer timeout.Stop()
+			tick := time.NewTicker(10 * time.Millisecond)
+			defer tick.Stop()
+			for {
+				// Process.Signal is synchronized internally; reading Cmd.ProcessState
+				// while Wait fills it would itself race.
+				if errors.Is(cmd.Process.Signal(syscall.Signal(0)), os.ErrProcessDone) {
+					return
+				}
+				select {
+				case <-tick.C:
+				case <-timeout.C:
+					t.Fatal("exited sound subprocess was not reaped")
+				}
+			}
+		})
 	}
 }
 

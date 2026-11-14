@@ -176,12 +176,12 @@ func TestPayloadJSONContract(t *testing.T) {
 		{
 			name:  "scroll init",
 			value: ScrollInitPayload{Rect: Rect{X: 1, Y: 2, Width: 3, Height: 4}, Auto: true, AutoDenied: false, AccessibilityGranted: true},
-			want:  []string{"accessibilityGranted", "auto", "autoDenied", "rect"},
+			want:  []string{"accessibilityGranted", "auto", "autoDenied", "rect", "sessionId"},
 		},
 		{
 			name:  "scroll result",
-			value: ScrollResultPayload{URL: "shot://localhost/s/x.png", Width: 400, Height: 2300, Frames: 6, Capped: false, HistoryID: "x"},
-			want:  []string{"capped", "frames", "height", "historyId", "url", "width"},
+			value: ScrollResultPayload{ID: "preview-x", URL: "shot://localhost/s/x.png", Width: 400, Height: 2300, Frames: 6, Capped: false, HistoryID: "x"},
+			want:  []string{"capped", "frames", "height", "historyId", "id", "url", "width"},
 		},
 		{name: "history changed", value: HistoryChangedPayload{Count: 3}, want: []string{"count"}},
 		{name: "toast", value: ToastPayload{Text: "hi", Kind: "info"}, want: []string{"kind", "text"}},

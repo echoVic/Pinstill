@@ -9,7 +9,6 @@ import (
 	"image/color"
 	"image/draw"
 	"image/png"
-	"log"
 	"math"
 	"os"
 	"os/exec"
@@ -22,75 +21,219 @@ import (
 	"github.com/egoist/mygo"
 )
 
-// runSelfTest exercises the native pieces without a user driving the app.
-// Set PINSTILL_SELFTEST to one of capture, overlay, history, pin, hotkeys or
-// settings; it is a development aid, not part of the product.
-func (a *App) runSelfTest(mode string) {
-	time.Sleep(800 * time.Millisecond)
-	switch mode {
-	case "capture":
-		a.selftestCapture()
-	case "overlay":
-		a.selftestOverlay()
-	case "history":
-		a.selftestHistory()
-	case "pin":
-		a.selftestPin()
-	case "hotkeys":
-		a.selftestHotkeys()
-	case "settings":
-		a.selftestSettings()
-	case "perms":
-		a.selftestPerms()
-	case "palette":
-		a.selftestPalette()
-	case "textstyle":
-		a.selftestTextStyle()
-	case "dblclick":
-		a.selftestDoubleClick()
-	case "resize":
-		a.selftestResize()
-	case "watermark":
-		a.selftestWatermark()
-	case "resizestress":
-		a.selftestResizeStress()
-	case "uicapture":
-		a.selftestUICapture()
-	case "drag":
-		a.selftestDrag()
-	case "esc":
-		a.selftestEscape()
-	case "fullscreen":
-		a.selftestFullScreen()
-	case "historyactions":
-		a.selftestHistoryActions()
-	case "hotkeypress":
-		a.selftestHotkeyPress()
-	case "showcase":
-		a.selftestShowcase()
-	case "scroll":
-		a.selftestScroll()
-	case "scrollflow":
-		a.selftestScrollFlow()
-	case "scrollmanual":
-		a.selftestScrollManual()
-	case "scrollshot":
-		a.selftestScrollShot()
-	case "quit":
-		a.selftestQuit()
-	case "flow":
-		a.selftestFlow()
-	case "pinpersist-setup":
-		a.selftestPinPersistSetup()
-	case "pinpersist-check":
-		a.selftestPinPersistCheck()
-	case "pinui":
-		a.selftestPinUI()
-	case "hold":
-		a.selftestHold()
-	default:
-		log.Printf("pinstill: unknown PINSTILL_SELFTEST mode %q", mode)
+// ValidateSelftestDataDir must be called before migration or storage
+// initialization. A nonempty override alone is not proof of isolation.
+func ValidateSelftestDataDir(dir string) error {
+	if strings.TrimSpace(dir) == "" || !filepath.IsAbs(dir) {
+		return errors.New("selftest data directory must be an absolute isolated path")
 	}
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return fmt.Errorf("selftest data directory: %w", err)
+	}
+	info, err := os.Stat(resolved)
+	if err != nil || !info.IsDir() {
+		return errors.New("selftest data path is not a directory")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	if canonical, err := filepath.EvalSymlinks(home); err == nil {
+		home = canonical
+	}
+	lower := strings.ToLower(filepath.ToSlash(resolved))
+	if resolved == filepath.VolumeName(resolved)+string(filepath.Separator) || strings.EqualFold(resolved, home) {
+		return errors.New("refusing root or home as selftest data directory")
+	}
+	for _, protected := range []string{"library/application support/pinstill", "library/application support/tupen", "library/caches/pinstill", "library/caches/tupen", "library/webkit/dev.echovic.pinstill", "library/webkit/dev.echovic.tupen", "library/caches/dev.echovic.pinstill", "library/caches/dev.echovic.tupen", ".config/pinstill", ".cache/pinstill", "appdata/roaming/pinstill", "appdata/local/pinstill"} {
+		if strings.Contains(lower+"/", "/"+protected+"/") {
+			return errors.New("refusing production app data for selftests")
+		}
+	}
+	marker := filepath.Join(resolved, ".pinstill-selftest")
+	info, err = os.Lstat(marker)
+	if err != nil || !info.Mode().IsRegular() || info.Size() != int64(len("pinstill-selftest\n")) {
+		return errors.New("selftest directory needs a regular .pinstill-selftest marker")
+	}
+	data, err := os.ReadFile(marker)
+	if err != nil || string(data) != "pinstill-selftest\n" {
+		return errors.New("invalid .pinstill-selftest marker")
+	}
+	return nil
+}
+
+// Modes abort through one boundary: no failure can fall through to checks=ok.
+// Panic/recover is confined to the selftest goroutine, and unexpected panics
+// are failures too. Native quit completion uses its OnQuit event separately.
+type selftestResult struct{ code int }
+
+func selftestExit(code int) { panic(selftestResult{code: code}) }
+func selftestFail(format string, args ...any) {
+	fmt.Printf("SELFTEST failure: "+strings.TrimSuffix(format, "\n")+"\n", args...)
+	selftestExit(1)
+}
+func selftestRequire(ok bool, format string, args ...any) {
+	if !ok {
+		selftestFail(format, args...)
+	}
+}
+func selftestCheckError(err error) {
+	if err != nil {
+		selftestFail("%v", err)
+	}
+}
+func selftestValue(value any, err error) any {
+	selftestCheckError(err)
+	return value
+}
+func selftestSettingsErrors(errs map[string]string) {
+	selftestRequire(len(errs) == 0, "settings errors: %v", errs)
+}
+func selftestRun(mode string, run func(), exit func(int)) {
+	defer func() {
+		code := 0
+		if result := recover(); result != nil {
+			if status, ok := result.(selftestResult); ok {
+				code = status.code
+			} else {
+				fmt.Printf("SELFTEST %s: panic: %v\n", mode, result)
+				code = 1
+			}
+		}
+		if code == 0 {
+			fmt.Printf("SELFTEST %s: checks=ok\n", mode)
+		} else {
+			fmt.Printf("SELFTEST %s: checks=FAILED\n", mode)
+		}
+		exit(code)
+	}()
+	run()
+}
+
+func writeSelftestArtifact(name string, data []byte) (string, error) {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\") || filepath.Base(name) != name {
+		return "", fmt.Errorf("unsafe selftest artifact basename %q", name)
+	}
+	dir := os.Getenv("PINSTILL_DATA_DIR")
+	if err := ValidateSelftestDataDir(dir); err != nil {
+		return "", err
+	}
+	// Root confines all filesystem operations and refuses symlinks escaping
+	// the test directory. Never follow an artifact directory or output symlink.
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
+	if err := root.Mkdir("artifacts", 0o700); err != nil && !os.IsExist(err) {
+		return "", err
+	}
+	info, err := root.Lstat("artifacts")
+	if err != nil || !info.IsDir() {
+		return "", errors.New("selftest artifacts must be a real directory")
+	}
+	rel := filepath.Join("artifacts", name)
+	file, err := root.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return "", err
+	}
+	_, writeErr := file.Write(data)
+	closeErr := file.Close()
+	if err := errors.Join(writeErr, closeErr); err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, rel), nil
+}
+func selftestArtifact(name string, data []byte) string {
+	path, err := writeSelftestArtifact(name, data)
+	selftestCheckError(err)
+	fmt.Printf("SELFTEST artifact: %s\n", path)
+	return path
+}
+
+// OnQuit fires when the real event loop has finished. Printing before Quit
+// returns is insufficient: a window can veto it. The harness also bounds this
+// entire mode from process launch, including a stuck main thread.
+func selftestRealQuit(mode string) {
+	mygo.App.OnQuit(func() { fmt.Printf("SELFTEST %s: checks=ok\n", mode) })
+	mygo.App.Quit()
+	time.Sleep(10 * time.Second)
+	selftestFail("%s quit did not terminate the process", mode)
+}
+
+// runSelfTest exercises native pieces without a user driving the app. It is a
+// development aid; work/e2e.sh supplies isolated storage and a process deadline.
+func (a *App) runSelfTest(mode string) {
+	selftestRun(mode, func() {
+		selftestCheckError(ValidateSelftestDataDir(os.Getenv("PINSTILL_DATA_DIR")))
+		time.Sleep(800 * time.Millisecond)
+		switch mode {
+		case "capture":
+			a.selftestCapture()
+		case "overlay":
+			a.selftestOverlay()
+		case "history":
+			a.selftestHistory()
+		case "pin":
+			a.selftestPin()
+		case "hotkeys":
+			a.selftestHotkeys()
+		case "settings":
+			a.selftestSettings()
+		case "perms":
+			a.selftestPerms()
+		case "palette":
+			a.selftestPalette()
+		case "textstyle":
+			a.selftestTextStyle()
+		case "dblclick":
+			a.selftestDoubleClick()
+		case "resize":
+			a.selftestResize()
+		case "watermark":
+			a.selftestWatermark()
+		case "resizestress":
+			a.selftestResizeStress()
+		case "uicapture":
+			a.selftestUICapture()
+		case "drag":
+			a.selftestDrag()
+		case "esc":
+			a.selftestEscape()
+		case "fullscreen":
+			a.selftestFullScreen()
+		case "historyactions":
+			a.selftestHistoryActions()
+		case "hotkeypress":
+			a.selftestHotkeyPress()
+		case "showcase":
+			a.selftestShowcase()
+		case "scroll":
+			a.selftestScroll()
+		case "scrollflow":
+			a.selftestScrollFlow()
+		case "scrollmanual":
+			a.selftestScrollManual()
+		case "scrollshot":
+			a.selftestScrollShot()
+		case "quit":
+			a.selftestQuit()
+		case "flow":
+			a.selftestFlow()
+		case "pinpersist-setup":
+			a.selftestPinPersistSetup()
+		case "pinpersist-check":
+			a.selftestPinPersistCheck()
+		case "pinui":
+			a.selftestPinUI()
+		case "hold":
+			a.selftestHold()
+		default:
+			selftestFail("unknown PINSTILL_SELFTEST mode %q", mode)
+			selftestExit(1)
+		}
+	}, os.Exit)
 }
 
 func (a *App) selftestCapture() {
@@ -109,27 +252,24 @@ func (a *App) selftestCapture() {
 	time.Sleep(200 * time.Millisecond)
 	pngBytes, err := capture.CaptureRegion(region, capture.CaptureOptions{IncludeCursor: s.IncludeCursor})
 	if err != nil {
-		fmt.Printf("SELFTEST capture: ERROR %v\n", err)
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST capture: ERROR %v\n", err)
 	}
 	width, height := imageDimensions(pngBytes)
-	if err := os.WriteFile("/tmp/pinstill-selftest-capture.png", pngBytes, 0o644); err != nil {
-		fmt.Printf("SELFTEST capture: write error %v\n", err)
-	}
-	fmt.Printf("SELFTEST capture: ok %dx%d bytes=%d scale=%.1f file=/tmp/pinstill-selftest-capture.png\n",
+	selftestArtifact("pinstill-selftest-capture.png", pngBytes)
+	fmt.Printf("SELFTEST capture: ok %dx%d bytes=%d scale=%.1f artifact=pinstill-selftest-capture.png\n",
 		width, height, len(pngBytes), disp.ScaleFactor)
+	selftestRequire(a.store != nil, "capture history store missing")
 	if a.store != nil {
 		entry, err := a.store.Save(pngBytes, time.Now())
 		if err != nil {
-			fmt.Printf("SELFTEST capture: history save error %v\n", err)
+			selftestFail("SELFTEST capture: history save error %v\n", err)
 		} else {
 			fmt.Printf("SELFTEST capture: history entry id=%s w=%d h=%d entries=%d\n",
 				entry.ID, entry.Width, entry.Height, len(a.store.List()))
 		}
 	}
 	if err := mygo.Clipboard.WriteImage(pngBytes); err != nil {
-		fmt.Printf("SELFTEST capture: clipboard error %v\n", err)
+		selftestFail("SELFTEST capture: clipboard error %v\n", err)
 	} else {
 		fmt.Printf("SELFTEST capture: clipboard ok\n")
 		if os.Getenv("PINSTILL_SELFTEST_HOLD") != "" {
@@ -137,7 +277,7 @@ func (a *App) selftestCapture() {
 			time.Sleep(20 * time.Second)
 		}
 	}
-	mygo.App.Exit(0)
+	selftestExit(0)
 }
 
 func (a *App) selftestOverlay() {
@@ -146,12 +286,12 @@ func (a *App) selftestOverlay() {
 	}
 	time.Sleep(300 * time.Millisecond)
 	if err := a.beginRegion(); err != nil {
-		fmt.Printf("SELFTEST overlay: begin error %v\n", err)
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST overlay: begin error %v\n", err)
 	}
 	time.Sleep(1200 * time.Millisecond)
+	selftestRequire(a.overlay != nil, "overlay window missing")
 	if a.overlay != nil {
+		selftestRequire(a.overlay.IsVisible(), "overlay window is hidden")
 		disp0 := mygo.Screen.PrimaryDisplay()
 		fmt.Printf("SELFTEST overlay: primary bounds=%+v cursor=%+v\n", disp0.Bounds, mygo.Screen.CursorScreenPoint())
 		fmt.Printf("SELFTEST overlay: overlay bounds now=%+v content=%+v\n", a.overlay.Bounds(), a.overlay.ContentBounds())
@@ -160,27 +300,28 @@ func (a *App) selftestOverlay() {
 		fmt.Printf("SELFTEST overlay: after re-set bounds=%+v content=%+v\n", a.overlay.Bounds(), a.overlay.ContentBounds())
 		state, err := a.overlay.Page().Eval("document.readyState + '|' + document.body.children.length + '|' + (document.getElementById('dim') ? getComputedStyle(document.getElementById('dim')).backgroundColor : 'no-dim')")
 		fmt.Printf("SELFTEST overlay: page state=%v err=%v\n", state, err)
+		selftestCheckError(err)
 		fmt.Printf("SELFTEST overlay: window visible=%v bounds=%+v displayScale=%.1f\n",
 			a.overlay.IsVisible(), a.overlay.Bounds(), a.overlayDisplay.ScaleFactor)
 		if pagePNG, err := a.overlay.CapturePage(); err == nil {
-			_ = os.WriteFile("/tmp/pinstill-selftest-overlay-page.png", pagePNG, 0o644)
-			fmt.Printf("SELFTEST overlay: page capture %d bytes -> /tmp/pinstill-selftest-overlay-page.png\n", len(pagePNG))
+			selftestArtifact("pinstill-selftest-overlay-page.png", pagePNG)
+			fmt.Printf("SELFTEST overlay: page capture %d bytes -> artifacts/pinstill-selftest-overlay-page.png\n", len(pagePNG))
 		} else {
-			fmt.Printf("SELFTEST overlay: page capture error %v\n", err)
+			selftestFail("SELFTEST overlay: page capture error %v\n", err)
 		}
 	}
 	region := virtualDesktopRect()
 	pngBytes, err := capture.CaptureRegion(region, capture.CaptureOptions{})
 	if err != nil {
-		fmt.Printf("SELFTEST overlay: capture error %v\n", err)
+		selftestFail("SELFTEST overlay: capture error %v\n", err)
 	} else {
-		_ = os.WriteFile("/tmp/pinstill-selftest-overlay.png", pngBytes, 0o644)
+		selftestArtifact("pinstill-selftest-overlay.png", pngBytes)
 		width, height := imageDimensions(pngBytes)
-		fmt.Printf("SELFTEST overlay: ok overlay shown, desktop %dx%d rect=%+v file=/tmp/pinstill-selftest-overlay.png\n", width, height, region)
+		fmt.Printf("SELFTEST overlay: ok overlay shown, desktop %dx%d rect=%+v artifact=pinstill-selftest-overlay.png\n", width, height, region)
 	}
 	a.cancelRegion()
 	time.Sleep(300 * time.Millisecond)
-	mygo.App.Exit(0)
+	selftestExit(0)
 }
 
 func (a *App) selftestHistory() {
@@ -189,25 +330,20 @@ func (a *App) selftestHistory() {
 	region := capture.Rect{X: float64(b.X) + 60, Y: float64(b.Y) + 60, Width: 500, Height: 320}
 	pngBytes, err := capture.CaptureRegion(region, capture.CaptureOptions{})
 	if err != nil {
-		fmt.Printf("SELFTEST history: capture error %v\n", err)
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST history: capture error %v\n", err)
 	}
 	if a.store == nil {
-		fmt.Printf("SELFTEST history: no store\n")
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST history: no store\n")
 	}
 	entry, err := a.store.Save(pngBytes, time.Now())
 	if err != nil {
-		fmt.Printf("SELFTEST history: save error %v\n", err)
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST history: save error %v\n", err)
 	}
 	list := a.historyEntries()
+	selftestRequire(len(list) == 1, "history save expected exactly one entry, got %d", len(list))
 	fmt.Printf("SELFTEST history: saved id=%s entries=%d firstURL=%s thumbURL=%s\n",
 		entry.ID, len(list), list[0].URL, list[0].ThumbURL)
-	mygo.App.Exit(0)
+	selftestExit(0)
 }
 
 func (a *App) selftestPin() {
@@ -220,31 +356,27 @@ func (a *App) selftestPin() {
 	time.Sleep(200 * time.Millisecond)
 	pngBytes, err := capture.CaptureRegion(region, capture.CaptureOptions{})
 	if err != nil {
-		fmt.Printf("SELFTEST pin: capture error %v\n", err)
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST pin: capture error %v\n", err)
 	}
 	id, err := a.pinPNG(pngBytes, 0, 0)
 	if err != nil {
-		fmt.Printf("SELFTEST pin: pin error %v\n", err)
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST pin: pin error %v\n", err)
 	}
 	fmt.Printf("SELFTEST pin: window id=%s\n", id)
 	time.Sleep(1000 * time.Millisecond)
 	full := capture.Rect{X: float64(b.X), Y: float64(b.Y), Width: float64(b.Width), Height: float64(b.Height)}
 	snap, err := capture.CaptureRegion(full, capture.CaptureOptions{})
 	if err != nil {
-		fmt.Printf("SELFTEST pin: verify capture error %v\n", err)
+		selftestFail("SELFTEST pin: verify capture error %v\n", err)
 	} else {
-		_ = os.WriteFile("/tmp/pinstill-selftest-pin.png", snap, 0o644)
-		fmt.Printf("SELFTEST pin: screenshot /tmp/pinstill-selftest-pin.png\n")
+		selftestArtifact("pinstill-selftest-pin.png", snap)
+		fmt.Printf("SELFTEST pin: screenshot artifacts/pinstill-selftest-pin.png\n")
 	}
 	if err := a.closePin(id); err != nil {
-		fmt.Printf("SELFTEST pin: close error %v\n", err)
+		selftestFail("SELFTEST pin: close error %v\n", err)
 	}
 	time.Sleep(200 * time.Millisecond)
-	mygo.App.Exit(0)
+	selftestExit(0)
 }
 
 // selftestUICapture walks the main window's views (history, settings), checks
@@ -253,14 +385,12 @@ func (a *App) selftestPin() {
 // the user's real captures never appear.
 func (a *App) selftestUICapture() {
 	if a.main == nil {
-		fmt.Printf("SELFTEST uicapture: no main window\n")
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST uicapture: no main window\n")
 	}
 	for i := 0; i < 2; i++ {
 		if png := syntheticScreenshot(); len(png) > 0 {
 			if _, err := a.storeCapture(png); err != nil {
-				fmt.Printf("SELFTEST uicapture: seed error %v\n", err)
+				selftestFail("SELFTEST uicapture: seed error %v\n", err)
 			}
 		}
 	}
@@ -277,10 +407,11 @@ func (a *App) selftestUICapture() {
 	trayOK := a.tray != nil
 	a.mu.Unlock()
 	fmt.Printf("SELFTEST uicapture: tray=%v\n", trayOK)
+	selftestRequire(trayOK, "tray missing")
 	eval := func(js string) string {
 		v, err := a.main.Page().Eval(js)
 		if err != nil {
-			fmt.Printf("SELFTEST uicapture: eval error %v\n", err)
+			selftestFail("SELFTEST uicapture: eval error %v\n", err)
 			return ""
 		}
 		return strings.TrimSpace(fmt.Sprint(v))
@@ -288,12 +419,12 @@ func (a *App) selftestUICapture() {
 	save := func(name string) {
 		png, err := a.main.CapturePage()
 		if err != nil {
-			fmt.Printf("SELFTEST uicapture: %s error %v\n", name, err)
+			selftestFail("SELFTEST uicapture: %s error %v\n", name, err)
 			return
 		}
-		_ = os.WriteFile("/tmp/pinstill-ui-"+name+".png", png, 0o644)
+		selftestArtifact("pinstill-ui-"+name+".png", png)
 		width, height := imageDimensions(png)
-		fmt.Printf("SELFTEST uicapture: %s %dx%d -> /tmp/pinstill-ui-%s.png\n", name, width, height, name)
+		fmt.Printf("SELFTEST uicapture: %s %dx%d -> artifacts/pinstill-ui-%s.png\n", name, width, height, name)
 	}
 	views := eval(`[...document.querySelectorAll('button[data-view]')].map((b) => b.dataset.view).join(',')`)
 	editorDOM := eval(`String(!!document.getElementById('shotCanvas') || !!document.getElementById('captureToolbar'))`)
@@ -301,11 +432,13 @@ func (a *App) selftestUICapture() {
 	empty := eval(`String(document.getElementById('historyEmpty')?.hidden ?? false)`)
 	fmt.Printf("SELFTEST uicapture: views=%s\n", views)
 	fmt.Printf("SELFTEST uicapture: editor_dom=%s history_cards=%s history_empty_hidden=%s\n", editorDOM, cards, empty)
+	n, err := strconv.Atoi(cards)
+	selftestRequire(err == nil && n >= 2 && empty == "true" && editorDOM == "false", "history grid or editor DOM mismatch")
 	if !strings.Contains(views, "history") || !strings.Contains(views, "settings") || strings.Contains(views, "rack") {
-		fmt.Printf("SELFTEST uicapture: views_wrong=1\n")
+		selftestFail("SELFTEST uicapture: views_wrong=1\n")
 	}
 	if editorDOM == "true" {
-		fmt.Printf("SELFTEST uicapture: editor_dom_present=1\n")
+		selftestFail("SELFTEST uicapture: editor_dom_present=1\n")
 	}
 	save("history")
 	// The history preview sheet: click the first card, check the original
@@ -316,15 +449,20 @@ func (a *App) selftestUICapture() {
 	previewImage := eval(`String(!!document.getElementById('historyPreviewImage'))`)
 	previewActions := eval(`[...document.querySelectorAll('[data-history-action]')].map((b) => b.dataset.historyAction).join(',')`)
 	fmt.Printf("SELFTEST uicapture: preview=%s preview_image=%s preview_actions=%s\n", preview, previewImage, previewActions)
+	selftestRequire(preview == "true" && previewImage == "true", "history preview missing")
+	for _, action := range []string{"copy", "save", "pin", "delete", "close"} {
+		selftestRequire(strings.Contains(","+previewActions+",", ","+action+","), "history preview missing %s", action)
+	}
 	save("preview")
 	eval(`document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })), 'ok'`)
 	time.Sleep(400 * time.Millisecond)
 	previewClosed := eval(`String(!!document.getElementById('historyPreview') && !document.getElementById('historyPreview').hidden)`)
 	fmt.Printf("SELFTEST uicapture: preview_closed=%s\n", previewClosed)
+	selftestRequire(previewClosed == "false", "history preview did not close")
 	eval(`document.querySelector('[data-view="settings"]')?.click(), 'ok'`)
 	time.Sleep(800 * time.Millisecond)
 	save("settings")
-	mygo.App.Exit(0)
+	selftestExit(0)
 }
 
 // selftestDrag drags a known selection on the overlay and proves the
@@ -332,9 +470,7 @@ func (a *App) selftestUICapture() {
 // capture of the screen rect the selection is on.
 func (a *App) selftestDrag() {
 	if err := a.beginRegion(); err != nil {
-		fmt.Printf("SELFTEST drag: begin error %v\n", err)
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST drag: begin error %v\n", err)
 	}
 	time.Sleep(1000 * time.Millisecond)
 	origin := a.overlayRect
@@ -346,15 +482,15 @@ func (a *App) selftestDrag() {
 	// The page's own drag flow hides the selection chrome before asking Go for
 	// the capture, so the image it gets is the clean screen behind it.
 	if err := a.dragOverlaySelection(10, 10, 130, 110); err != nil {
-		fmt.Printf("SELFTEST drag: drag error %v\n", err)
+		selftestFail("SELFTEST drag: drag error %v\n", err)
 		a.cancelRegion()
-		mygo.App.Exit(1)
+		selftestExit(1)
 		return
 	}
 	if err := a.waitOverlayAnnotating(10 * time.Second); err != nil {
-		fmt.Printf("SELFTEST drag: prepare error %v\n", err)
+		selftestFail("SELFTEST drag: prepare error %v\n", err)
 		a.cancelRegion()
-		mygo.App.Exit(1)
+		selftestExit(1)
 		return
 	}
 	time.Sleep(300 * time.Millisecond)
@@ -363,11 +499,11 @@ func (a *App) selftestDrag() {
 	fmt.Printf("SELFTEST drag: overlay origin=%+v expected screen rect=%+v\n", origin, expected)
 	delivered, err := newestSessionPNG(a.sessionDir)
 	if err != nil {
-		fmt.Printf("SELFTEST drag: delivered image error %v\n", err)
+		selftestFail("SELFTEST drag: delivered image error %v\n", err)
 	} else {
 		dw, dh := imageDimensions(delivered)
-		_ = os.WriteFile("/tmp/pinstill-selftest-drag-delivered.png", delivered, 0o644)
-		fmt.Printf("SELFTEST drag: delivered %dx%d px -> /tmp/pinstill-selftest-drag-delivered.png\n", dw, dh)
+		selftestArtifact("pinstill-selftest-drag-delivered.png", delivered)
+		fmt.Printf("SELFTEST drag: delivered %dx%d px -> artifacts/pinstill-selftest-drag-delivered.png\n", dw, dh)
 		// Compare with the screen behind the overlay: hide the overlay first so
 		// the direct capture sees exactly what the in-place capture saw through
 		// the transparent selection.
@@ -377,26 +513,25 @@ func (a *App) selftestDrag() {
 		time.Sleep(350 * time.Millisecond)
 		direct, derr := capture.CaptureRegion(expected, capture.CaptureOptions{})
 		if derr != nil {
-			fmt.Printf("SELFTEST drag: direct capture error %v\n", derr)
+			selftestFail("SELFTEST drag: direct capture error %v\n", derr)
 		} else {
-			_ = os.WriteFile("/tmp/pinstill-selftest-drag-direct.png", direct, 0o644)
+			selftestArtifact("pinstill-selftest-drag-direct.png", direct)
 			diff, same := imageDiff(delivered, direct)
 			dw2, dh2 := imageDimensions(direct)
 			fmt.Printf("SELFTEST drag: direct %dx%d px, mean abs diff=%.2f same=%v\n", dw2, dh2, diff, same)
+			selftestRequire(same, "selection mapping image mismatch: %.2f", diff)
 		}
 	}
 	a.cancelRegion()
 	time.Sleep(300 * time.Millisecond)
-	mygo.App.Exit(0)
+	selftestExit(0)
 }
 
 // selftestEscape shows the overlay and has System Events press Escape, then
 // checks that the overlay hid and the main window came back.
 func (a *App) selftestEscape() {
 	if err := a.beginRegion(); err != nil {
-		fmt.Printf("SELFTEST esc: begin error %v\n", err)
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST esc: begin error %v\n", err)
 	}
 	time.Sleep(900 * time.Millisecond)
 	// System Events types into the frontmost app, and earlier selftest steps
@@ -404,7 +539,7 @@ func (a *App) selftestEscape() {
 	// first so the synthetic Escape lands on the overlay.
 	activate := exec.Command("/usr/bin/osascript", "-e",
 		`tell application "System Events" to set frontmost of process "Pinstill" to true`)
-	activate.Run()
+	selftestCheckError(activate.Run())
 	time.Sleep(400 * time.Millisecond)
 	// System Events occasionally misses a synthesized key while the system
 	// is busy; press Escape a few times before calling it a failure.
@@ -412,6 +547,7 @@ func (a *App) selftestEscape() {
 		cmd := exec.Command("/usr/bin/osascript", "-e", "tell application \"System Events\" to key code 53")
 		out, err := cmd.CombinedOutput()
 		fmt.Printf("SELFTEST esc: attempt=%d osascript err=%v out=%s\n", attempt, err, strings.TrimSpace(string(out)))
+		selftestCheckError(err)
 		time.Sleep(900 * time.Millisecond)
 		if a.overlay == nil || !a.overlay.IsVisible() {
 			break
@@ -423,6 +559,7 @@ func (a *App) selftestEscape() {
 	if a.main != nil {
 		fmt.Printf("SELFTEST esc: main visible=%v\n", a.main.IsVisible())
 	}
+	selftestRequire(!a.overlayVisible() && a.main != nil && a.main.IsVisible(), "Escape did not restore main and hide overlay")
 	// Second capture with the history/settings window closed: cancelling must
 	// leave it closed (it used to be reopened by cancel/failure paths).
 	if a.main != nil {
@@ -430,9 +567,7 @@ func (a *App) selftestEscape() {
 	}
 	time.Sleep(400 * time.Millisecond)
 	if err := a.beginRegion(); err != nil {
-		fmt.Printf("SELFTEST esc: second begin error %v\n", err)
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST esc: second begin error %v\n", err)
 	}
 	time.Sleep(900 * time.Millisecond)
 	a.cancelRegion()
@@ -440,12 +575,9 @@ func (a *App) selftestEscape() {
 	mainAfterHiddenCancel := a.main != nil && a.main.IsVisible()
 	fmt.Printf("SELFTEST esc: main_after_hidden_cancel=%v\n", mainAfterHiddenCancel)
 	if mainAfterHiddenCancel {
-		fmt.Printf("SELFTEST esc: checks=FAILED\n")
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST esc: checks=FAILED\n")
 	}
-	fmt.Printf("SELFTEST esc: checks=ok\n")
-	mygo.App.Exit(0)
+	selftestExit(0)
 }
 
 // newestSessionPNG returns the most recent capture written for the current
@@ -683,12 +815,11 @@ func (a *App) overlayEval(js string) any {
 	a.mu.Lock()
 	overlay := a.overlay
 	a.mu.Unlock()
-	if overlay == nil {
-		return nil
-	}
+	selftestRequire(overlay != nil, "overlay window missing")
 	v, err := overlay.Page().Eval(js)
 	if err != nil {
-		return fmt.Sprintf("error: %v", err)
+		selftestFail("eval: %v", err)
+		return nil
 	}
 	return v
 }
@@ -759,24 +890,24 @@ func (a *App) selftestFlow() {
 		// launch; retrying once keeps the selftest deterministic.
 		for attempt := 1; attempt <= 2; attempt++ {
 			if err := a.beginRegion(); err != nil {
-				fmt.Printf("SELFTEST flow: %s begin error %v\n", name, err)
+				selftestFail("SELFTEST flow: %s begin error %v\n", name, err)
 				return false
 			}
 			time.Sleep(1200 * time.Millisecond)
 			if err := a.dragOverlaySelection(80, 90, 400, 300); err != nil {
-				fmt.Printf("SELFTEST flow: %s drag error %v\n", name, err)
+				selftestFail("SELFTEST flow: %s drag error %v\n", name, err)
 				return false
 			}
 			err := a.waitOverlayAnnotating(10 * time.Second)
 			if err == nil {
 				if err := a.drawOverlayAnnotation(); err != nil {
-					fmt.Printf("SELFTEST flow: %s draw error %v\n", name, err)
+					selftestFail("SELFTEST flow: %s draw error %v\n", name, err)
 					return false
 				}
 				time.Sleep(400 * time.Millisecond)
 				return true
 			}
-			fmt.Printf("SELFTEST flow: %s prepare attempt %d error %v %v\n", name, attempt, err, a.overlayEval(`(() => { const c=document.getElementById('overlayCanvas'); const t=document.getElementById('annotationToolbar'); return JSON.stringify({canvas: c ? (c.hidden?'hidden':(c.width+'x'+c.height)) : 'missing', toolbar: t ? (t.hidden?'hidden':'shown') : 'missing', status: document.getElementById('overlayStatus')?.textContent, body: document.body.innerText.slice(-120)}); })()`))
+			selftestFail("SELFTEST flow: %s prepare attempt %d error %v %v\n", name, attempt, err, a.overlayEval(`(() => { const c=document.getElementById('overlayCanvas'); const t=document.getElementById('annotationToolbar'); return JSON.stringify({canvas: c ? (c.hidden?'hidden':(c.width+'x'+c.height)) : 'missing', toolbar: t ? (t.hidden?'hidden':'shown') : 'missing', status: document.getElementById('overlayStatus')?.textContent, body: document.body.innerText.slice(-120)}); })()`))
 			a.cancelRegion()
 			time.Sleep(800 * time.Millisecond)
 		}
@@ -784,11 +915,11 @@ func (a *App) selftestFlow() {
 	}
 	click := func(name, action string) bool {
 		if err := a.waitOverlayActionReady(action, 8*time.Second); err != nil {
-			fmt.Printf("SELFTEST flow: %s ready error %v\n", name, err)
+			selftestFail("SELFTEST flow: %s ready error %v\n", name, err)
 			return false
 		}
 		if err := a.clickOverlayAction(action); err != nil {
-			fmt.Printf("SELFTEST flow: %s click error %v\n", name, err)
+			selftestFail("SELFTEST flow: %s click error %v\n", name, err)
 			return false
 		}
 		time.Sleep(1900 * time.Millisecond)
@@ -813,13 +944,15 @@ func (a *App) selftestFlow() {
 			return Math.round(after.x - before.x) + ',' + Math.round(after.y - before.y);
 		})()`)
 		fmt.Printf("SELFTEST flow: toolbar_drag=%v\n", dragDelta)
+		selftestRequire(dragDelta == "60,40", "toolbar drag mismatch: %v", dragDelta)
 		click("copy", "copy")
 		if img := mygo.Clipboard.ReadImage(); len(img) > 0 {
 			w, h := imageDimensions(img)
 			annotated := annotationPresent(img)
 			fmt.Printf("SELFTEST flow: copy clipboard %dx%d bytes=%d annotated=%v\n", w, h, len(img), annotated)
+			selftestRequire(w > 0 && h > 0 && annotated, "copy did not contain annotated image")
 		} else {
-			fmt.Printf("SELFTEST flow: copy clipboard EMPTY\n")
+			selftestFail("SELFTEST flow: copy clipboard EMPTY\n")
 		}
 	}
 	// pin: annotated image on a desktop pin
@@ -829,27 +962,31 @@ func (a *App) selftestFlow() {
 		pins := len(a.pins)
 		a.mu.Unlock()
 		fmt.Printf("SELFTEST flow: pin pins=%d\n", pins)
+		selftestRequire(pins == 1, "expected one pin, got %d", pins)
 	}
 	// afterCapture=clipboard must run the action without the toolbar.
 	mygo.Clipboard.Clear()
 	auto := DefaultSettings()
 	auto.AfterCapture = "clipboard"
-	a.applySettings(auto)
+	selftestSettingsErrors(a.applySettings(auto))
 	time.Sleep(1000 * time.Millisecond)
-	if err := a.beginRegion(); err == nil {
+	if err := a.beginRegion(); err != nil {
+		selftestFail("begin region: %v", err)
+	} else {
 		time.Sleep(1500 * time.Millisecond)
 		if err := a.dragOverlaySelection(60, 60, 260, 200); err != nil {
-			fmt.Printf("SELFTEST flow: auto drag error %v\n", err)
+			selftestFail("SELFTEST flow: auto drag error %v\n", err)
 		}
 		time.Sleep(4000 * time.Millisecond)
 		if img := mygo.Clipboard.ReadImage(); len(img) > 0 {
 			w, h := imageDimensions(img)
 			fmt.Printf("SELFTEST flow: auto clipboard %dx%d\n", w, h)
+			selftestRequire(w > 0 && h > 0, "automatic clipboard image invalid")
 		} else {
-			fmt.Printf("SELFTEST flow: auto clipboard EMPTY status=%v visible=%v\n", a.overlayEval(`document.getElementById('overlayStatus')?.textContent`), a.overlayVisible())
+			selftestFail("SELFTEST flow: auto clipboard EMPTY status=%v visible=%v\n", a.overlayEval(`document.getElementById('overlayStatus')?.textContent`), a.overlayVisible())
 		}
 	}
-	a.applySettings(DefaultSettings())
+	selftestSettingsErrors(a.applySettings(DefaultSettings()))
 	time.Sleep(300 * time.Millisecond)
 	// cancel: no capture should be delivered
 	before := len(a.historyEntries())
@@ -859,10 +996,11 @@ func (a *App) selftestFlow() {
 	time.Sleep(600 * time.Millisecond)
 	after := len(a.historyEntries())
 	fmt.Printf("SELFTEST flow: cancel history before=%d after=%d\n", before, after)
+	selftestRequire(before == after, "cancel added a history entry")
 	for id := range a.pins {
-		_ = a.closePin(id)
+		selftestCheckError(a.closePin(id))
 	}
-	mygo.App.Exit(0)
+	selftestExit(0)
 }
 
 // annotationPresent reports whether the PNG contains pixels of the default
@@ -896,16 +1034,12 @@ func (a *App) selftestPinUI() {
 	time.Sleep(1200 * time.Millisecond)
 	pngBytes := syntheticScreenshot()
 	if len(pngBytes) == 0 {
-		fmt.Printf("SELFTEST pinui: no image\n")
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST pinui: no image\n")
 	}
 	mygo.Clipboard.Clear()
 	id, err := a.pinPNG(pngBytes, 1280, 800)
 	if err != nil {
-		fmt.Printf("SELFTEST pinui: pin error %v\n", err)
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST pinui: pin error %v\n", err)
 	}
 	time.Sleep(1000 * time.Millisecond)
 	pageOf := func() *mygo.Page {
@@ -919,14 +1053,13 @@ func (a *App) selftestPinUI() {
 	}
 	eval := func(js string) any {
 		page := pageOf()
-		if page == nil {
-			return nil
-		}
+		selftestRequire(page != nil, "pin page missing")
 		v, err := page.Eval(js)
 		if err != nil {
-			fmt.Printf("SELFTEST pinui: eval %q error %v\n", js, err)
+			selftestFail("SELFTEST pinui: eval %q error %v\n", js, err)
 			return nil
 		}
+		selftestRequire(v == "clicked" || v == "sent", "pin action was not delivered: %v", v)
 		return v
 	}
 	var before mygo.Rectangle
@@ -941,8 +1074,9 @@ func (a *App) selftestPinUI() {
 	if img := mygo.Clipboard.ReadImage(); len(img) > 0 {
 		w, h := imageDimensions(img)
 		fmt.Printf("SELFTEST pinui: dblclick clipboard %dx%d\n", w, h)
+		selftestRequire(w == 1280 && h == 800, "pin clipboard dimensions wrong")
 	} else {
-		fmt.Printf("SELFTEST pinui: dblclick clipboard EMPTY\n")
+		selftestFail("SELFTEST pinui: dblclick clipboard EMPTY\n")
 	}
 	a.mu.Lock()
 	after := mygo.Rectangle{}
@@ -951,6 +1085,7 @@ func (a *App) selftestPinUI() {
 	}
 	a.mu.Unlock()
 	fmt.Printf("SELFTEST pinui: bounds unchanged=%v before=%+v after=%+v\n", before == after, before, after)
+	selftestRequire(before.Width > 0 && before == after, "double click changed pin bounds")
 	// context menu: copy and opacity
 	fmt.Printf("SELFTEST pinui: menu copy=%v\n", eval(`(() => { const b = document.querySelector('[data-menu-action="copy"]'); if (!b) return 'missing'; b.click(); return 'clicked'; })()`))
 	time.Sleep(700 * time.Millisecond)
@@ -966,6 +1101,7 @@ func (a *App) selftestPinUI() {
 		storedAfterCopy = len(a.pinStore.List())
 	}
 	fmt.Printf("SELFTEST pinui: after copy map=%v pins=%d destroyed=%v visible=%v stored=%d\n", mapAfterCopy, pinsAfterCopy, destroyed, visible, storedAfterCopy)
+	selftestRequire(mapAfterCopy && pinsAfterCopy == 1 && !destroyed && visible && storedAfterCopy == 1, "copy lost the pin")
 	opacityBefore := 100.0
 	a.mu.Lock()
 	if win := a.pins[id]; win != nil {
@@ -981,6 +1117,7 @@ func (a *App) selftestPinUI() {
 	}
 	a.mu.Unlock()
 	fmt.Printf("SELFTEST pinui: opacity before=%.0f after=%.0f\n", opacityBefore, opacityAfter)
+	selftestRequire(math.Abs(opacityAfter-(opacityBefore-10)) < 0.01, "pin opacity did not decrease by 10")
 	// wheel scales the pin window
 	fmt.Printf("SELFTEST pinui: wheel=%v\n", eval(`(() => { window.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true })); return 'sent'; })()`))
 	time.Sleep(800 * time.Millisecond)
@@ -991,6 +1128,7 @@ func (a *App) selftestPinUI() {
 	}
 	a.mu.Unlock()
 	fmt.Printf("SELFTEST pinui: wheel bounds=%+v scaled=%v\n", afterWheel, afterWheel.Width > after.Width)
+	selftestRequire(afterWheel.Width > after.Width && afterWheel.Height > after.Height, "pin wheel did not grow bounds")
 	// close through the hover close button: state must disappear
 	fmt.Printf("SELFTEST pinui: close=%v\n", eval(`(() => { const b = document.getElementById('pinClose'); if (!b) return 'missing'; b.click(); return 'clicked'; })()`))
 	time.Sleep(900 * time.Millisecond)
@@ -1002,7 +1140,8 @@ func (a *App) selftestPinUI() {
 		stored = len(a.pinStore.List())
 	}
 	fmt.Printf("SELFTEST pinui: after close pins=%d stored=%d\n", remaining, stored)
-	mygo.App.Exit(0)
+	selftestRequire(remaining == 0 && stored == 0, "pin close left live or stored pins")
+	selftestExit(0)
 }
 
 // selftestPinPersistSetup creates one desktop pin and quits through the real
@@ -1011,15 +1150,11 @@ func (a *App) selftestPinPersistSetup() {
 	time.Sleep(1200 * time.Millisecond)
 	pngBytes := syntheticScreenshot()
 	if len(pngBytes) == 0 {
-		fmt.Printf("SELFTEST pinpersist: setup could not render image\n")
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST pinpersist: setup could not render image\n")
 	}
 	id, err := a.pinPNG(pngBytes, 640, 400)
 	if err != nil {
-		fmt.Printf("SELFTEST pinpersist: setup pin error %v\n", err)
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST pinpersist: setup pin error %v\n", err)
 	}
 	time.Sleep(900 * time.Millisecond)
 	a.mu.Lock()
@@ -1029,12 +1164,12 @@ func (a *App) selftestPinPersistSetup() {
 	if win != nil {
 		b := win.Bounds()
 		fmt.Printf("SELFTEST pinpersist: setup created id=%s bounds=%+v stored=%+v\n", id, b, st)
+		selftestRequire(a.pinStore != nil && len(a.pinStore.List()) == 1, "pin setup did not persist exactly one pin")
 	} else {
-		fmt.Printf("SELFTEST pinpersist: setup created id=%s but window is missing\n", id)
+		selftestFail("SELFTEST pinpersist: setup created id=%s but window is missing\n", id)
 	}
 	fmt.Printf("SELFTEST pinpersist: setup quitting\n")
-	mygo.App.Quit()
-	time.Sleep(2 * time.Second)
+	selftestRealQuit("pinpersist-setup")
 }
 
 // selftestPinPersistCheck reports the pins restored from the previous run.
@@ -1052,16 +1187,18 @@ func (a *App) selftestPinPersistCheck() {
 		stored = len(a.pinStore.List())
 	}
 	fmt.Printf("SELFTEST pinpersist: check restored=%d stored=%d ids=%v\n", count, stored, ids)
+	selftestRequire(count == 1 && stored == 1, "pin persistence expected one restored and stored pin, got %d/%d", count, stored)
 	for _, id := range ids {
 		if err := a.closePin(id); err != nil {
-			fmt.Printf("SELFTEST pinpersist: close %s error %v\n", id, err)
+			selftestFail("SELFTEST pinpersist: close %s error %v\n", id, err)
 		}
 	}
 	time.Sleep(400 * time.Millisecond)
 	if a.pinStore != nil {
 		fmt.Printf("SELFTEST pinpersist: check after close stored=%d\n", len(a.pinStore.List()))
+		selftestRequire(len(a.pinStore.List()) == 0, "pin persistence close left stored pins")
 	}
-	mygo.App.Exit(0)
+	selftestExit(0)
 }
 
 // controlEval evaluates an expression in the scroll control window.
@@ -1069,12 +1206,11 @@ func (a *App) controlEval(js string) any {
 	a.mu.Lock()
 	control := a.control
 	a.mu.Unlock()
-	if control == nil {
-		return nil
-	}
+	selftestRequire(control != nil, "scroll control missing")
 	v, err := control.Page().Eval(js)
 	if err != nil {
-		return fmt.Sprintf("error: %v", err)
+		selftestFail("eval: %v", err)
+		return nil
 	}
 	return v
 }
@@ -1100,66 +1236,63 @@ func (a *App) selftestScrollShot() {
 	}
 	time.Sleep(1200 * time.Millisecond)
 	if err := a.beginRegion(); err != nil {
-		fmt.Printf("SELFTEST scrollshot: begin error %v\n", err)
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST scrollshot: begin error %v\n", err)
 	}
 	time.Sleep(1000 * time.Millisecond)
 	if err := a.dragOverlaySelection(80, 90, 420, 330); err != nil {
-		fmt.Printf("SELFTEST scrollshot: drag error %v\n", err)
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST scrollshot: drag error %v\n", err)
 	}
 	if err := a.waitOverlayAnnotating(10 * time.Second); err != nil {
-		fmt.Printf("SELFTEST scrollshot: prepare error %v\n", err)
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST scrollshot: prepare error %v\n", err)
 	}
 	time.Sleep(300 * time.Millisecond)
-	if _, err := a.overlay.Page().Eval(`(() => { const b = document.querySelector('[data-tool="scroll"]'); if (!b) return 'missing'; b.click(); return 'clicked'; })()`); err != nil {
-		fmt.Printf("SELFTEST scrollshot: click error %v\n", err)
-	}
+	selftestRequire(selftestValue(a.overlay.Page().Eval(`(() => { const b = document.querySelector('[data-tool="scroll"]'); if (!b) return 'missing'; b.click(); return 'clicked'; })()`)) == "clicked", "scroll tool missing")
 	if err := a.waitControlReady(8 * time.Second); err != nil {
-		fmt.Printf("SELFTEST scrollshot: control error %v\n", err)
+		selftestFail("SELFTEST scrollshot: control error %v\n", err)
 	}
 	time.Sleep(1200 * time.Millisecond)
 	a.mu.Lock()
 	control := a.control
 	a.mu.Unlock()
+	selftestRequire(control != nil, "scroll control missing")
 	if control != nil {
+		selftestRequire(control.IsVisible(), "scroll control is hidden")
 		if pagePNG, err := control.CapturePage(); err == nil {
-			_ = os.WriteFile("/tmp/pinstill-showcase-scroll.png", pagePNG, 0o644)
+			selftestArtifact("pinstill-showcase-scroll.png", pagePNG)
 			w, h := imageDimensions(pagePNG)
-			fmt.Printf("SELFTEST scrollshot: control %dx%d -> /tmp/pinstill-showcase-scroll.png\n", w, h)
+			fmt.Printf("SELFTEST scrollshot: control %dx%d -> artifacts/pinstill-showcase-scroll.png\n", w, h)
 		} else {
-			fmt.Printf("SELFTEST scrollshot: control capture error %v\n", err)
+			selftestFail("SELFTEST scrollshot: control capture error %v\n", err)
 		}
 	}
 	// Stop the simulated session and hand the preview window a generated tall
 	// image (the simulated frames are random noise, ugly for the README).
-	_ = a.finishScroll("cancel")
+	selftestCheckError(a.finishScroll("cancel"))
 	time.Sleep(700 * time.Millisecond)
-	if tall := syntheticScrollResultPNG(); len(tall) > 0 {
+	tall := syntheticScrollResultPNG()
+	selftestRequire(len(tall) > 0, "synthetic scroll image missing")
+	if len(tall) > 0 {
 		if err := a.showScrollResult(tall, 8, false); err != nil {
-			fmt.Printf("SELFTEST scrollshot: preview error %v\n", err)
+			selftestFail("SELFTEST scrollshot: preview error %v\n", err)
 		}
 	}
 	a.mu.Lock()
 	win := a.result
 	a.mu.Unlock()
+	selftestRequire(win != nil, "scroll preview missing")
 	if win != nil {
 		time.Sleep(900 * time.Millisecond)
 		if pagePNG, err := win.CapturePage(); err == nil {
-			_ = os.WriteFile("/tmp/pinstill-showcase-scroll-result.png", pagePNG, 0o644)
+			selftestArtifact("pinstill-showcase-scroll-result.png", pagePNG)
 			w, h := imageDimensions(pagePNG)
-			fmt.Printf("SELFTEST scrollshot: result %dx%d -> /tmp/pinstill-showcase-scroll-result.png\n", w, h)
+			fmt.Printf("SELFTEST scrollshot: result %dx%d -> artifacts/pinstill-showcase-scroll-result.png\n", w, h)
 		} else {
-			fmt.Printf("SELFTEST scrollshot: result capture error %v\n", err)
+			selftestFail("SELFTEST scrollshot: result capture error %v\n", err)
 		}
 		a.closeScrollResult()
 	}
 	time.Sleep(500 * time.Millisecond)
-	mygo.App.Exit(0)
+	selftestExit(0)
 }
 
 // selftestScrollFlow drives the real page: annotate a capture, click the
@@ -1171,25 +1304,17 @@ func (a *App) selftestScrollFlow() {
 	}
 	time.Sleep(1200 * time.Millisecond)
 	if err := a.beginRegion(); err != nil {
-		fmt.Printf("SELFTEST scrollflow: begin error %v\n", err)
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST scrollflow: begin error %v\n", err)
 	}
 	time.Sleep(1000 * time.Millisecond)
 	if err := a.dragOverlaySelection(80, 90, 420, 330); err != nil {
-		fmt.Printf("SELFTEST scrollflow: drag error %v\n", err)
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST scrollflow: drag error %v\n", err)
 	}
 	if err := a.waitOverlayAnnotating(10 * time.Second); err != nil {
-		fmt.Printf("SELFTEST scrollflow: prepare error %v\n", err)
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST scrollflow: prepare error %v\n", err)
 	}
 	time.Sleep(400 * time.Millisecond)
-	if _, err := a.overlay.Page().Eval(`(() => { const b = document.querySelector('[data-tool="scroll"]'); if (!b) return 'missing'; b.click(); return 'clicked'; })()`); err != nil {
-		fmt.Printf("SELFTEST scrollflow: scroll tool click error %v\n", err)
-	}
+	selftestRequire(selftestValue(a.overlay.Page().Eval(`(() => { const b = document.querySelector('[data-tool="scroll"]'); if (!b) return 'missing'; b.click(); return 'clicked'; })()`)) == "clicked", "scroll tool missing")
 	deadline := time.Now().Add(25 * time.Second)
 	var win *mygo.Window
 	for time.Now().Before(deadline) {
@@ -1202,15 +1327,14 @@ func (a *App) selftestScrollFlow() {
 		time.Sleep(150 * time.Millisecond)
 	}
 	if win == nil {
-		fmt.Printf("SELFTEST scrollflow: result window never opened\n")
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST scrollflow: result window never opened\n")
 	}
 	time.Sleep(900 * time.Millisecond)
 	eval := func(js string) string {
 		v, err := win.Page().Eval(js)
 		if err != nil {
-			return fmt.Sprintf("error: %v", err)
+			selftestFail("eval: %v", err)
+			return ""
 		}
 		return strings.TrimSpace(fmt.Sprint(v))
 	}
@@ -1220,13 +1344,18 @@ func (a *App) selftestScrollFlow() {
 	metaInfo := a.scrollResultMeta()
 	fmt.Printf("SELFTEST scrollflow: result=%dx%d frames=%d window=true\n", metaInfo.Width, metaInfo.Height, metaInfo.Frames)
 	fmt.Printf("SELFTEST scrollflow: image=%s meta=%q actions=%s\n", imageState, meta, actions)
+	selftestRequire(metaInfo.Width > 0 && metaInfo.Height > 0 && metaInfo.Frames > 0 && imageState == fmt.Sprintf("%dx%d", metaInfo.Width, metaInfo.Height) && meta != "", "scroll result image/meta mismatch")
+	for _, action := range []string{"copy", "save", "pin", "close"} {
+		selftestRequire(strings.Contains(","+actions+",", ","+action+","), "scroll result missing %s", action)
+	}
 	eval(`document.querySelector('[data-result-action="close"]')?.click(), 'ok'`)
 	time.Sleep(700 * time.Millisecond)
 	a.mu.Lock()
 	stillOpen := a.result != nil
 	a.mu.Unlock()
 	fmt.Printf("SELFTEST scrollflow: closed=%v\n", !stillOpen)
-	mygo.App.Exit(0)
+	selftestRequire(!stillOpen, "scroll result did not close")
+	selftestExit(0)
 }
 
 // selftestScroll exercises the scrolling capture in automatic mode with
@@ -1239,16 +1368,12 @@ func (a *App) selftestScroll() {
 		a.main.Hide()
 	}
 	if err := a.beginRegion(); err != nil {
-		fmt.Printf("SELFTEST scroll: begin error %v\n", err)
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST scroll: begin error %v\n", err)
 	}
 	time.Sleep(1000 * time.Millisecond)
 	rect := Rect{X: 60, Y: 80, Width: 520, Height: 420}
 	if err := a.startScroll(rect, true); err != nil {
-		fmt.Printf("SELFTEST scroll: start error %v\n", err)
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST scroll: start error %v\n", err)
 	}
 	time.Sleep(500 * time.Millisecond)
 	frameVisible := a.scrollFrameVisible()
@@ -1267,33 +1392,31 @@ func (a *App) selftestScroll() {
 	}
 	meta := a.scrollResultMeta()
 	fmt.Printf("SELFTEST scroll: result=%dx%d frames=%d window=%v capped=%v\n", meta.Width, meta.Height, meta.Frames, win != nil, meta.Capped)
-	if win == nil || meta.Width == 0 {
-		fmt.Printf("SELFTEST scroll: checks=FAILED\n")
-		mygo.App.Exit(1)
-		return
+	if win == nil || meta.Width <= 0 || meta.Height <= 0 || meta.Frames <= 0 {
+		selftestFail("SELFTEST scroll: checks=FAILED\n")
 	}
 	mygo.Clipboard.Clear()
 	if err := a.copyScrollResult(); err != nil {
-		fmt.Printf("SELFTEST scroll: copy error %v\n", err)
+		selftestFail("SELFTEST scroll: copy error %v\n", err)
 	}
 	time.Sleep(700 * time.Millisecond)
 	if img := mygo.Clipboard.ReadImage(); len(img) > 0 {
 		width, height := imageDimensions(img)
 		fmt.Printf("SELFTEST scroll: clipboard=%dx%d\n", width, height)
+		selftestRequire(width == meta.Width && height == meta.Height, "scroll clipboard dimensions mismatch")
 	} else {
-		fmt.Printf("SELFTEST scroll: clipboard EMPTY\n")
+		selftestFail("SELFTEST scroll: clipboard EMPTY\n")
 	}
 	a.mu.Lock()
 	stillOpen := a.result != nil
 	a.mu.Unlock()
 	fmt.Printf("SELFTEST scroll: closed_after_copy=%v\n", !stillOpen)
+	selftestRequire(!stillOpen, "scroll copy did not close result")
 	fmt.Printf("SELFTEST scroll: frame_hidden=%v\n", !a.scrollFrameVisible())
-	if !frameVisible || a.scrollFrameVisible() {
-		fmt.Printf("SELFTEST scroll: checks=FAILED\n")
-		mygo.App.Exit(1)
-		return
+	if !frameVisible || frameW != 524 || frameH != 424 || a.scrollFrameVisible() {
+		selftestFail("SELFTEST scroll: checks=FAILED\n")
 	}
-	mygo.App.Exit(0)
+	selftestExit(0)
 }
 
 // selftestScrollManual starts a manual scrolling session: the simulated frames
@@ -1303,16 +1426,12 @@ func (a *App) selftestScrollManual() {
 		a.main.Hide()
 	}
 	if err := a.beginRegion(); err != nil {
-		fmt.Printf("SELFTEST scrollmanual: begin error %v\n", err)
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST scrollmanual: begin error %v\n", err)
 	}
 	time.Sleep(1000 * time.Millisecond)
 	rect := Rect{X: 60, Y: 80, Width: 520, Height: 420}
 	if err := a.startScroll(rect, false); err != nil {
-		fmt.Printf("SELFTEST scrollmanual: start error %v\n", err)
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST scrollmanual: start error %v\n", err)
 	}
 	time.Sleep(500 * time.Millisecond)
 	frameVisible := a.scrollFrameVisible()
@@ -1335,20 +1454,15 @@ func (a *App) selftestScrollManual() {
 		a.closeScrollResult()
 		time.Sleep(500 * time.Millisecond)
 	}
-	if win == nil || meta.Width == 0 {
-		fmt.Printf("SELFTEST scrollmanual: checks=FAILED\n")
-		mygo.App.Exit(1)
-		return
+	if win == nil || meta.Width <= 0 || meta.Height <= 0 || meta.Frames <= 0 {
+		selftestFail("SELFTEST scrollmanual: checks=FAILED\n")
 	}
 	frameHidden := !a.scrollFrameVisible()
 	fmt.Printf("SELFTEST scrollmanual: frame_hidden=%v\n", frameHidden)
-	if !frameVisible || !frameHidden {
-		fmt.Printf("SELFTEST scrollmanual: checks=FAILED\n")
-		mygo.App.Exit(1)
-		return
+	if !frameVisible || frameW != 524 || frameH != 424 || !frameHidden {
+		selftestFail("SELFTEST scrollmanual: checks=FAILED\n")
 	}
-	fmt.Printf("SELFTEST scrollmanual: checks=ok\n")
-	mygo.App.Exit(0)
+	selftestExit(0)
 }
 
 // selftestShowcase produces the UI screenshots used by the README. Every
@@ -1357,14 +1471,12 @@ func (a *App) selftestScrollManual() {
 func (a *App) selftestShowcase() {
 	if strings.TrimSpace(os.Getenv("PINSTILL_DATA_DIR")) == "" {
 		fmt.Printf("SELFTEST showcase: PINSTILL_DATA_DIR must point at an isolated data directory\n")
-		mygo.App.Exit(1)
+		selftestExit(1)
 		return
 	}
 	pngBytes := syntheticScreenshot()
 	if len(pngBytes) == 0 {
-		fmt.Printf("SELFTEST showcase: no synthetic image\n")
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST showcase: no synthetic image\n")
 	}
 	if a.main != nil {
 		a.main.Hide()
@@ -1372,72 +1484,74 @@ func (a *App) selftestShowcase() {
 	// Seed the history grid with generated captures only.
 	for i := 0; i < 3; i++ {
 		if _, err := a.storeCapture(pngBytes); err != nil {
-			fmt.Printf("SELFTEST showcase: seed error %v\n", err)
+			selftestFail("SELFTEST showcase: seed error %v\n", err)
 		}
 	}
 	a.showMain()
 	time.Sleep(1600 * time.Millisecond)
 	savePage := func(win *mygo.Window, name string) {
-		if win == nil {
-			return
-		}
+		selftestRequire(win != nil, "showcase %s window missing", name)
 		pagePNG, err := win.CapturePage()
 		if err != nil {
-			fmt.Printf("SELFTEST showcase: %s capture error %v\n", name, err)
+			selftestFail("SELFTEST showcase: %s capture error %v\n", name, err)
 			return
 		}
-		path := "/tmp/pinstill-showcase-" + name + ".png"
-		_ = os.WriteFile(path, pagePNG, 0o644)
+		path := "pinstill-showcase-" + name + ".png"
+		selftestArtifact(path, pagePNG)
 		w, h := imageDimensions(pagePNG)
 		fmt.Printf("SELFTEST showcase: %s %dx%d -> %s\n", name, w, h, path)
 	}
 	savePage(a.main, "history")
 	if a.main != nil {
-		if _, err := a.main.Page().Eval(`document.querySelector('#historyGrid .history-card')?.click()`); err == nil {
+		if _, err := a.main.Page().Eval(`document.querySelector('#historyGrid .history-card').click()`); err != nil {
+			selftestFail("showcase preview: %v", err)
+		} else {
 			time.Sleep(800 * time.Millisecond)
 			savePage(a.main, "preview")
-			_, _ = a.main.Page().Eval(`document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))`)
+			selftestValue(a.main.Page().Eval(`document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))`))
 			time.Sleep(400 * time.Millisecond)
 		}
-		_, _ = a.main.Page().Eval(`document.querySelector('[data-view="settings"]').click()`)
+		selftestValue(a.main.Page().Eval(`document.querySelector('[data-view="settings"]').click()`))
 		time.Sleep(800 * time.Millisecond)
 		savePage(a.main, "settings")
 	}
 	// Overlay with a live selection and its annotation toolbar, captured from
 	// the overlay's own page so the desktop behind it stays out of the image.
-	if err := a.beginRegion(); err == nil {
+	if err := a.beginRegion(); err != nil {
+		selftestFail("begin region: %v", err)
+	} else {
 		time.Sleep(900 * time.Millisecond)
 		if err := a.dragOverlaySelection(120, 140, 620, 420); err != nil {
-			fmt.Printf("SELFTEST showcase: overlay drag error %v\n", err)
+			selftestFail("SELFTEST showcase: overlay drag error %v\n", err)
 		}
 		if err := a.waitOverlayAnnotating(8 * time.Second); err != nil {
-			fmt.Printf("SELFTEST showcase: overlay prepare error %v\n", err)
+			selftestFail("SELFTEST showcase: overlay prepare error %v\n", err)
 		} else {
 			if png := syntheticScreenshot(); len(png) > 0 {
 				dataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
 				js := fmt.Sprintf("window.__pinstillDemoCapture && window.__pinstillDemoCapture(%q)", dataURL)
 				if _, err := a.overlay.Page().Eval(js); err != nil {
-					fmt.Printf("SELFTEST showcase: synthetic base error %v\n", err)
+					selftestFail("SELFTEST showcase: synthetic base error %v\n", err)
 				}
 			}
 			if err := a.drawOverlayAnnotation(); err != nil {
-				fmt.Printf("SELFTEST showcase: overlay draw error %v\n", err)
+				selftestFail("SELFTEST showcase: overlay draw error %v\n", err)
 			}
 			// Show the text formatting controls and a sample text annotation.
-			_, _ = a.overlay.Page().Eval(`document.querySelector('[data-tool="text"]')?.click()`)
+			selftestValue(a.overlay.Page().Eval(`document.querySelector('[data-tool="text"]')?.click()`))
 			time.Sleep(250 * time.Millisecond)
-			_, _ = a.overlay.Page().Eval(`(() => {
+			selftestValue(a.overlay.Page().Eval(`(() => {
 				const c = document.getElementById('overlayCanvas');
 				const r = c.getBoundingClientRect();
 				c.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, clientX: r.left + r.width * 0.14, clientY: r.top + r.height * 0.2, pointerId: 5, pointerType: 'mouse', button: 0 }));
-			})()`)
+			})()`))
 			time.Sleep(300 * time.Millisecond)
-			_, _ = a.overlay.Page().Eval(`(() => {
+			selftestValue(a.overlay.Page().Eval(`(() => {
 				const t = document.getElementById('textInputOverlay');
 				if (!t) return;
 				t.value = 'Pinstill · 标注';
 				t.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
-			})()`)
+			})()`))
 			time.Sleep(350 * time.Millisecond)
 		}
 		time.Sleep(600 * time.Millisecond)
@@ -1447,24 +1561,22 @@ func (a *App) selftestShowcase() {
 		// changes the user's watermark text/opacity.
 		if a.overlay != nil {
 			savedWatermark := ""
-			if v, err := a.overlay.Page().Eval("localStorage.getItem('pinstill.watermark') ?? ''"); err == nil {
-				savedWatermark = fmt.Sprint(v)
-			}
-			_, _ = a.overlay.Page().Eval(`document.querySelector('[data-tool="watermark"]')?.click()`)
+			savedWatermark = fmt.Sprint(selftestValue(a.overlay.Page().Eval("localStorage.getItem('pinstill.watermark') ?? ''")))
+			selftestValue(a.overlay.Page().Eval(`document.querySelector('[data-tool="watermark"]')?.click()`))
 			time.Sleep(300 * time.Millisecond)
-			_, _ = a.overlay.Page().Eval(`(() => {
+			selftestValue(a.overlay.Page().Eval(`(() => {
 				const t = document.getElementById('watermarkText');
 				if (t) { t.value = 'Pinstill'; t.dispatchEvent(new Event('input', { bubbles: true })); }
 				const o = document.getElementById('watermarkOpacity');
 				if (o) { o.value = '30'; o.dispatchEvent(new Event('input', { bubbles: true })); }
-			})()`)
+			})()`))
 			time.Sleep(500 * time.Millisecond)
 			savePage(a.overlay, "watermark")
-			_, _ = a.overlay.Page().Eval(`document.querySelector('[data-tool="watermark"]')?.click()`)
+			selftestValue(a.overlay.Page().Eval(`document.querySelector('[data-tool="watermark"]')?.click()`))
 			if savedWatermark == "" {
-				_, _ = a.overlay.Page().Eval("localStorage.removeItem('pinstill.watermark')")
+				selftestValue(a.overlay.Page().Eval("localStorage.removeItem('pinstill.watermark')"))
 			} else {
-				_, _ = a.overlay.Page().Eval(fmt.Sprintf("localStorage.setItem('pinstill.watermark', %q)", savedWatermark))
+				selftestValue(a.overlay.Page().Eval(fmt.Sprintf("localStorage.setItem('pinstill.watermark', %q)", savedWatermark)))
 			}
 			time.Sleep(300 * time.Millisecond)
 		}
@@ -1478,12 +1590,12 @@ func (a *App) selftestShowcase() {
 		win := a.pins[id]
 		a.mu.Unlock()
 		savePage(win, "pin")
-		_ = a.closePin(id)
+		selftestCheckError(a.closePin(id))
 	} else {
-		fmt.Printf("SELFTEST showcase: pin error %v\n", err)
+		selftestFail("SELFTEST showcase: pin error %v\n", err)
 	}
 	time.Sleep(400 * time.Millisecond)
-	mygo.App.Exit(0)
+	selftestExit(0)
 }
 
 // selftestQuit exercises the real quit sequence (Cmd+Q, menu Quit, tray
@@ -1495,19 +1607,7 @@ func (a *App) selftestQuit() {
 	}
 	time.Sleep(1500 * time.Millisecond)
 	fmt.Printf("SELFTEST quit: calling App.Quit\n")
-	done := make(chan struct{})
-	go func() {
-		mygo.App.Quit()
-		close(done)
-	}()
-	select {
-	case <-done:
-		fmt.Printf("SELFTEST quit: quit sequence finished\n")
-	case <-time.After(5 * time.Second):
-		fmt.Printf("SELFTEST quit: BLOCKED, a window refused to close\n")
-		os.Exit(2)
-	}
-	time.Sleep(500 * time.Millisecond)
+	selftestRealQuit("quit")
 }
 
 // selftestFullScreen exercises the whole-display capture from the tray: it
@@ -1519,7 +1619,7 @@ func (a *App) selftestFullScreen() {
 	}
 	s := DefaultSettings()
 	s.AfterCapture = "clipboard"
-	a.applySettings(s)
+	selftestSettingsErrors(a.applySettings(s))
 	time.Sleep(600 * time.Millisecond)
 	mygo.Clipboard.Clear()
 	before := len(a.historyEntries())
@@ -1535,13 +1635,11 @@ func (a *App) selftestFullScreen() {
 	after := len(a.historyEntries())
 	width, height := imageDimensions(img)
 	fmt.Printf("SELFTEST fullscreen: clipboard=%dx%d history before=%d after=%d\n", width, height, before, after)
+	selftestRequire(width > 0 && height > 0 && after == before+1, "fullscreen capture missing clipboard image or history entry")
 	if len(img) == 0 {
-		fmt.Printf("SELFTEST fullscreen: checks=FAILED\n")
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST fullscreen: checks=FAILED\n")
 	}
-	fmt.Printf("SELFTEST fullscreen: checks=ok\n")
-	mygo.App.Exit(0)
+	selftestExit(0)
 }
 
 // selftestHistoryActions exercises the history preview actions that do not
@@ -1549,20 +1647,14 @@ func (a *App) selftestFullScreen() {
 func (a *App) selftestHistoryActions() {
 	pngBytes := syntheticScreenshot()
 	if len(pngBytes) == 0 {
-		fmt.Printf("SELFTEST historyactions: no synthetic image\n")
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST historyactions: no synthetic image\n")
 	}
 	if _, err := a.storeCapture(pngBytes); err != nil {
-		fmt.Printf("SELFTEST historyactions: seed error %v\n", err)
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST historyactions: seed error %v\n", err)
 	}
 	entries := a.historyEntries()
 	if len(entries) == 0 {
-		fmt.Printf("SELFTEST historyactions: no history entries\n")
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST historyactions: no history entries\n")
 	}
 	id := entries[0].ID
 	history := &HistoryService{app: a}
@@ -1570,7 +1662,7 @@ func (a *App) selftestHistoryActions() {
 	mygo.Clipboard.Clear()
 	if err := history.Copy(id); err != nil {
 		ok = false
-		fmt.Printf("SELFTEST historyactions: copy error %v\n", err)
+		selftestFail("SELFTEST historyactions: copy error %v\n", err)
 	}
 	copiedW, copiedH := imageDimensions(mygo.Clipboard.ReadImage())
 	pinID, pinErr := history.Pin(id)
@@ -1579,31 +1671,31 @@ func (a *App) selftestHistoryActions() {
 	a.mu.Unlock()
 	if pinErr != nil {
 		ok = false
-		fmt.Printf("SELFTEST historyactions: pin error %v\n", pinErr)
+		selftestFail("SELFTEST historyactions: pin error %v\n", pinErr)
 	} else if pinCount == 0 {
 		ok = false
-		fmt.Printf("SELFTEST historyactions: pin did not open a window\n")
+		selftestFail("SELFTEST historyactions: pin did not open a window\n")
 	}
 	if pinID != "" {
-		_ = a.closePin(pinID)
+		selftestCheckError(a.closePin(pinID))
 	}
 	before := len(a.historyEntries())
 	if err := history.Remove(id); err != nil {
 		ok = false
-		fmt.Printf("SELFTEST historyactions: remove error %v\n", err)
+		selftestFail("SELFTEST historyactions: remove error %v\n", err)
 	}
 	after := len(a.historyEntries())
 	fmt.Printf("SELFTEST historyactions: clipboard=%dx%d pins=%d remove before=%d after=%d delta=%d\n", copiedW, copiedH, pinCount, before, after, before-after)
+	selftestRequire(copiedW == 1280 && copiedH == 800 && pinCount == 1 && before-after == 1, "history action measurements mismatch")
 	if copiedW == 0 {
 		ok = false
 	}
 	if ok {
-		fmt.Printf("SELFTEST historyactions: checks=ok\n")
-		mygo.App.Exit(0)
+		selftestExit(0)
 		return
 	}
-	fmt.Printf("SELFTEST historyactions: checks=FAILED\n")
-	mygo.App.Exit(1)
+	selftestFail("SELFTEST historyactions: checks=FAILED\n")
+	selftestExit(1)
 }
 
 // selftestTextStyle drives the text tool's formatting controls: they only show
@@ -1619,52 +1711,47 @@ func (a *App) selftestTextStyle() {
 	annotating := false
 	for attempt := 1; attempt <= 2 && !annotating; attempt++ {
 		if err := a.beginRegion(); err != nil {
-			fmt.Printf("SELFTEST textstyle: begin error %v\n", err)
+			selftestFail("SELFTEST textstyle: begin error %v\n", err)
 			break
 		}
 		time.Sleep(1200 * time.Millisecond)
 		if err := a.dragOverlaySelection(80, 90, 520, 380); err != nil {
-			fmt.Printf("SELFTEST textstyle: drag error %v\n", err)
+			selftestFail("SELFTEST textstyle: drag error %v\n", err)
 		}
 		if err := a.waitOverlayAnnotating(10 * time.Second); err == nil {
 			annotating = true
 			break
 		}
-		fmt.Printf("SELFTEST textstyle: annotating attempt %d failed %v\n", attempt, a.overlayEval(`(() => { const c = document.getElementById('overlayCanvas'); const t = document.getElementById('annotationToolbar'); return JSON.stringify({ canvas: c ? (c.hidden ? 'hidden' : c.width + 'x' + c.height) : 'missing', toolbar: t ? (t.hidden ? 'hidden' : 'shown') : 'missing', phase: document.getElementById('overlayStatus')?.textContent }); })()`))
+		selftestFail("SELFTEST textstyle: annotating attempt %d failed %v\n", attempt, a.overlayEval(`(() => { const c = document.getElementById('overlayCanvas'); const t = document.getElementById('annotationToolbar'); return JSON.stringify({ canvas: c ? (c.hidden ? 'hidden' : c.width + 'x' + c.height) : 'missing', toolbar: t ? (t.hidden ? 'hidden' : 'shown') : 'missing', phase: document.getElementById('overlayStatus')?.textContent }); })()`))
 		a.cancelRegion()
 		time.Sleep(800 * time.Millisecond)
 	}
 	if !annotating {
-		fmt.Printf("SELFTEST textstyle: checks=FAILED\n")
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST textstyle: checks=FAILED\n")
 	}
 	eval := func(js string) string {
 		return strings.TrimSpace(fmt.Sprint(a.overlayEval(js)))
 	}
-	// The style is persisted in localStorage and shared with the user's app:
-	// save it up front and put it back before exiting so the selftest never
-	// changes the user's text defaults.
+	// Keep the temporary test session's text defaults stable between steps.
+	// Selftest windows share an ephemeral store, separate from the user's app.
 	savedStyle := ""
 	if a.main != nil {
-		if v, err := a.main.Page().Eval("localStorage.getItem('pinstill.textStyle') ?? ''"); err == nil {
-			savedStyle = fmt.Sprint(v)
-		}
+		savedStyle = fmt.Sprint(selftestValue(a.main.Page().Eval("localStorage.getItem('pinstill.textStyle') ?? ''")))
 	}
 	restoreStyle := func() {
 		if a.main == nil {
 			return
 		}
 		if savedStyle == "" {
-			_, _ = a.main.Page().Eval("localStorage.removeItem('pinstill.textStyle')")
+			selftestValue(a.main.Page().Eval("localStorage.removeItem('pinstill.textStyle')"))
 			return
 		}
-		_, _ = a.main.Page().Eval(fmt.Sprintf("localStorage.setItem('pinstill.textStyle', %q)", savedStyle))
+		selftestValue(a.main.Page().Eval(fmt.Sprintf("localStorage.setItem('pinstill.textStyle', %q)", savedStyle)))
 	}
 	ok := true
 	failCheck := func(format string, args ...any) {
 		ok = false
-		fmt.Printf("SELFTEST textstyle: "+format+"\n", args...)
+		selftestFail(format, args...)
 	}
 	eval(`document.querySelector('[data-tool="text"]')?.click(), 'ok'`)
 	time.Sleep(350 * time.Millisecond)
@@ -1718,12 +1805,11 @@ func (a *App) selftestTextStyle() {
 	}
 	restoreStyle()
 	if ok {
-		fmt.Printf("SELFTEST textstyle: checks=ok\n")
-		mygo.App.Exit(0)
+		selftestExit(0)
 		return
 	}
-	fmt.Printf("SELFTEST textstyle: checks=FAILED\n")
-	mygo.App.Exit(1)
+	selftestFail("SELFTEST textstyle: checks=FAILED\n")
+	selftestExit(1)
 }
 
 // selftestDoubleClick proves that double-clicking the captured image finishes
@@ -1737,25 +1823,23 @@ func (a *App) selftestDoubleClick() {
 	annotating := false
 	for attempt := 1; attempt <= 2 && !annotating; attempt++ {
 		if err := a.beginRegion(); err != nil {
-			fmt.Printf("SELFTEST dblclick: begin error %v\n", err)
+			selftestFail("SELFTEST dblclick: begin error %v\n", err)
 			break
 		}
 		time.Sleep(1200 * time.Millisecond)
 		if err := a.dragOverlaySelection(80, 90, 400, 300); err != nil {
-			fmt.Printf("SELFTEST dblclick: drag error %v\n", err)
+			selftestFail("SELFTEST dblclick: drag error %v\n", err)
 		}
 		if err := a.waitOverlayAnnotating(10 * time.Second); err == nil {
 			annotating = true
 			break
 		}
-		fmt.Printf("SELFTEST dblclick: annotating attempt %d failed\n", attempt)
+		selftestFail("SELFTEST dblclick: annotating attempt %d failed\n", attempt)
 		a.cancelRegion()
 		time.Sleep(800 * time.Millisecond)
 	}
 	if !annotating {
-		fmt.Printf("SELFTEST dblclick: checks=FAILED\n")
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST dblclick: checks=FAILED\n")
 	}
 	click := func() string {
 		return strings.TrimSpace(fmt.Sprint(a.overlayEval(`(() => {
@@ -1776,13 +1860,11 @@ func (a *App) selftestDoubleClick() {
 	img := mygo.Clipboard.ReadImage()
 	width, height := imageDimensions(img)
 	fmt.Printf("SELFTEST dblclick: first=%s second=%s clipboard=%dx%d\n", first, second, width, height)
+	selftestRequire(first == "clicked" && second == "clicked" && width > 0 && height > 0, "double click did not copy image")
 	if width == 0 {
-		fmt.Printf("SELFTEST dblclick: checks=FAILED\n")
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST dblclick: checks=FAILED\n")
 	}
-	fmt.Printf("SELFTEST dblclick: checks=ok\n")
-	mygo.App.Exit(0)
+	selftestExit(0)
 }
 
 // selftestResize proves the capture can be adjusted after it landed: dragging
@@ -1795,25 +1877,23 @@ func (a *App) selftestResize() {
 	annotating := false
 	for attempt := 1; attempt <= 2 && !annotating; attempt++ {
 		if err := a.beginRegion(); err != nil {
-			fmt.Printf("SELFTEST resize: begin error %v\n", err)
+			selftestFail("SELFTEST resize: begin error %v\n", err)
 			break
 		}
 		time.Sleep(1200 * time.Millisecond)
 		if err := a.dragOverlaySelection(80, 90, 400, 300); err != nil {
-			fmt.Printf("SELFTEST resize: drag error %v\n", err)
+			selftestFail("SELFTEST resize: drag error %v\n", err)
 		}
 		if err := a.waitOverlayAnnotating(10 * time.Second); err == nil {
 			annotating = true
 			break
 		}
-		fmt.Printf("SELFTEST resize: annotating attempt %d failed\n", attempt)
+		selftestFail("SELFTEST resize: annotating attempt %d failed\n", attempt)
 		a.cancelRegion()
 		time.Sleep(800 * time.Millisecond)
 	}
 	if !annotating {
-		fmt.Printf("SELFTEST resize: checks=FAILED\n")
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST resize: checks=FAILED\n")
 	}
 	eval := func(js string) string {
 		return strings.TrimSpace(fmt.Sprint(a.overlayEval(js)))
@@ -1839,7 +1919,9 @@ func (a *App) selftestResize() {
 	fmt.Printf("SELFTEST resize: pressed=%s canvas_hidden_mid=%s masks_hidden_mid=%s point=%s\n", down, midHidden, midMask, handlePoint)
 	if a.overlay != nil {
 		if pagePNG, err := a.overlay.CapturePage(); err == nil {
-			_ = os.WriteFile("/tmp/pinstill-resize-mid.png", pagePNG, 0o644)
+			selftestArtifact("pinstill-resize-mid.png", pagePNG)
+		} else {
+			selftestFail("resize capture: %v", err)
 		}
 	}
 	dragged := eval(`(() => {
@@ -1898,15 +1980,14 @@ func (a *App) selftestResize() {
 	shrinkMS := time.Since(shrinkStart).Milliseconds()
 	fmt.Printf("SELFTEST resize: shrink before=%s after=%s shrink_ms=%d dragged=%s\n", beforeShrink, afterShrink, shrinkMS, shrinkDragged)
 	if handles != "4" || before == "missing" || dragged != "dragged" || !recaptured || shrinkDragged != "dragged" || afterShrink == beforeShrink || afterShrink == "missing" || midHidden != "true" || midMask != "true" {
-		fmt.Printf("SELFTEST resize: checks=FAILED\n")
+		selftestFail("SELFTEST resize: checks=FAILED\n")
 		a.cancelRegion()
-		mygo.App.Exit(1)
+		selftestExit(1)
 		return
 	}
-	fmt.Printf("SELFTEST resize: checks=ok\n")
 	a.cancelRegion()
 	time.Sleep(300 * time.Millisecond)
-	mygo.App.Exit(0)
+	selftestExit(0)
 }
 
 // selftestWatermark drives the tiled watermark: the tool toggles a repeated
@@ -1920,46 +2001,42 @@ func (a *App) selftestWatermark() {
 	annotating := false
 	for attempt := 1; attempt <= 2 && !annotating; attempt++ {
 		if err := a.beginRegion(); err != nil {
-			fmt.Printf("SELFTEST watermark: begin error %v\n", err)
+			selftestFail("SELFTEST watermark: begin error %v\n", err)
 			break
 		}
 		time.Sleep(1200 * time.Millisecond)
 		if err := a.dragOverlaySelection(80, 90, 520, 380); err != nil {
-			fmt.Printf("SELFTEST watermark: drag error %v\n", err)
+			selftestFail("SELFTEST watermark: drag error %v\n", err)
 		}
 		if err := a.waitOverlayAnnotating(10 * time.Second); err == nil {
 			annotating = true
 			break
 		}
-		fmt.Printf("SELFTEST watermark: annotating attempt %d failed\n", attempt)
+		selftestFail("SELFTEST watermark: annotating attempt %d failed\n", attempt)
 		a.cancelRegion()
 		time.Sleep(800 * time.Millisecond)
 	}
 	if !annotating {
-		fmt.Printf("SELFTEST watermark: checks=FAILED\n")
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST watermark: checks=FAILED\n")
 	}
 	eval := func(js string) string {
 		return strings.TrimSpace(fmt.Sprint(a.overlayEval(js)))
 	}
-	// The watermark defaults live in localStorage and are shared with the
-	// user's app: save them and put them back before exiting.
+	// Restore watermark defaults inside the temporary test session. Selftest
+	// windows share an ephemeral store, separate from the user's app.
 	savedWatermark := ""
 	if a.main != nil {
-		if v, err := a.main.Page().Eval("localStorage.getItem('pinstill.watermark') ?? ''"); err == nil {
-			savedWatermark = fmt.Sprint(v)
-		}
+		savedWatermark = fmt.Sprint(selftestValue(a.main.Page().Eval("localStorage.getItem('pinstill.watermark') ?? ''")))
 	}
 	restoreWatermark := func() {
 		if a.main == nil {
 			return
 		}
 		if savedWatermark == "" {
-			_, _ = a.main.Page().Eval("localStorage.removeItem('pinstill.watermark')")
+			selftestValue(a.main.Page().Eval("localStorage.removeItem('pinstill.watermark')"))
 			return
 		}
-		_, _ = a.main.Page().Eval(fmt.Sprintf("localStorage.setItem('pinstill.watermark', %q)", savedWatermark))
+		selftestValue(a.main.Page().Eval(fmt.Sprintf("localStorage.setItem('pinstill.watermark', %q)", savedWatermark)))
 	}
 	canvasHash := `(() => {
 		const c = document.getElementById('overlayCanvas');
@@ -1997,9 +2074,9 @@ func (a *App) selftestWatermark() {
 	ok := shown == "true" && renderedHash != baseHash && editedHash != renderedHash && opacityLabel == "45%" && hiddenAfter == "true" && offHash == baseHash
 	if !ok {
 		restoreWatermark()
-		fmt.Printf("SELFTEST watermark: checks=FAILED\n")
+		selftestFail("SELFTEST watermark: checks=FAILED\n")
 		a.cancelRegion()
-		mygo.App.Exit(1)
+		selftestExit(1)
 		return
 	}
 	// Copy with the watermark enabled: the exported image must include it.
@@ -2013,12 +2090,9 @@ func (a *App) selftestWatermark() {
 	fmt.Printf("SELFTEST watermark: clipboard=%dx%d\n", width, height)
 	restoreWatermark()
 	if width == 0 || height == 0 {
-		fmt.Printf("SELFTEST watermark: checks=FAILED\n")
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST watermark: checks=FAILED\n")
 	}
-	fmt.Printf("SELFTEST watermark: checks=ok\n")
-	mygo.App.Exit(0)
+	selftestExit(0)
 }
 
 // selftestResizeStress repeats grow re-captures the way a user refines the
@@ -2031,25 +2105,23 @@ func (a *App) selftestResizeStress() {
 	annotating := false
 	for attempt := 1; attempt <= 3 && !annotating; attempt++ {
 		if err := a.beginRegion(); err != nil {
-			fmt.Printf("SELFTEST resizestress: begin error %v\n", err)
+			selftestFail("SELFTEST resizestress: begin error %v\n", err)
 			break
 		}
 		time.Sleep(1200 * time.Millisecond)
 		if err := a.dragOverlaySelection(80, 90, 400, 300); err != nil {
-			fmt.Printf("SELFTEST resizestress: drag error %v\n", err)
+			selftestFail("SELFTEST resizestress: drag error %v\n", err)
 		}
 		if err := a.waitOverlayAnnotating(10 * time.Second); err == nil {
 			annotating = true
 			break
 		}
-		fmt.Printf("SELFTEST resizestress: annotating attempt %d failed\n", attempt)
+		selftestFail("SELFTEST resizestress: annotating attempt %d failed\n", attempt)
 		a.cancelRegion()
 		time.Sleep(900 * time.Millisecond)
 	}
 	if !annotating {
-		fmt.Printf("SELFTEST resizestress: checks=FAILED\n")
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST resizestress: checks=FAILED\n")
 	}
 	eval := func(js string) string {
 		return strings.TrimSpace(fmt.Sprint(a.overlayEval(js)))
@@ -2088,15 +2160,14 @@ func (a *App) selftestResizeStress() {
 		time.Sleep(250 * time.Millisecond)
 	}
 	if failures > 0 {
-		fmt.Printf("SELFTEST resizestress: checks=FAILED\n")
+		selftestFail("SELFTEST resizestress: checks=FAILED\n")
 		a.cancelRegion()
-		mygo.App.Exit(1)
+		selftestExit(1)
 		return
 	}
-	fmt.Printf("SELFTEST resizestress: checks=ok\n")
 	a.cancelRegion()
 	time.Sleep(300 * time.Millisecond)
-	mygo.App.Exit(0)
+	selftestExit(0)
 }
 
 // selftestHold keeps the app running so its native shell can be inspected
@@ -2104,7 +2175,7 @@ func (a *App) selftestResizeStress() {
 func (a *App) selftestHold() {
 	fmt.Printf("SELFTEST hold: READY pid=%d\n", os.Getpid())
 	time.Sleep(25 * time.Second)
-	mygo.App.Exit(0)
+	selftestExit(0)
 }
 
 // selftestHotkeyPress presses the registered capture shortcut through
@@ -2128,14 +2199,16 @@ func (a *App) selftestHotkeyPress() {
 		"tell application \"System Events\" to keystroke \""+strings.ToLower(key)+"\" using {command down, shift down}")
 	out, err := cmd.CombinedOutput()
 	fmt.Printf("SELFTEST hotkeypress: synthetic press err=%v out=%s\n", err, strings.TrimSpace(string(out)))
+	selftestCheckError(err)
 	time.Sleep(1500 * time.Millisecond)
 	visible := a.overlay != nil && a.overlay.IsVisible()
 	fmt.Printf("SELFTEST hotkeypress: overlay visible after synthetic press=%v\n", visible)
+	selftestRequire(mygo.GlobalShortcut.IsRegistered(captureKey) && visible, "synthetic hotkey was not registered or delivered")
 	if visible {
 		a.cancelRegion()
 		time.Sleep(400 * time.Millisecond)
 	}
-	mygo.App.Exit(0)
+	selftestExit(0)
 }
 
 // virtualDesktopRect covers every display, so a selftest screenshot shows
@@ -2160,27 +2233,29 @@ func virtualDesktopRect() capture.Rect {
 func (a *App) selftestHotkeys() {
 	// The page applies settings as it loads; apply them here too so the
 	// report describes the settled state rather than a mid-load moment.
-	a.applySettings(a.settingsSnapshot())
+	selftestSettingsErrors(a.applySettings(a.settingsSnapshot()))
 	time.Sleep(150 * time.Millisecond)
 	for _, key := range []string{"captureKey", "pinKey", "ocrKey"} {
 		a.mu.Lock()
 		acc := a.shortcutKeys[key]
 		a.mu.Unlock()
 		fmt.Printf("SELFTEST hotkeys: %s %q registered=%v\n", key, acc, mygo.GlobalShortcut.IsRegistered(acc))
+		selftestRequire(acc != "" && mygo.GlobalShortcut.IsRegistered(acc), "shortcut %s is not registered", key)
 	}
-	mygo.App.Exit(0)
+	selftestExit(0)
 }
 
 func (a *App) selftestSettings() {
 	errs := a.applySettings(DefaultSettings())
 	fmt.Printf("SELFTEST settings: apply errors=%v\n", errs)
+	selftestSettingsErrors(errs)
 	a.mu.Lock()
 	keys := a.shortcutKeys
 	a.mu.Unlock()
 	for key, acc := range keys {
 		fmt.Printf("SELFTEST settings: %s=%s\n", key, acc)
 	}
-	mygo.App.Exit(0)
+	selftestExit(0)
 }
 
 // selftestPerms drives the main window into Settings > Permissions and checks
@@ -2189,16 +2264,14 @@ func (a *App) selftestSettings() {
 // the banner actions.
 func (a *App) selftestPerms() {
 	if a.main == nil {
-		fmt.Printf("SELFTEST perms: no main window\n")
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST perms: no main window\n")
 	}
 	a.showMain()
 	time.Sleep(1500 * time.Millisecond)
 	eval := func(js string) string {
 		v, err := a.main.Page().Eval(js)
 		if err != nil {
-			fmt.Printf("SELFTEST perms: eval error %v\n", err)
+			selftestFail("SELFTEST perms: eval error %v\n", err)
 			return ""
 		}
 		return fmt.Sprint(v)
@@ -2230,7 +2303,7 @@ func (a *App) selftestPerms() {
 	ok := true
 	failCheck := func(format string, args ...any) {
 		ok = false
-		fmt.Printf("SELFTEST perms: "+format+"\n", args...)
+		selftestFail(format, args...)
 	}
 	hasStatusToken := func(text string) bool {
 		return strings.Contains(text, "已授权") || strings.Contains(text, "未授权") || strings.Contains(text, "浏览器预览")
@@ -2285,12 +2358,11 @@ func (a *App) selftestPerms() {
 		}
 	}
 	if ok {
-		fmt.Printf("SELFTEST perms: checks=ok\n")
-		mygo.App.Exit(0)
+		selftestExit(0)
 		return
 	}
-	fmt.Printf("SELFTEST perms: checks=FAILED\n")
-	mygo.App.Exit(1)
+	selftestFail("SELFTEST perms: checks=FAILED\n")
+	selftestExit(1)
 }
 
 // selftestPalette drives the R7.8 in-app colour palette panel: the overlay
@@ -2301,7 +2373,7 @@ func (a *App) selftestPalette() {
 	ok := true
 	failCheck := func(format string, args ...any) {
 		ok = false
-		fmt.Printf("SELFTEST palette: "+format+"\n", args...)
+		selftestFail(format, args...)
 	}
 	evalOverlay := func(js string) string {
 		v := a.overlayEval(js)
@@ -2313,7 +2385,8 @@ func (a *App) selftestPalette() {
 		}
 		v, err := a.main.Page().Eval(js)
 		if err != nil {
-			return fmt.Sprintf("error: %v", err)
+			selftestFail("eval: %v", err)
+			return ""
 		}
 		return strings.TrimSpace(fmt.Sprint(v))
 	}
@@ -2322,12 +2395,12 @@ func (a *App) selftestPalette() {
 	annotated := false
 	for attempt := 1; attempt <= 2 && !annotated; attempt++ {
 		if err := a.beginRegion(); err != nil {
-			fmt.Printf("SELFTEST palette: begin error %v\n", err)
+			selftestFail("SELFTEST palette: begin error %v\n", err)
 			break
 		}
 		time.Sleep(1200 * time.Millisecond)
 		if err := a.dragOverlaySelection(80, 90, 420, 320); err != nil {
-			fmt.Printf("SELFTEST palette: drag error %v\n", err)
+			selftestFail("SELFTEST palette: drag error %v\n", err)
 		}
 		if err := a.waitOverlayAnnotating(10 * time.Second); err == nil {
 			annotated = true
@@ -2338,9 +2411,7 @@ func (a *App) selftestPalette() {
 		time.Sleep(800 * time.Millisecond)
 	}
 	if !annotated {
-		fmt.Printf("SELFTEST palette: checks=FAILED\n")
-		mygo.App.Exit(1)
-		return
+		selftestFail("SELFTEST palette: checks=FAILED\n")
 	}
 
 	// 2. Open the panel from the overlay toolbar.
@@ -2434,10 +2505,9 @@ func (a *App) selftestPalette() {
 	}
 
 	if ok {
-		fmt.Printf("SELFTEST palette: checks=ok\n")
-		mygo.App.Exit(0)
+		selftestExit(0)
 		return
 	}
-	fmt.Printf("SELFTEST palette: checks=FAILED\n")
-	mygo.App.Exit(1)
+	selftestFail("SELFTEST palette: checks=FAILED\n")
+	selftestExit(1)
 }

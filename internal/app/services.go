@@ -4,15 +4,13 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"image"
-	"image/jpeg"
-	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/echoVic/Pinstill/internal/capture"
+	"github.com/echoVic/Pinstill/internal/imagebudget"
 	"github.com/egoist/mygo"
 )
 
@@ -41,7 +39,7 @@ func (s *CaptureService) PrepareSelectionFast(rect Rect) (OverlayCapturePayload,
 
 // FinishAnnotated completes an in-place annotation: it stores the composited
 // image and runs the chosen action (copy, pin, save or cancel).
-func (s *CaptureService) FinishAnnotated(action string, dataBase64 string) error {
+func (s *CaptureService) FinishAnnotated(action string, dataBase64 string) (CaptureActionResult, error) {
 	return s.app.finishAnnotated(action, dataBase64)
 }
 
@@ -51,32 +49,36 @@ func (s *CaptureService) StartScroll(rect Rect, autoScroll bool) error {
 }
 
 // FinishScroll stops the scrolling capture and runs the chosen action.
-func (s *CaptureService) FinishScroll(action string) error {
-	return s.app.finishScroll(action)
+func (s *CaptureService) FinishScroll(sessionID string, action string) error {
+	return s.app.finishScrollFor(sessionID, action)
 }
 
 // SetScrollAuto switches a running scroll capture between auto and manual
 // scrolling.
-func (s *CaptureService) SetScrollAuto(enabled bool) error {
-	return s.app.setScrollAuto(enabled)
+func (s *CaptureService) SetScrollAuto(sessionID string, enabled bool) error {
+	return s.app.setScrollAutoFor(sessionID, enabled)
 }
 
 // SetScrollPaused pauses or resumes frame capturing for the running session.
-func (s *CaptureService) SetScrollPaused(paused bool) error {
-	return s.app.setScrollPaused(paused)
+func (s *CaptureService) SetScrollPaused(sessionID string, paused bool) error {
+	return s.app.setScrollPausedFor(sessionID, paused)
 }
 
 // CopyScrollResult puts the stitched long image on the clipboard.
-func (s *CaptureService) CopyScrollResult() error { return s.app.copyScrollResult() }
+func (s *CaptureService) CopyScrollResult(id string) error { return s.app.copyScrollResultFor(id) }
 
 // SaveScrollResult saves the stitched long image through the save dialog.
-func (s *CaptureService) SaveScrollResult() (string, error) { return s.app.saveScrollResult() }
+func (s *CaptureService) SaveScrollResult(id string) (string, error) {
+	return s.app.saveScrollResultFor(id)
+}
 
 // PinScrollResult opens the stitched long image as a desktop pin.
-func (s *CaptureService) PinScrollResult() (string, error) { return s.app.pinScrollResult() }
+func (s *CaptureService) PinScrollResult(id string) (string, error) {
+	return s.app.pinScrollResultFor(id)
+}
 
 // CloseScrollResult closes the scroll result preview window.
-func (s *CaptureService) CloseScrollResult() { s.app.closeScrollResult() }
+func (s *CaptureService) CloseScrollResult(id string) error { return s.app.closeScrollResultFor(id) }
 
 // ScrollAccessibilityGranted reports whether automatic scrolling is allowed.
 func (s *CaptureService) ScrollAccessibilityGranted() bool { return capture.AccessibilityGranted() }
@@ -118,52 +120,9 @@ func (s *CaptureService) CaptureFullScreen() CaptureResult {
 	return CaptureResult{}
 }
 
-// CopyImage puts a PNG on the system clipboard.
-func (s *CaptureService) CopyImage(dataBase64 string) error {
-	pngBytes, err := toPNG(dataBase64)
-	if err != nil {
-		return err
-	}
-	return s.app.copyImagePNG(pngBytes)
-}
-
-// ExportImage asks where to save the annotated image, converts it to the
-// configured format, and writes it. It returns the path, or "" when the
-// user canceled.
-func (s *CaptureService) ExportImage(dataBase64 string, suggestedName string) (string, error) {
-	settings := s.app.settingsSnapshot()
-	raw, err := decodeImageBase64(dataBase64)
-	if err != nil {
-		return "", err
-	}
-	data, ext, err := normalizeExport(raw, settings)
-	if err != nil {
-		return "", err
-	}
-	name := replaceExtension(sanitizeExportName(suggestedName, settings), ext)
-	defaultPath := name
-	if folder, folderErr := expandHome(settings.Folder); folderErr == nil {
-		if info, statErr := os.Stat(folder); statErr == nil && info.IsDir() {
-			defaultPath = filepath.Join(folder, name)
-		}
-	}
-	path, err := saveDialog(s.app, defaultPath, ext)
-	if err != nil {
-		return "", err
-	}
-	if path == "" {
-		return "", nil
-	}
-	path = replaceExtension(path, ext)
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return "", fmt.Errorf("写入文件失败: %w", err)
-	}
-	return path, nil
-}
-
-// SaveImageToFolder writes the annotated image into the configured folder
+// saveImageToFolder writes the annotated image into the configured folder
 // without asking. It returns the written path.
-func (s *CaptureService) SaveImageToFolder(dataBase64 string) (string, error) {
+func (s *CaptureService) saveImageToFolder(dataBase64 string) (string, error) {
 	settings := s.app.settingsSnapshot()
 	raw, err := decodeImageBase64(dataBase64)
 	if err != nil {
@@ -181,21 +140,12 @@ func (s *CaptureService) SaveImageToFolder(dataBase64 string) (string, error) {
 		return "", fmt.Errorf("保存文件夹不可用: %w", err)
 	}
 	name := replaceExtension(sanitizeExportName("", settings), ext)
-	path := uniquePath(filepath.Join(folder, name))
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	path, err := writeUniqueFile(filepath.Join(folder, name), data)
+	if err != nil {
 		return "", fmt.Errorf("写入文件失败: %w", err)
 	}
 	s.app.toast("已保存到 "+path, "success")
 	return path, nil
-}
-
-// PinImage opens an always-on-top pin window showing the image.
-func (s *CaptureService) PinImage(dataBase64 string) (string, error) {
-	pngBytes, err := toPNG(dataBase64)
-	if err != nil {
-		return "", err
-	}
-	return s.app.pinPNG(pngBytes, 0, 0)
 }
 
 // PinClipboard opens a pin window showing the image on the clipboard.
@@ -203,6 +153,19 @@ func (s *CaptureService) PinClipboard() (string, error) { return s.app.pinClipbo
 
 // ClosePin closes a pin window.
 func (s *CaptureService) ClosePin(id string) error { return s.app.closePin(id) }
+
+// ListArchivedPins lists images deliberately kept closed at launch.
+func (s *CaptureService) ListArchivedPins() []PinArchiveEntry {
+	states := s.app.archivedPinStates()
+	entries := make([]PinArchiveEntry, 0, len(states))
+	for _, st := range states {
+		entries = append(entries, PinArchiveEntry{ID: st.ID, URL: s.app.pinURL(st.File), Width: st.Width, Height: st.Height, CreatedAt: st.CreatedAt.Format(time.RFC3339)})
+	}
+	return entries
+}
+
+// RestoreArchivedPin reopens a saved pin only at the user's request.
+func (s *CaptureService) RestoreArchivedPin(id string) error { return s.app.restoreArchivedPin(id) }
 
 // ApplySettings applies the user's settings and returns the ones that could
 // not be applied, keyed by setting name.
@@ -326,25 +289,26 @@ func normalizeExport(raw []byte, settings Settings) ([]byte, string, error) {
 	if settings.Format == "JPEG" {
 		want = "jpg"
 	}
-	if actual == want {
-		return raw, want, nil
-	}
-	img, _, err := image.Decode(bytes.NewReader(raw))
+	img, _, err := imagebudget.Decode(raw)
 	if err != nil {
 		return nil, "", fmt.Errorf("图片解码失败: %w", err)
 	}
-	var out bytes.Buffer
+	if actual == want {
+		return raw, want, nil
+	}
 	if want == "jpg" {
 		quality := min(max(settings.Quality, 10), 100)
-		if err := jpeg.Encode(&out, img, &jpeg.Options{Quality: quality}); err != nil {
+		out, err := imagebudget.EncodeJPEG(img, quality)
+		if err != nil {
 			return nil, "", fmt.Errorf("JPEG 编码失败: %w", err)
 		}
-		return out.Bytes(), "jpg", nil
+		return out, "jpg", nil
 	}
-	if err := png.Encode(&out, img); err != nil {
+	out, err := imagebudget.EncodePNG(img)
+	if err != nil {
 		return nil, "", fmt.Errorf("PNG 编码失败: %w", err)
 	}
-	return out.Bytes(), "png", nil
+	return out, "png", nil
 }
 
 // toPNG decodes an image and re-encodes it as PNG, for the clipboard and
@@ -354,22 +318,8 @@ func toPNG(data string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	actual, err := detectImageFormat(raw)
-	if err != nil {
-		return nil, err
-	}
-	if actual == "png" {
-		return raw, nil
-	}
-	img, _, err := image.Decode(bytes.NewReader(raw))
-	if err != nil {
-		return nil, fmt.Errorf("图片解码失败: %w", err)
-	}
-	var out bytes.Buffer
-	if err := png.Encode(&out, img); err != nil {
-		return nil, fmt.Errorf("PNG 编码失败: %w", err)
-	}
-	return out.Bytes(), nil
+	pngBytes, _, err := normalizeExport(raw, Settings{Format: "PNG"})
+	return pngBytes, err
 }
 
 func detectImageFormat(raw []byte) (string, error) {
@@ -412,6 +362,35 @@ func replaceExtension(path, ext string) string {
 	return base + "." + ext
 }
 
+// writeDialogExport only overwrites the exact path confirmed by the dialog.
+// An adjusted extension names a different destination, which must be new.
+func writeDialogExport(selectedPath, ext string, data []byte) (string, error) {
+	path := replaceExtension(selectedPath, ext)
+	if path == selectedPath {
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			return "", fmt.Errorf("写入文件失败: %w", err)
+		}
+		return path, nil
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if os.IsExist(err) {
+		return "", fmt.Errorf("调整扩展名后的文件 %q 已存在，未覆盖；请重新选择保存路径: %w", path, err)
+	}
+	if err != nil {
+		return "", fmt.Errorf("写入文件失败: %w", err)
+	}
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return "", fmt.Errorf("写入文件失败: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", fmt.Errorf("写入文件失败: %w", err)
+	}
+	return path, nil
+}
+
 // savePNGBytes converts and writes one PNG through the native save dialog,
 // starting in the user's default save folder. It returns the path, or ""
 // when the user canceled.
@@ -432,11 +411,7 @@ func (a *App) savePNGBytes(pngBytes []byte) (string, error) {
 	if err != nil || path == "" {
 		return "", err
 	}
-	path = replaceExtension(path, ext)
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return "", fmt.Errorf("写入文件失败: %w", err)
-	}
-	return path, nil
+	return writeDialogExport(path, ext, data)
 }
 
 // saveDialog opens the native save dialog and returns the chosen path, or

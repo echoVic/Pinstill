@@ -95,13 +95,13 @@ func TestClampPinToDisplays(t *testing.T) {
 			name:     "oversized pin is clamped to the work area",
 			state:    withGeometry(testPinState(), 0, 0, 5000, 5000),
 			displays: primaryOnly,
-			want:     withGeometry(testPinState(), 0, 25, 1728, 1052),
+			want:     withGeometry(testPinState(), 0, 25, 1052, 1052),
 		},
 		{
-			name:     "minimum size floor keeps tiny pins usable",
+			name:     "tiny pins retain their dimensions",
 			state:    withGeometry(testPinState(), 10, 100, 4, 4),
 			displays: primaryOnly,
-			want:     withGeometry(testPinState(), 10, 100, 32, 32),
+			want:     withGeometry(testPinState(), 10, 100, 4, 4),
 		},
 		{
 			name:     "pin on a negative-coordinate display stays in place",
@@ -134,10 +134,10 @@ func TestClampPinToDisplays(t *testing.T) {
 			want:     withGeometry(testPinState(), 1328, 777, 400, 300),
 		},
 		{
-			name:     "tiny pin on the right display is raised to the minimum size",
+			name:     "tiny pin on the right display retains its dimensions",
 			state:    withGeometry(testPinState(), 1800, 100, 8, 8),
 			displays: allDisplays,
-			want:     withGeometry(testPinState(), 1800, 100, 32, 32),
+			want:     withGeometry(testPinState(), 1800, 100, 8, 8),
 		},
 		{
 			name:     "zero work area falls back to the display bounds",
