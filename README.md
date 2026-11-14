@@ -266,7 +266,7 @@ work/plan.md                  已被当前实现取代的历史开发记录
 - [x] 权限中心、登录启动、7 类偏好设置
 - [ ] OCR / 翻译 / 二维码接入
 - [ ] Windows 真机验证与适配
-- [x] 提供二进制 release（[下载 v0.1.0](https://github.com/echoVic/Pinstill/releases/tag/v0.1.0)）
+- [x] 提供二进制 release（[下载 v0.1.1](https://github.com/echoVic/Pinstill/releases/tag/v0.1.1)）
 
 ## 参与贡献
 

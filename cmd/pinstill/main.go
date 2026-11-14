@@ -25,7 +25,7 @@ func main() {
 	// Carry captures, pins and settings over from the pre-rename builds.
 	app.MigrateLegacyData()
 	mygo.App.SetName("Pinstill")
-	mygo.App.SetVersion("0.1.0")
+	mygo.App.SetVersion("0.1.1")
 
 	pinstill := app.New()
 	pinstill.Bind()
