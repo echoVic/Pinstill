@@ -309,13 +309,17 @@ func TestMutationsFailCleanlyOnReadOnlyDirectory(t *testing.T) {
 	}
 }
 
-// sameEntries compares which entries (in which order) a store holds.
+// sameEntries compares which entries (in which order) a store holds. It
+// compares time instants instead of time.Time structs, which also carry a
+// monotonic reading and a location pointer.
 func sameEntries(a, b []Entry) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for i := range a {
-		if a[i] != b[i] {
+		if a[i].ID != b[i].ID || a[i].Width != b[i].Width || a[i].Height != b[i].Height ||
+			a[i].Size != b[i].Size || a[i].File != b[i].File || a[i].Thumb != b[i].Thumb ||
+			!a[i].CreatedAt.Equal(b[i].CreatedAt) {
 			return false
 		}
 	}
