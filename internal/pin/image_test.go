@@ -98,7 +98,7 @@ func TestSaveImageRejectsInvalidPNG(t *testing.T) {
 		t.Fatalf("os.ReadDir() error = %v", err)
 	}
 	for _, entry := range dirEntries {
-		if entry.Name() != indexFileName && entry.Name() != "pin-1.png" {
+		if entry.Name() != indexFileName && entry.Name() != ".pinstill.lock" && entry.Name() != "pin-1.png" {
 			t.Fatalf("unexpected file %q after failed saves", entry.Name())
 		}
 	}

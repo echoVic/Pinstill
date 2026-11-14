@@ -199,8 +199,8 @@ func TestUpsertNormalizesState(t *testing.T) {
 	if stored.X != -40 || stored.Y != 20 {
 		t.Fatalf("position = (%d,%d), want (-40,20)", stored.X, stored.Y)
 	}
-	if stored.Width != minPinSize || stored.Height != minPinSize {
-		t.Fatalf("size = %dx%d, want %dx%d", stored.Width, stored.Height, minPinSize, minPinSize)
+	if stored.Width != 10 || stored.Height != minPinSize {
+		t.Fatalf("size = %dx%d, want %dx%d", stored.Width, stored.Height, 10, minPinSize)
 	}
 	if stored.Opacity != minOpacity {
 		t.Fatalf("Opacity = %v, want %v", stored.Opacity, minOpacity)
@@ -258,9 +258,9 @@ func TestUpsertSizeNormalization(t *testing.T) {
 		wantWidth  int
 		wantHeight int
 	}{
-		{name: "zero becomes minimum", width: 0, height: 0, wantWidth: 32, wantHeight: 32},
-		{name: "negative becomes minimum", width: -100, height: -1, wantWidth: 32, wantHeight: 32},
-		{name: "below minimum clamps", width: 31, height: 20, wantWidth: 32, wantHeight: 32},
+		{name: "zero becomes minimum", width: 0, height: 0, wantWidth: 1, wantHeight: 1},
+		{name: "negative becomes minimum", width: -100, height: -1, wantWidth: 1, wantHeight: 1},
+		{name: "small dimensions retain aspect", width: 31, height: 20, wantWidth: 31, wantHeight: 20},
 		{name: "minimum kept", width: 32, height: 32, wantWidth: 32, wantHeight: 32},
 		{name: "large kept", width: 640, height: 480, wantWidth: 640, wantHeight: 480},
 	}
@@ -520,7 +520,7 @@ func TestInvalidIndexEntriesDropped(t *testing.T) {
 		t.Fatalf("pin-1 X = %d, want 5 (first valid entry)", states[0].X)
 	}
 	// Loaded values are normalized.
-	if states[1].Width != minPinSize || states[1].Height != minPinSize || states[1].Opacity != minOpacity {
+	if states[1].Width != 10 || states[1].Height != 10 || states[1].Opacity != minOpacity {
 		t.Fatalf("pin-4 was not normalized: %+v", states[1])
 	}
 	if _, err := os.Stat(canary); err != nil {
@@ -601,7 +601,7 @@ func TestClear(t *testing.T) {
 		t.Fatalf("os.ReadDir() error = %v", err)
 	}
 	for _, entry := range dirEntries {
-		if entry.Name() != indexFileName {
+		if entry.Name() != indexFileName && entry.Name() != ".pinstill.lock" {
 			t.Fatalf("unexpected file %q left after Clear", entry.Name())
 		}
 	}
@@ -704,7 +704,7 @@ func TestNoTemporaryFilesLeftBehind(t *testing.T) {
 		t.Fatalf("os.ReadDir() error = %v", err)
 	}
 	for _, entry := range dirEntries {
-		if entry.Name() != indexFileName {
+		if entry.Name() != indexFileName && entry.Name() != ".pinstill.lock" {
 			t.Fatalf("unexpected file %q in store directory", entry.Name())
 		}
 	}
@@ -733,5 +733,56 @@ func TestJPEGIsNotAcceptedAsPinImage(t *testing.T) {
 	}
 	if _, err := s.SaveImage("pin-1", nil); !errors.Is(err, ErrInvalidImage) {
 		t.Fatalf("SaveImage(nil) error = %v, want ErrInvalidImage", err)
+	}
+}
+
+func TestRemoveRetriesAfterImageRemovalFailure(t *testing.T) {
+	s := openTestStore(t)
+	pngBytes := testPNG(t, 24, 16)
+	file, err := s.SaveImage("pin-1", pngBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := mustUpsert(t, s, State{ID: "pin-1", File: file, Width: 24, Height: 16, Opacity: 100})
+
+	imagePath := filepath.Join(s.Dir(), file)
+	if err := os.Remove(imagePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(imagePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(imagePath, "blocker"), []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.Remove(state.ID); err == nil {
+		t.Fatal("Remove() returned nil despite an undeletable image path")
+	}
+	if got := s.List(); len(got) != 1 || got[0].ID != state.ID {
+		t.Fatalf("failed Remove() lost the state: %+v", got)
+	}
+
+	if err := os.Remove(filepath.Join(imagePath, "blocker")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(imagePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(imagePath, pngBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(s.Dir())
+	if err != nil {
+		t.Fatalf("reopen after failed removal: %v", err)
+	}
+	if got := reopened.List(); len(got) != 1 || got[0].ID != state.ID {
+		t.Fatalf("reopen lost state needed for retry: %+v", got)
+	}
+	if err := reopened.Remove(state.ID); err != nil {
+		t.Fatalf("retry Remove() error = %v", err)
+	}
+	if _, err := os.Stat(imagePath); !os.IsNotExist(err) {
+		t.Fatalf("image remains after retry: %v", err)
 	}
 }

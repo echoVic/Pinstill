@@ -7,11 +7,10 @@
 package pin
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"image/png"
+
 	"math"
 	"os"
 	"path/filepath"
@@ -21,15 +20,19 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/echoVic/Pinstill/internal/diskio"
+	"github.com/echoVic/Pinstill/internal/imagebudget"
 )
 
 const (
 	indexFileName = "pins.json"
 	indexVersion  = 1
 	imageExt      = ".png"
+	maxIndexBytes = 8 << 20
 
 	// minPinSize is the smallest persisted window size in DIPs.
-	minPinSize = 32
+	minPinSize = 1
 	// minOpacity and maxOpacity bound the persisted window opacity (percent).
 	minOpacity = 10.0
 	maxOpacity = 100.0
@@ -68,6 +71,8 @@ type State struct {
 	Opacity float64 `json:"opacity"`
 	// CreatedAt is the creation time, used to keep a stable restore order.
 	CreatedAt time.Time `json:"createdAt"`
+	// Archived pins retain their image and state but never reopen automatically.
+	Archived bool `json:"archived,omitempty"`
 }
 
 // Store persists pin images and their state in one directory.
@@ -118,6 +123,11 @@ func Open(dir string) (*Store, error) {
 	}
 
 	s := &Store{dir: absolute}
+	unlock, err := diskio.LockDir(absolute)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	// Leftovers from a crash during an atomic write are never useful.
 	removeStaleTempFiles(absolute)
 	states, err := readIndex(absolute)
@@ -170,7 +180,7 @@ func (s *Store) SaveImage(id string, pngBytes []byte) (string, error) {
 	if len(pngBytes) == 0 {
 		return "", fmt.Errorf("%w: empty data", ErrInvalidImage)
 	}
-	if _, err := png.DecodeConfig(bytes.NewReader(pngBytes)); err != nil {
+	if _, err := imagebudget.DecodePNG(pngBytes); err != nil {
 		return "", fmt.Errorf("%w: %v", ErrInvalidImage, err)
 	}
 	file, err := validateFile(validID + imageExt)
@@ -180,6 +190,11 @@ func (s *Store) SaveImage(id string, pngBytes []byte) (string, error) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.lockAndRefresh()
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
 	if err := writeFileAtomic(filepath.Join(s.dir, file), pngBytes, 0o644); err != nil {
 		return "", fmt.Errorf("pin: write image %q: %w", file, err)
 	}
@@ -204,9 +219,12 @@ func (s *Store) ReadImage(st State) ([]byte, error) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	data, err := os.ReadFile(filepath.Join(s.dir, file))
+	data, err := diskio.ReadFile(filepath.Join(s.dir, file), imagebudget.MaxEncodedBytes)
 	if err != nil {
 		return nil, fmt.Errorf("pin: read image %q: %w", file, err)
+	}
+	if _, err := imagebudget.DecodePNG(data); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidImage, err)
 	}
 	return data, nil
 }
@@ -219,6 +237,11 @@ func (s *Store) ReadImage(st State) ([]byte, error) {
 func (s *Store) Upsert(st State) (State, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.lockAndRefresh()
+	if err != nil {
+		return State{}, err
+	}
+	defer unlock()
 
 	id, err := validateID(st.ID)
 	if err != nil {
@@ -266,14 +289,18 @@ func (s *Store) Upsert(st State) (State, error) {
 	}
 	sortStates(next)
 	if err := s.writeIndex(next); err != nil {
+		if diskio.Committed(err) {
+			return st, err
+		}
 		return State{}, err
 	}
 	s.states = next
 	return st, nil
 }
 
-// Remove deletes the state and the image of one pin. Removing an unknown or
-// malformed ID is a no-op, and an already missing image file is ignored.
+// Remove deletes the state of one pin and its image when no other pin uses it.
+// Removing an unknown or malformed ID is a no-op, and an already missing image
+// file is ignored.
 func (s *Store) Remove(id string) error {
 	if _, err := validateID(id); err != nil {
 		return nil
@@ -281,7 +308,13 @@ func (s *Store) Remove(id string) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.lockAndRefresh()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 
+	original := append([]State(nil), s.states...)
 	next := make([]State, 0, len(s.states))
 	var removed State
 	found := false
@@ -300,8 +333,26 @@ func (s *Store) Remove(id string) error {
 		return err
 	}
 	s.states = next
+	for _, current := range next {
+		if current.File == removed.File {
+			return nil
+		}
+		// Distinct spellings can name the same file on macOS and Windows.
+		if strings.EqualFold(current.File, removed.File) {
+			removedInfo, removedErr := os.Stat(filepath.Join(s.dir, removed.File))
+			currentInfo, currentErr := os.Stat(filepath.Join(s.dir, current.File))
+			if removedErr == nil && currentErr == nil && os.SameFile(removedInfo, currentInfo) {
+				return nil
+			}
+		}
+	}
 	if err := removeIfExists(filepath.Join(s.dir, removed.File)); err != nil {
-		return fmt.Errorf("pin: remove image %q: %w", removed.File, err)
+		removeErr := fmt.Errorf("pin: remove image %q: %w", removed.File, err)
+		if rollbackErr := s.writeIndex(original); rollbackErr != nil {
+			return errors.Join(removeErr, fmt.Errorf("pin: restore state after failed image removal: %w", rollbackErr))
+		}
+		s.states = original
+		return removeErr
 	}
 	return nil
 }
@@ -311,6 +362,11 @@ func (s *Store) Remove(id string) error {
 func (s *Store) Clear() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.lockAndRefresh()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 
 	if err := s.writeIndex(nil); err != nil {
 		return err
@@ -353,8 +409,11 @@ func (s *Store) sanitizeStates(states []State) ([]State, bool) {
 		if _, duplicate := seen[normalized.ID]; duplicate {
 			continue
 		}
-		info, err := os.Stat(filepath.Join(s.dir, normalized.File))
-		if err != nil || !info.Mode().IsRegular() {
+		data, err := diskio.ReadFile(filepath.Join(s.dir, normalized.File), imagebudget.MaxEncodedBytes)
+		if err != nil {
+			continue
+		}
+		if _, err := imagebudget.DecodePNG(data); err != nil {
 			continue
 		}
 		seen[normalized.ID] = struct{}{}
@@ -387,6 +446,9 @@ func (s *Store) writeIndex(states []State) error {
 	}
 	data = append(data, '\n')
 	if err := writeFileAtomic(filepath.Join(s.dir, indexFileName), data, 0o644); err != nil {
+		if diskio.Committed(err) {
+			s.states = states
+		}
 		return fmt.Errorf("pin: write index: %w", err)
 	}
 	return nil
@@ -395,18 +457,29 @@ func (s *Store) writeIndex(states []State) error {
 // readIndex loads and decodes pins.json. A missing file is reported as
 // os.ErrNotExist, undecodable content as errCorruptIndex.
 func readIndex(dir string) ([]State, error) {
-	data, err := os.ReadFile(filepath.Join(dir, indexFileName))
+	data, err := diskio.ReadFile(filepath.Join(dir, indexFileName), maxIndexBytes)
 	if err != nil {
 		return nil, fmt.Errorf("pin: read index: %w", err)
 	}
-	var index indexFile
+	// Check the version before decoding records: a newer schema may use a
+	// different record shape and must never be mistaken for corrupt old data.
+	var index struct {
+		Version int             `json:"version"`
+		Pins    json.RawMessage `json:"pins"`
+	}
 	if err := json.Unmarshal(data, &index); err != nil {
 		return nil, fmt.Errorf("%w: %v", errCorruptIndex, err)
 	}
 	if index.Version > indexVersion {
 		return nil, fmt.Errorf("pin: index version %d is newer than supported version %d", index.Version, indexVersion)
 	}
-	return index.Pins, nil
+	var states []State
+	if len(index.Pins) > 0 {
+		if err := json.Unmarshal(index.Pins, &states); err != nil {
+			return nil, fmt.Errorf("%w: %v", errCorruptIndex, err)
+		}
+	}
+	return states, nil
 }
 
 // normalizeState validates and normalizes one state loaded from disk.
@@ -530,37 +603,7 @@ func sortStates(states []State) {
 // writeFileAtomic writes data to path through a temporary file in the same
 // directory followed by a rename, so readers never observe a partial file.
 func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
-	dir := filepath.Dir(path)
-	temp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tempName := temp.Name()
-	discard := func() {
-		_ = temp.Close()
-		_ = os.Remove(tempName)
-	}
-	if _, err := temp.Write(data); err != nil {
-		discard()
-		return err
-	}
-	if err := temp.Sync(); err != nil {
-		discard()
-		return err
-	}
-	if err := temp.Close(); err != nil {
-		_ = os.Remove(tempName)
-		return err
-	}
-	if err := os.Chmod(tempName, mode); err != nil {
-		_ = os.Remove(tempName)
-		return err
-	}
-	if err := os.Rename(tempName, path); err != nil {
-		_ = os.Remove(tempName)
-		return err
-	}
-	return nil
+	return diskio.WriteFileAtomic(path, data, mode)
 }
 
 // removeIfExists deletes path and treats an already missing file as success.
@@ -569,4 +612,63 @@ func removeIfExists(path string) error {
 		return err
 	}
 	return nil
+}
+
+// lockAndRefresh is called with s.mu held. The OS lock covers the complete
+// transaction so independently opened handles cannot overwrite each other.
+func (s *Store) lockAndRefresh() (func(), error) {
+	unlock, err := diskio.LockDir(s.dir)
+	if err != nil {
+		return nil, err
+	}
+	current, err := readIndex(s.dir)
+	if err != nil {
+		unlock()
+		return nil, err
+	}
+	s.states = current
+	return unlock, nil
+}
+
+// PrepareRestore atomically archives older active pins beyond limit and returns
+// the newest active pins. Archived records and their original images are kept.
+func (s *Store) PrepareRestore(limit int) ([]State, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockAndRefresh()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	next := append([]State(nil), s.states...)
+	active := 0
+	for _, st := range next {
+		if !st.Archived {
+			active++
+		}
+	}
+	excess := max(0, active-max(limit, 0))
+	changed := excess > 0
+	for i := range next {
+		if excess == 0 {
+			break
+		}
+		if !next[i].Archived {
+			next[i].Archived = true
+			excess--
+		}
+	}
+	if changed {
+		if err := s.writeIndex(next); err != nil {
+			return nil, err
+		}
+		s.states = next
+	}
+	result := make([]State, 0, len(next))
+	for _, st := range next {
+		if !st.Archived {
+			result = append(result, st)
+		}
+	}
+	return result, nil
 }

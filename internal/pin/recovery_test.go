@@ -2,10 +2,12 @@ package pin
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -243,5 +245,22 @@ func TestListOrderSupportsNewestRestoreCap(t *testing.T) {
 	}
 	if got := listedIDs(again); !slices.Equal(got, ids) {
 		t.Fatalf("List() order changed after a restart: %v", got)
+	}
+}
+
+func TestOpenRejectsOversizedIndexWithoutRecovery(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, indexFileName)
+	data := []byte(`{"version":1,"pins":[],"padding":"` + strings.Repeat("x", 8<<20) + `"}`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(dir); err == nil {
+		t.Fatal("Open() accepted an oversized index")
+	} else if errors.Is(err, errCorruptIndex) {
+		t.Fatalf("oversized index was treated as recoverable corruption: %v", err)
+	}
+	if info, err := os.Stat(path); err != nil || info.Size() != int64(len(data)) {
+		t.Fatalf("oversized index was altered: %v", err)
 	}
 }
