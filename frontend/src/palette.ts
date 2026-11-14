@@ -15,7 +15,6 @@ import {
   loadRecentColors,
   MAX_RECENT_COLORS,
   normalizeColor,
-  rememberColor,
 } from "./colors";
 
 /** How a colour choice should be recorded in the recent-colour list. */

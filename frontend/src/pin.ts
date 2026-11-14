@@ -65,14 +65,28 @@ let initialHeight = 0;
 /** Tracked window size in DIP (updated by wheel/grip/resizes). */
 let currentWidth = 0;
 let currentHeight = 0;
+// Persist only values acknowledged by native operations.
+let acceptedWidth = 0;
+let acceptedHeight = 0;
+let acceptedOpacity = 100;
+let opacitySequence = 0;
 /** width / height, kept on every resize. */
 let aspect = 1;
 
 let resizeTimer: number | undefined;
 let persistTimer: number | undefined;
 let toastTimer: number | undefined;
-let pendingWidth = 0;
-let pendingHeight = 0;
+type ResizeTarget = { width: number; height: number };
+let pendingResize: ResizeTarget | null = null;
+let activeResize: ResizeTarget | null = null;
+let resizeWork: Promise<boolean> | undefined;
+let mutationTail: Promise<unknown> = Promise.resolve();
+
+function enqueuePinMutation<T>(task: () => Promise<T>): Promise<T> {
+  const result = mutationTail.then(task);
+  mutationTail = result.catch(() => {});
+  return result;
+}
 
 let lastWheelScale = 0;
 let lastWheelOpacity = 0;
@@ -116,23 +130,12 @@ function toast(message: string): void {
 }
 
 function fitToScreen(width: number): { width: number; height: number } {
-  const maxWidth = screenWidth() * SCREEN_RATIO;
-  const maxHeight = screenHeight() * SCREEN_RATIO;
-  let nextWidth = Math.max(MIN_WIDTH, width);
-  let nextHeight = nextWidth / (aspect || 1);
-  if (nextHeight > maxHeight) {
-    nextHeight = maxHeight;
-    nextWidth = nextHeight * (aspect || 1);
-  }
-  if (nextWidth > maxWidth) {
-    nextWidth = maxWidth;
-    nextHeight = nextWidth / (aspect || 1);
-  }
-  if (nextWidth < MIN_WIDTH) {
-    nextWidth = MIN_WIDTH;
-    nextHeight = nextWidth / (aspect || 1);
-  }
-  return { width: Math.round(nextWidth), height: Math.round(nextHeight) };
+  const maxWidth = Math.max(1, Math.floor(screenWidth() * SCREEN_RATIO));
+  const maxHeight = Math.max(1, Math.floor(screenHeight() * SCREEN_RATIO));
+  const ratio = Number.isFinite(aspect) && aspect > 0 ? aspect : 1;
+  // Screen fit takes precedence over the usual grip minimum for tall images.
+  const nextWidth = Math.min(Math.max(MIN_WIDTH, width), maxWidth, maxHeight * ratio);
+  return { width: Math.max(1, Math.round(nextWidth)), height: Math.max(1, Math.round(nextWidth / ratio)) };
 }
 
 /** The image's size in DIP: image pixels / device scale, capped to the screen. */
@@ -160,16 +163,18 @@ function schedulePersist(): void {
 
 async function persistState(): Promise<void> {
   if (!hasNative || !pinId) return;
-  const state = {
-    width: Math.round(currentWidth || initialWidth),
-    height: Math.round(currentHeight || initialHeight),
-    opacity: Math.round(opacity),
-  };
-  try {
-    await updatePinState(pinId, state);
-  } catch {
-    // Go persists position itself; a failed state sync is not fatal.
-  }
+  await enqueuePinMutation(async () => {
+    const state = {
+      width: Math.round(acceptedWidth || initialWidth),
+      height: Math.round(acceptedHeight || initialHeight),
+      opacity: Math.round(acceptedOpacity),
+    };
+    try {
+      await updatePinState(pinId, state);
+    } catch (error) {
+      toast(`保存贴图状态失败：${errorMessage(error)}`);
+    }
+  });
 }
 
 function flushPersist(): void {
@@ -188,25 +193,56 @@ function applyResize(width: number, height: number): void {
   currentWidth = Math.round(width);
   currentHeight = Math.round(height);
   if (!hasNative || !pinId) return;
-  pendingWidth = currentWidth;
-  pendingHeight = currentHeight;
+  if (resizeWork) {
+    void applyNativeResize(currentWidth, currentHeight);
+    return;
+  }
   // Leading-edge throttle: continuous dragging resizes the window about every
   // RESIZE_DEBOUNCE ms with the latest target instead of waiting for a pause.
   if (resizeTimer) return;
   resizeTimer = window.setTimeout(() => {
     resizeTimer = undefined;
-    void applyNativeResize(pendingWidth, pendingHeight);
+    void applyNativeResize(currentWidth, currentHeight);
   }, RESIZE_DEBOUNCE);
 }
 
-async function applyNativeResize(width: number, height: number): Promise<void> {
-  if (!hasNative || !pinId) return;
-  try {
-    await resizePin(pinId, Math.round(width), Math.round(height));
-    schedulePersist();
-  } catch (error) {
-    toast(`调整大小失败：${errorMessage(error)}`);
+function applyNativeResize(width: number, height: number): Promise<boolean> {
+  if (!hasNative || !pinId) return Promise.resolve(false);
+  const target = { width: Math.round(width), height: Math.round(height) };
+  pendingResize = activeResize?.width === target.width && activeResize.height === target.height
+    ? null : target;
+  if (!resizeWork) {
+    resizeWork = enqueuePinMutation(async () => {
+      let succeeded = true;
+      try {
+        while (pendingResize) {
+          const next = pendingResize;
+          pendingResize = null;
+          activeResize = next;
+          try {
+            await resizePin(pinId, next.width, next.height);
+            acceptedWidth = next.width;
+            acceptedHeight = next.height;
+            schedulePersist();
+            succeeded = true;
+          } catch (error) {
+            succeeded = false;
+            if (currentWidth === next.width && currentHeight === next.height) {
+              currentWidth = acceptedWidth;
+              currentHeight = acceptedHeight;
+            }
+            toast(`调整大小失败：${errorMessage(error)}`);
+          }
+          activeResize = null;
+        }
+        return succeeded;
+      } finally {
+        activeResize = null;
+        resizeWork = undefined;
+      }
+    });
   }
+  return resizeWork;
 }
 
 async function flushResize(): Promise<void> {
@@ -215,10 +251,11 @@ async function flushResize(): Promise<void> {
     resizeTimer = undefined;
   }
   if (hasNative && pinId) {
-    await applyNativeResize(
+    const resized = await applyNativeResize(
       currentWidth || initialWidth,
       currentHeight || initialHeight,
     );
+    if (!resized) return;
   }
   flushPersist();
 }
@@ -236,8 +273,10 @@ async function closeWindow(): Promise<void> {
     try {
       await closePin(pinId);
       return;
-    } catch {
-      // Fall through to closing this window directly.
+    } catch (error) {
+      closing = false;
+      toast(`关闭贴图失败：${errorMessage(error)}`);
+      return;
     }
   }
   try {
@@ -285,21 +324,27 @@ async function adjustOpacity(delta: number): Promise<void> {
     return;
   }
   opacity = next;
+  const sequence = ++opacitySequence;
   updateMenuState();
   if (!hasNative) {
     windowEl.style.opacity = String(opacity / 100);
     toast(`浏览器预览 · 不透明度 ${opacity}%`);
     return;
   }
-  try {
-    await setPinOpacity(pinId, opacity);
-    toast(`不透明度 ${opacity}%`);
-    schedulePersist();
-  } catch (error) {
-    opacity = previous;
-    updateMenuState();
-    toast(`调整透明度失败：${errorMessage(error)}`);
-  }
+  await enqueuePinMutation(async () => {
+    try {
+      await setPinOpacity(pinId, next);
+      acceptedOpacity = next;
+      if (sequence === opacitySequence) toast(`不透明度 ${next}%`);
+      schedulePersist();
+    } catch (error) {
+      if (sequence === opacitySequence) {
+        opacity = acceptedOpacity;
+        updateMenuState();
+        toast(`调整透明度失败：${errorMessage(error)}`);
+      }
+    }
+  });
 }
 
 async function resetSize(): Promise<void> {
@@ -312,10 +357,14 @@ async function resetSize(): Promise<void> {
     toast(`浏览器预览 · 桌面应用中会恢复为 ${target.width} × ${target.height}`);
     return;
   }
+  if (resizeTimer) window.clearTimeout(resizeTimer);
+  resizeTimer = undefined;
   currentWidth = target.width;
   currentHeight = target.height;
-  await applyNativeResize(target.width, target.height);
-  toast(`已恢复原始大小 ${target.width} × ${target.height}`);
+  if (!await applyNativeResize(target.width, target.height)) return;
+  if (currentWidth === target.width && currentHeight === target.height) {
+    toast(`已恢复原始大小 ${target.width} × ${target.height}`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -434,7 +483,6 @@ window.addEventListener(
       return;
     }
     applyResize(sized.width, sized.height);
-    schedulePersist();
   },
   { passive: false },
 );
@@ -464,7 +512,6 @@ window.addEventListener(
   (event) => {
     if (!resizing) return;
     const width = resizeStartW + (event.clientX - resizeStartX);
-    const height = width / (aspect || 1);
     const sized = fitToScreen(width);
     currentWidth = sized.width;
     currentHeight = sized.height;
@@ -493,6 +540,7 @@ function applyPin(init: PinInit): void {
   if (init.id) pinId = init.id;
   if (typeof init.opacity === "number" && Number.isFinite(init.opacity)) {
     opacity = clamp(Math.round(init.opacity), 10, 100);
+    acceptedOpacity = opacity;
     // Native mode: Go applies it with Window.SetOpacity; only the browser
     // preview mirrors it in CSS.
     if (!hasNative) windowEl.style.opacity = String(opacity / 100);
@@ -505,6 +553,8 @@ function applyPin(init: PinInit): void {
     initialHeight = Math.round(init.height);
     currentWidth = initialWidth;
     currentHeight = initialHeight;
+    acceptedWidth = initialWidth;
+    acceptedHeight = initialHeight;
     aspect = initialWidth / initialHeight;
     document.title = `Pinstill — 贴图 ${initialWidth} × ${initialHeight}`;
   }
@@ -515,6 +565,7 @@ function applyPin(init: PinInit): void {
   }
   errorEl.hidden = true;
   image.hidden = false;
+  imageLoaded = false;
   image.onload = () => {
     imageLoaded = true;
     if (!initialWidth || !initialHeight) {
@@ -522,8 +573,10 @@ function applyPin(init: PinInit): void {
       initialHeight = Math.round(image.naturalHeight / (window.devicePixelRatio || 1));
       currentWidth = initialWidth;
       currentHeight = initialHeight;
+      acceptedWidth = initialWidth;
+      acceptedHeight = initialHeight;
     }
-    if (initialWidth && initialHeight) aspect = initialWidth / initialHeight;
+    if (image.naturalWidth && image.naturalHeight) aspect = image.naturalWidth / image.naturalHeight;
     errorEl.hidden = true;
     updateMenuState();
   };

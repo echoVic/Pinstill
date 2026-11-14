@@ -3,11 +3,10 @@
 // Flow: the overlay starts a session with `Capture.StartScroll(rect, true)`.
 // Go hides the overlay and shows this control bar next to the selection. It
 // captures frames while the user (or automatic scrolling) moves the target:
-// - `scroll:init {rect, auto, accessibilityGranted, autoDenied}` configures the bar;
-// - `scroll:progress {frames, height, status, auto}` updates status/progress;
-// - pause/resume: `Capture.SetScrollPaused(bool)`;
-// - auto/manual: `Capture.SetScrollAuto(bool)` (permission denied → guidance);
-// - finish/cancel: `Capture.FinishScroll("finish" | "cancel")`; Go stitches,
+// - init and progress events carry a unique sessionId;
+// - pause/resume: `Capture.SetScrollPaused(sessionId, bool)`;
+// - auto/manual: `Capture.SetScrollAuto(sessionId, bool)` (permission denied → guidance);
+// - finish/cancel: `Capture.FinishScroll(sessionId, "finish" | "cancel")`; Go stitches,
 //   stores the long image and opens the result preview window / discards it.
 //
 // In a plain browser (no MyGo runtime) the bar runs a simulated session so the
@@ -51,6 +50,10 @@ let frames = 0;
 let height = 0;
 let status: ScrollProgress["status"] = "running";
 let busy = false;
+let sessionSequence = 0;
+let sessionId = "";
+const seenSessions = new Set<string>();
+let latestNativeSession = 0n;
 let noticeTimer: number | undefined;
 let demoTimer: number | undefined;
 let demoTick = 0;
@@ -123,6 +126,7 @@ function showNotice(text: string, kind: "info" | "warn" | "error" = "info"): voi
 }
 
 function applyProgress(payload: ScrollProgress): void {
+  if (!sessionId || payload.sessionId !== sessionId) return;
   frames = Math.max(0, payload.frames || 0);
   height = Math.max(0, payload.height || 0);
   status = payload.status;
@@ -136,12 +140,31 @@ function applyProgress(payload: ScrollProgress): void {
 // Session init
 // ---------------------------------------------------------------------------
 
-function applyInit(payload: unknown): void {
+function applyInit(payload: unknown): boolean {
   const init = payload as {
+    sessionId?: unknown;
     auto?: unknown;
     accessibilityGranted?: unknown;
     autoDenied?: unknown;
   } | null;
+  if (typeof init?.sessionId !== "string" || !init.sessionId || seenSessions.has(init.sessionId)) return false;
+  const nativeSequence = /^scroll-(\d+)$/.exec(init.sessionId);
+  if (nativeSequence) {
+    // Go's uint64 sequence can exceed Number's exact integer range.
+    const incoming = BigInt(nativeSequence[1]);
+    if (incoming <= latestNativeSession) return false;
+    latestNativeSession = incoming;
+  } else {
+    seenSessions.add(init.sessionId);
+  }
+  sessionId = init.sessionId;
+  ++sessionSequence;
+  stopDemo();
+  if (noticeTimer) window.clearTimeout(noticeTimer);
+  noticeTimer = undefined;
+  for (const button of bar.querySelectorAll<HTMLButtonElement>("button.is-pending")) {
+    setButtonPending(button, false);
+  }
   auto = Boolean(init?.auto);
   accessibilityGranted = Boolean(init?.accessibilityGranted);
   denied = Boolean(init?.autoDenied);
@@ -151,11 +174,11 @@ function applyInit(payload: unknown): void {
   status = "running";
   setBusy(false);
   render();
+  return true;
 }
 
 onScrollInit((payload) => {
-  applyInit(payload);
-  if (!hasNative) startDemo(denied);
+  if (applyInit(payload) && !hasNative) runDemo();
 });
 
 onScrollProgress((payload) => {
@@ -168,12 +191,15 @@ onScrollProgress((payload) => {
 // ---------------------------------------------------------------------------
 
 async function togglePause(): Promise<void> {
-  if (busy) return;
+  if (busy || !sessionId) return;
+  const sequence = sessionSequence;
   const next = !paused;
   const button = actionButton("pause");
+  if (button?.disabled) return;
   setButtonPending(button, true);
   try {
-    await setScrollPaused(next);
+    await setScrollPaused(sessionId, next);
+    if (sequence !== sessionSequence || busy) return;
     paused = next;
     status = next ? "paused" : "running";
     render();
@@ -181,18 +207,26 @@ async function togglePause(): Promise<void> {
       showNotice(next ? "浏览器预览 · 已暂停抓帧（模拟）" : "浏览器预览 · 已继续抓帧（模拟）");
     }
   } catch (error) {
+    if (sequence !== sessionSequence || busy) return;
     showNotice(`暂停/继续失败：${errorMessage(error)}`, "error");
+  } finally {
+    if (sequence === sessionSequence) {
+      setButtonPending(button, false);
+      if (button) button.disabled = busy;
+    }
   }
-  setButtonPending(button, false);
 }
 
 async function toggleMode(): Promise<void> {
-  if (busy) return;
+  if (busy || !sessionId) return;
+  const sequence = sessionSequence;
   const desired = !auto;
   const button = actionButton("mode");
+  if (button?.disabled) return;
   setButtonPending(button, true);
   try {
-    await setScrollAuto(desired);
+    await setScrollAuto(sessionId, desired);
+    if (sequence !== sessionSequence || busy) return;
     auto = desired;
     if (desired) {
       accessibilityGranted = true;
@@ -205,18 +239,24 @@ async function toggleMode(): Promise<void> {
       showNotice(desired ? "已切换到自动滚动" : "已切换到手动滚动");
     }
   } catch (error) {
+    if (sequence !== sessionSequence || busy) return;
     // No Accessibility permission: keep manual mode and surface the guidance.
     auto = false;
     denied = true;
     render();
     showNotice("自动滚动需要「辅助功能」权限", "warn");
     permissionButton.title = errorMessage(error);
+  } finally {
+    if (sequence === sessionSequence) {
+      setButtonPending(button, false);
+      if (button) button.disabled = busy;
+    }
   }
-  setButtonPending(button, false);
 }
 
 async function finish(cancel = false): Promise<void> {
-  if (busy) return;
+  if (busy || !sessionId) return;
+  const sequence = sessionSequence;
   const action = cancel ? "cancel" : "finish";
   const button = actionButton(action);
   busy = true;
@@ -238,26 +278,31 @@ async function finish(cancel = false): Promise<void> {
   }
   setButtonPending(button, true);
   try {
-    await finishScroll(action);
+    await finishScroll(sessionId, action);
     // Go hides this window; on "finish" it opens the result preview window.
   } catch (error) {
+    if (sequence !== sessionSequence) return;
     busy = false;
-    setBusy(false);
     setButtonPending(button, false);
+    setBusy(false);
     render();
     showNotice(`操作失败：${errorMessage(error)}`, "error");
   }
 }
 
 permissionButton.addEventListener("click", async () => {
+  const sequence = sessionSequence;
   try {
     await openScrollAccessibilitySettings();
   } catch {
     // The system dialog may still open; keep the guidance visible.
   }
+  if (sequence !== sessionSequence || busy) return;
   showNotice("已打开系统设置，请为 Pinstill 勾选「辅助功能」");
   window.setTimeout(async () => {
+    if (sequence !== sessionSequence || busy) return;
     const granted = await scrollAccessibilityGranted().catch(() => false);
+    if (sequence !== sessionSequence || busy) return;
     accessibilityGranted = granted;
     if (granted) {
       denied = false;
@@ -290,34 +335,25 @@ window.addEventListener("keydown", (event) => {
 
 function startDemo(startDenied = false): void {
   if (hasNative) return;
-  stopDemo();
-  frames = 0;
-  height = 0;
-  demoTick = 0;
-  denied = startDenied;
-  auto = startDenied ? false : true;
-  paused = false;
-  status = "running";
-  setBusy(false);
-  render();
+  applyInit({ sessionId: `demo-${sessionSequence + 1}`, auto: !startDenied, autoDenied: startDenied, accessibilityGranted: !startDenied });
+  runDemo();
   if (startDenied) {
     showNotice("浏览器预览 · 无辅助功能权限，已降级为手动滚动", "warn");
   }
+}
+
+function runDemo(): void {
+  const id = sessionId;
+  demoTick = 0;
   demoTimer = window.setInterval(() => {
-    if (busy || paused) return;
+    if (id !== sessionId || busy || paused) return;
     demoTick += 1;
-    frames += 1;
-    height += 360 + (demoTick % 3) * 24;
+    applyProgress({ sessionId: id, frames: frames + 1, height: height + 360 + (demoTick % 3) * 24,
+      status: frames + 1 >= 6 ? "max" : "running", auto });
     if (frames >= 6) {
-      status = "max";
-      paused = false;
       stopDemo();
-      render();
       showNotice("浏览器预览 · 已达上限，可点「立即完成」查看长图预览", "info");
-      return;
     }
-    status = "running";
-    render();
   }, 700);
 }
 
@@ -329,14 +365,16 @@ function stopDemo(): void {
 }
 
 function demoFinish(cancel: boolean, button: HTMLButtonElement | null): void {
+  const sequence = sessionSequence;
   stopDemo();
   window.setTimeout(() => {
+    if (sequence !== sessionSequence) return;
     busy = false;
     setBusy(false);
     setButtonPending(button, false);
     if (cancel) {
       showNotice("浏览器预览 · 已取消本次滚动截图", "info");
-      window.setTimeout(() => startDemo(denied), 1200);
+      window.setTimeout(() => { if (sequence === sessionSequence) startDemo(denied); }, 1200);
       return;
     }
     if (frames === 0) {

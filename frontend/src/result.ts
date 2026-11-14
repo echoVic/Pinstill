@@ -2,7 +2,7 @@
 //
 // Go opens/reuses a normal window with `/result.html` after an automatic or
 // manual scrolling session completes, and emits `scroll:result`
-// `{url,width,height,frames,capped,historyId}`. The page shows the long image
+// `{id,url,width,height,frames,capped,historyId}`. The page shows the long image
 // at the window width (scrollable), plus copy / save / pin / close. Successful
 // actions close the window because the image is already stored in history.
 //
@@ -37,6 +37,7 @@ let payload: ScrollResult | null = null;
 let loaded = false;
 let busy = false;
 let closed = false;
+let resultSequence = 0;
 
 function errorMessage(error: unknown): string {
   if (error instanceof Error && error.message) return error.message;
@@ -71,6 +72,7 @@ function normalizeResult(source: Record<string, unknown> | null): ScrollResult |
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
   };
   return {
+    id: typeof source.id === "string" ? source.id : hasNative ? "" : "demo-result",
     url,
     width: number(source.width),
     height: number(source.height),
@@ -82,9 +84,28 @@ function normalizeResult(source: Record<string, unknown> | null): ScrollResult |
 
 function applyResult(result: ScrollResult | null): void {
   if (!result) return;
+  if (hasNative && !result.id.trim()) {
+    loaded = true;
+    loading.hidden = true;
+    if (!payload) image.hidden = true;
+    metaEl.textContent = "长图结果无效";
+    setStatus("长图载入失败：缺少长图结果 ID", "error");
+    return;
+  }
+  resultSequence++;
   payload = result;
   loaded = true;
+  busy = false;
   closed = false;
+  delete document.documentElement.dataset.resultClosed;
+  windowEl.classList.remove("closing");
+  document.querySelectorAll(".result-closed").forEach(note => note.remove());
+  for (const button of actionButtons) {
+    setButtonPending(button, false);
+    button.classList.remove("is-success");
+    button.disabled = false;
+  }
+  setStatus("");
   document.title = "Pinstill — 滚动截图预览";
   metaEl.textContent = formatMeta(result);
   loading.hidden = true;
@@ -116,15 +137,21 @@ image.addEventListener("error", () => {
 // Window lifecycle
 // ---------------------------------------------------------------------------
 
-function closeLocally(reason = "窗口已关闭"): void {
-  if (closed) return;
+function closeLocally(reason = "窗口已关闭", sequence = resultSequence): void {
+  if (closed || sequence !== resultSequence) return;
+  const id = payload?.id ?? "";
+  if (hasNative && !id.trim()) {
+    setStatus("关闭失败：缺少长图结果 ID", "error");
+    return;
+  }
   closed = true;
   busy = true;
   document.documentElement.dataset.resultClosed = "1";
   windowEl.classList.add("closing");
   const note = document.createElement("div");
   note.className = "result-closed";
-  note.innerHTML = `<div><strong>${reason}</strong><span>长图已保存到截图历史</span></div>`;
+  const historyNote = payload?.historyId ? "长图已保存到截图历史" : "长图仅保留在本次预览";
+  note.innerHTML = `<div><strong>${reason}</strong><span>${historyNote}</span></div>`;
   document.body.append(note);
   try {
     window.close();
@@ -133,7 +160,7 @@ function closeLocally(reason = "窗口已关闭"): void {
     // note above keeps the demo understandable.
   }
   if (hasNative) {
-    void closeScrollResult().catch(() => {});
+    void closeScrollResult(id).catch(() => {});
   }
 }
 
@@ -175,6 +202,7 @@ function demoResult(params: URLSearchParams): ScrollResult {
   const height = Number(params.get("height")) || 2400;
   const frames = Number(params.get("frames")) || 6;
   return {
+    id: "demo-result",
     url: demoImageURL(height),
     width: Number(params.get("width")) || 1280,
     height: Math.min(9000, Math.max(1200, height)),
@@ -185,6 +213,7 @@ function demoResult(params: URLSearchParams): ScrollResult {
 
 function queryResult(params: URLSearchParams): ScrollResult | null {
   return normalizeResult({
+    id: params.get("id") ?? (hasNative ? "" : "demo-result"),
     url: params.get("url") ?? "",
     width: params.get("width") ?? "",
     height: params.get("height") ?? "",
@@ -222,9 +251,14 @@ async function runAction(action: string, button: HTMLButtonElement | null): Prom
     return;
   }
   if (busy || closed) return;
+  const id = payload?.id ?? "";
+  const sequence = resultSequence;
+  const isCurrent = () => sequence === resultSequence && !closed;
   busy = true;
+  let completed = false;
   setButtonPending(button, true);
   try {
+    if (hasNative && !id.trim()) throw new Error("缺少长图结果 ID");
     if (!hasNative) {
       if (action === "save") demoDownload();
       setButtonPending(button, false);
@@ -232,32 +266,44 @@ async function runAction(action: string, button: HTMLButtonElement | null): Prom
       if (action === "copy") setStatus("浏览器预览 · 桌面应用中会复制长图到剪贴板");
       else if (action === "save") setStatus("浏览器预览 · 已下载示例长图");
       else if (action === "pin") setStatus("浏览器预览 · 桌面应用中会创建贴图窗口");
-      window.setTimeout(() => closeLocally("操作完成，窗口已自动关闭"), 700);
+      completed = true;
+      window.setTimeout(() => closeLocally("操作完成，窗口已自动关闭", sequence), 700);
       return;
     }
     if (action === "copy") {
-      await copyScrollResult();
+      await copyScrollResult(id);
     } else if (action === "save") {
-      const path = await saveScrollResult();
+      const path = await saveScrollResult(id);
+      if (!isCurrent()) return;
       setButtonPending(button, false);
       if (!path) {
         setStatus("已取消保存");
         return;
       }
     } else if (action === "pin") {
-      await pinScrollResult();
+      await pinScrollResult(id);
     } else {
       return;
     }
+    if (!isCurrent()) return;
     setButtonPending(button, false);
     flashButtonSuccess(button);
     setStatus(`已${ACTION_LABELS[action] ?? "完成"}，窗口将自动关闭…`);
-    window.setTimeout(() => closeLocally("操作完成，窗口已自动关闭"), 320);
+    completed = true;
+    window.setTimeout(() => closeLocally("操作完成，窗口已自动关闭", sequence), 320);
   } catch (error) {
+    if (!isCurrent()) return;
     setButtonPending(button, false);
     setStatus(`${ACTION_LABELS[action] ?? "操作"}失败：${errorMessage(error)}`, "error");
   } finally {
-    busy = false;
+    if (sequence === resultSequence) {
+      busy = completed || closed;
+      if (busy) {
+        for (const control of actionButtons) {
+          if (control.dataset.resultAction !== "close") control.disabled = true;
+        }
+      }
+    }
   }
 }
 

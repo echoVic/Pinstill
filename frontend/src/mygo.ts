@@ -4,6 +4,12 @@ import { call, event } from "mygo-runtime";
 
 // ---- Types ----
 
+/** CaptureActionResult distinguishes a completed action from a canceled save. */
+export interface CaptureActionResult {
+  completed: boolean;
+  cancelled: boolean;
+}
+
 /** CaptureCancelledPayload reports a capture the user backed out of. */
 export interface CaptureCancelledPayload {
   reason: string;
@@ -68,6 +74,15 @@ export interface OverlayInfo {
   scale: number;
 }
 
+/** PinArchiveEntry is a saved pin intentionally kept closed at startup. */
+export interface PinArchiveEntry {
+  id: string;
+  url: string;
+  width: number;
+  height: number;
+  createdAt: string;
+}
+
 /** PinInitPayload configures a pin window that has just been created. */
 export interface PinInitPayload {
   id: string;
@@ -98,6 +113,7 @@ export interface Rect {
 
 /** ScrollInitPayload configures the scroll control window for one session. */
 export interface ScrollInitPayload {
+  sessionId: string;
   rect: Rect;
   auto: boolean;
   autoDenied: boolean;
@@ -106,6 +122,7 @@ export interface ScrollInitPayload {
 
 /** ScrollProgressPayload reports how a scrolling capture is going. */
 export interface ScrollProgressPayload {
+  sessionId: string;
   frames: number;
   height: number;
   status: string;
@@ -114,6 +131,7 @@ export interface ScrollProgressPayload {
 
 /** ScrollResultPayload tells the preview window which long image to show. */
 export interface ScrollResultPayload {
+  id: string;
   url: string;
   width: number;
   height: number;
@@ -189,39 +207,27 @@ export const Capture = {
     return call("Capture.ClosePin", id);
   },
   /** CloseScrollResult closes the scroll result preview window. */
-  closeScrollResult(): Promise<void> {
-    return call("Capture.CloseScrollResult");
-  },
-  /** CopyImage puts a PNG on the system clipboard. */
-  copyImage(dataBase64: string): Promise<void> {
-    return call("Capture.CopyImage", dataBase64);
+  closeScrollResult(id: string): Promise<void> {
+    return call("Capture.CloseScrollResult", id);
   },
   /** CopyPin puts a pin's image on the clipboard. */
   copyPin(id: string): Promise<void> {
     return call("Capture.CopyPin", id);
   },
   /** CopyScrollResult puts the stitched long image on the clipboard. */
-  copyScrollResult(): Promise<void> {
-    return call("Capture.CopyScrollResult");
-  },
-  /**
-   * ExportImage asks where to save the annotated image, converts it to the
-   * configured format, and writes it. It returns the path, or "" when the
-   * user canceled.
-   */
-  exportImage(dataBase64: string, suggestedName: string): Promise<string> {
-    return call("Capture.ExportImage", dataBase64, suggestedName);
+  copyScrollResult(id: string): Promise<void> {
+    return call("Capture.CopyScrollResult", id);
   },
   /**
    * FinishAnnotated completes an in-place annotation: it stores the composited
    * image and runs the chosen action (copy, pin, save or cancel).
    */
-  finishAnnotated(action: string, dataBase64: string): Promise<void> {
+  finishAnnotated(action: string, dataBase64: string): Promise<CaptureActionResult> {
     return call("Capture.FinishAnnotated", action, dataBase64);
   },
   /** FinishScroll stops the scrolling capture and runs the chosen action. */
-  finishScroll(action: string): Promise<void> {
-    return call("Capture.FinishScroll", action);
+  finishScroll(sessionID: string, action: string): Promise<void> {
+    return call("Capture.FinishScroll", sessionID, action);
   },
   /**
    * LaunchAtLogin reports whether the OS currently launches Pinstill at login.
@@ -231,6 +237,10 @@ export const Capture = {
    */
   launchAtLogin(): Promise<boolean> {
     return call("Capture.LaunchAtLogin");
+  },
+  /** ListArchivedPins lists images deliberately kept closed at launch. */
+  listArchivedPins(): Promise<PinArchiveEntry[]> {
+    return call("Capture.ListArchivedPins");
   },
   /** OpenLoginItemsSettings opens the OS login items settings pane. */
   openLoginItemsSettings(): Promise<void> {
@@ -256,13 +266,9 @@ export const Capture = {
   pinClipboard(): Promise<string> {
     return call("Capture.PinClipboard");
   },
-  /** PinImage opens an always-on-top pin window showing the image. */
-  pinImage(dataBase64: string): Promise<string> {
-    return call("Capture.PinImage", dataBase64);
-  },
   /** PinScrollResult opens the stitched long image as a desktop pin. */
-  pinScrollResult(): Promise<string> {
-    return call("Capture.PinScrollResult");
+  pinScrollResult(id: string): Promise<string> {
+    return call("Capture.PinScrollResult", id);
   },
   /**
    * PrepareSelection captures the region the user selected and hands it back
@@ -292,20 +298,17 @@ export const Capture = {
   resizePin(id: string, width: number, height: number): Promise<void> {
     return call("Capture.ResizePin", id, width, height);
   },
-  /**
-   * SaveImageToFolder writes the annotated image into the configured folder
-   * without asking. It returns the written path.
-   */
-  saveImageToFolder(dataBase64: string): Promise<string> {
-    return call("Capture.SaveImageToFolder", dataBase64);
+  /** RestoreArchivedPin reopens a saved pin only at the user's request. */
+  restoreArchivedPin(id: string): Promise<void> {
+    return call("Capture.RestoreArchivedPin", id);
   },
   /** SavePin saves a pin's image through the save dialog. */
   savePin(id: string): Promise<string> {
     return call("Capture.SavePin", id);
   },
   /** SaveScrollResult saves the stitched long image through the save dialog. */
-  saveScrollResult(): Promise<string> {
-    return call("Capture.SaveScrollResult");
+  saveScrollResult(id: string): Promise<string> {
+    return call("Capture.SaveScrollResult", id);
   },
   /** ScrollAccessibilityGranted reports whether automatic scrolling is allowed. */
   scrollAccessibilityGranted(): Promise<boolean> {
@@ -319,12 +322,12 @@ export const Capture = {
    * SetScrollAuto switches a running scroll capture between auto and manual
    * scrolling.
    */
-  setScrollAuto(enabled: boolean): Promise<void> {
-    return call("Capture.SetScrollAuto", enabled);
+  setScrollAuto(sessionID: string, enabled: boolean): Promise<void> {
+    return call("Capture.SetScrollAuto", sessionID, enabled);
   },
   /** SetScrollPaused pauses or resumes frame capturing for the running session. */
-  setScrollPaused(paused: boolean): Promise<void> {
-    return call("Capture.SetScrollPaused", paused);
+  setScrollPaused(sessionID: string, paused: boolean): Promise<void> {
+    return call("Capture.SetScrollPaused", sessionID, paused);
   },
   /**
    * Settings returns the settings currently applied, so pages (the overlay)
@@ -404,11 +407,6 @@ export const events = {
   scrollProgress: event<ScrollProgressPayload>("scroll:progress"),
   /** EventScrollResult hands the stitched long image to the preview window. */
   scrollResult: event<ScrollResultPayload>("scroll:result"),
-  /**
-   * EventOverlayCapture is emitted to the overlay window with the image it
-   * now annotates in place.
-   */
-  overlayCapture: event<OverlayCapturePayload>("overlay:capture"),
   /** EventPinInit is emitted to a pin window to show its image. */
   pinInit: event<PinInitPayload>("pin:init"),
   /** EventHistoryChanged is emitted when the persisted history changed. */

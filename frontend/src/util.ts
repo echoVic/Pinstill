@@ -11,14 +11,6 @@ export function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-/** Decodes plain base64 into bytes. */
-export function base64ToBytes(base64: string): Uint8Array<ArrayBuffer> {
-  const binary = atob(base64.replace(/\s+/g, ""));
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
-
 /** Reads a Blob as plain base64, without the `data:` prefix. */
 export function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -50,10 +42,14 @@ export async function decodeImageBlob(
     }
   }
   const objectURL = URL.createObjectURL(blob);
-  const image = new Image();
-  image.src = objectURL;
-  await image.decode();
-  return image;
+  try {
+    const image = new Image();
+    image.src = objectURL;
+    await image.decode();
+    return image;
+  } finally {
+    URL.revokeObjectURL(objectURL);
+  }
 }
 
 export async function loadCanvasImage(url: string): Promise<ImageBitmap | HTMLImageElement> {

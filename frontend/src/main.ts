@@ -19,6 +19,7 @@ import {
   historyRemove,
   historySave,
   launchAtLogin,
+  listArchivedPins,
   onCaptureCancelled,
   onCaptureFailed,
   onHistoryChanged,
@@ -28,8 +29,10 @@ import {
   openScrollAccessibilitySettings,
   permissionGranted,
   requestScreenPermission,
+  restoreArchivedPin,
   scrollAccessibilityGranted,
   type HistoryEntry,
+  type PinArchiveEntry,
 } from "./bridge";
 import { refreshPinstillIcons } from "./icons";
 import {
@@ -78,6 +81,10 @@ let recordingShortcut: ShortcutKey | null = null;
 let historyEntries: HistoryEntry[] = [];
 let applySequence = 0;
 let applyTimer: number | undefined;
+let applyingSettings = false;
+let pendingSettings = false;
+let appliedSettingsJSON: string | undefined;
+let historySequence = 0;
 let historyTimer: number | undefined;
 let clearArmed = false;
 let clearTimer: number | undefined;
@@ -167,19 +174,27 @@ function scheduleHistoryRefresh(): void {
 }
 
 async function refreshHistory(): Promise<void> {
+  const sequence = ++historySequence;
+  let entries: HistoryEntry[];
   try {
-    historyEntries = await historyList();
+    entries = await historyList();
   } catch {
-    // The native bindings may not be implemented yet; an empty history is fine.
-    historyEntries = [];
+    if (sequence === historySequence) showToast("无法刷新历史截图，请稍后重试", "error");
+    return;
   }
+  if (sequence !== historySequence) return;
+  const previewId = currentPreviewEntry()?.id;
+  historyEntries = entries;
   renderHistory();
   updateCounts();
   if (previewVisible()) {
     if (historyEntries.length === 0) {
       closeHistoryPreview();
     } else {
-      preview.index = Math.min(Math.max(0, preview.index), historyEntries.length - 1);
+      const retainedIndex = historyEntries.findIndex((entry) => entry.id === previewId);
+      preview.index = retainedIndex >= 0
+        ? retainedIndex
+        : Math.min(Math.max(0, preview.index), historyEntries.length - 1);
       renderHistoryPreview();
     }
   }
@@ -191,6 +206,69 @@ function updateCounts(): void {
 }
 
 const HISTORY_RENDER_LIMIT = 60;
+
+let archivedPins: PinArchiveEntry[] = [];
+let archiveSequence = 0;
+const restoringPins = new Set<string>();
+
+async function refreshArchivedPins(): Promise<void> {
+  const sequence = ++archiveSequence;
+  try {
+    const entries = await listArchivedPins();
+    if (sequence !== archiveSequence) return;
+    archivedPins = entries;
+    renderArchivedPins();
+    el("archivedPinStatus").textContent = "";
+  } catch (error) {
+    if (sequence === archiveSequence) el("archivedPinStatus").textContent = `无法刷新归档贴图：${errorMessage(error)}`;
+  }
+}
+
+function renderArchivedPins(): void {
+  const grid = el("archivedPinGrid");
+  grid.replaceChildren();
+  el("archivedPinTotal").textContent = `· ${archivedPins.length} 张`;
+  el("archivedPinEmpty").hidden = archivedPins.length !== 0;
+  for (const entry of archivedPins) {
+    const card = document.createElement("article");
+    card.className = "history-card";
+    const image = document.createElement("img");
+    image.className = "archived-pin-image";
+    image.src = entry.url;
+    image.alt = `归档贴图 · ${formatHistoryTime(entry.createdAt)}`;
+    image.loading = "lazy";
+    const meta = document.createElement("p");
+    meta.className = "archived-pin-meta";
+    meta.textContent = `${formatHistoryTime(entry.createdAt)} · ${entry.width} × ${entry.height}`;
+    image.addEventListener("error", () => { meta.textContent = "无法载入贴图预览，可尝试恢复"; });
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "btn small archived-pin-restore";
+    button.textContent = "恢复到桌面";
+    setButtonPending(button, restoringPins.has(entry.id));
+    button.addEventListener("click", () => void restorePinFromArchive(entry.id));
+    card.append(image, meta, button);
+    grid.append(card);
+  }
+}
+
+async function restorePinFromArchive(id: string): Promise<void> {
+  if (restoringPins.has(id)) return;
+  restoringPins.add(id);
+  ++archiveSequence; // Invalidate a list requested before this restoration.
+  renderArchivedPins();
+  el("archivedPinStatus").textContent = "";
+  try {
+    await restoreArchivedPin(id);
+    archivedPins = archivedPins.filter(entry => entry.id !== id);
+    await refreshArchivedPins();
+  } catch (error) {
+    el("archivedPinStatus").textContent = `恢复贴图失败：${errorMessage(error)}`;
+  } finally {
+    restoringPins.delete(id);
+    renderArchivedPins();
+  }
+}
 
 /** Restores the delete button after a confirm timeout / grid re-render. */
 function disarmHistoryDelete(): void {
@@ -506,6 +584,7 @@ function showView(view: View): void {
     return;
   }
   void refreshHistory();
+  void refreshArchivedPins();
 }
 
 // ---------------------------------------------------------------------------
@@ -582,6 +661,7 @@ function renderSettingRow(row: SettingRow): HTMLElement {
     wrap.className = "switch";
     const input = document.createElement("input");
     input.type = "checkbox";
+    input.disabled = Boolean(row.disabled);
     input.checked = Boolean(preferenceValue(preferences, row.key));
     const track = document.createElement("span");
     track.className = "switch-track";
@@ -593,6 +673,7 @@ function renderSettingRow(row: SettingRow): HTMLElement {
     input.addEventListener("change", () => commitSetting(row, input));
   } else if (row.type === "select") {
     const select = document.createElement("select");
+    select.disabled = Boolean(row.disabled);
     for (const option of row.options) {
       const element = document.createElement("option");
       element.value = option.value;
@@ -631,13 +712,15 @@ function renderSettingRow(row: SettingRow): HTMLElement {
     button.type = "button";
     button.className = "shortcut-record";
     button.dataset.key = row.key;
+    button.disabled = Boolean(row.disabled);
     const key = row.key as ShortcutKey;
     button.textContent =
-      recordingShortcut === key
+      row.disabled ? "未启用 · 待接入" : recordingShortcut === key
         ? "按下组合键…"
         : formatAccelerator(String(preferenceValue(preferences, row.key)));
     if (recordingShortcut === key) button.classList.add("recording");
     button.addEventListener("click", () => {
+      if (row.disabled) return;
       recordingShortcut = key;
       renderSettings();
       setSettingsStatus("请按下组合键，Esc 取消录入", "info");
@@ -728,19 +811,43 @@ function applyPreferences(changedKey?: string): void {
 }
 
 function scheduleApplySettings(delay = 160): void {
+  ++applySequence;
   if (applyTimer) window.clearTimeout(applyTimer);
-  applyTimer = window.setTimeout(() => void pushNativeSettings(), delay);
+  applyTimer = window.setTimeout(() => {
+    applyTimer = undefined;
+    void pushNativeSettings();
+  }, delay);
 }
 
 async function pushNativeSettings(): Promise<void> {
-  const sequence = ++applySequence;
+  pendingSettings = true;
+  if (applyingSettings) return;
+  applyingSettings = true;
   try {
-    const failures = await applySettings(toNativeSettings(preferences));
-    if (sequence !== applySequence) return;
-    renderSettingsApplyStatus(failures);
-  } catch (error) {
-    if (sequence !== applySequence) return;
-    setSettingsStatus(`设置同步失败：${errorMessage(error)}`, "error");
+    while (pendingSettings) {
+      pendingSettings = false;
+      const sequence = applySequence;
+      const snapshot = toNativeSettings(preferences);
+      const json = JSON.stringify(snapshot);
+      // Annotation-only preferences do not need native shortcut registration
+      // or history pruning. Failed/partially applied snapshots remain retryable.
+      if (json === appliedSettingsJSON) {
+        renderSettingsApplyStatus({});
+        continue;
+      }
+      try {
+        const failures = await applySettings(snapshot);
+        appliedSettingsJSON = Object.keys(failures ?? {}).length === 0 ? json : undefined;
+        if (sequence === applySequence) renderSettingsApplyStatus(failures);
+      } catch (error) {
+        appliedSettingsJSON = undefined;
+        if (sequence === applySequence) {
+          setSettingsStatus(`设置同步失败：${errorMessage(error)}`, "error");
+        }
+      }
+    }
+  } finally {
+    applyingSettings = false;
   }
 }
 
@@ -1138,6 +1245,7 @@ el("historyClear").addEventListener("click", () => {
   resetClearButton();
   void clearHistory();
 });
+el("archivedPinRefresh").addEventListener("click", () => void refreshArchivedPins());
 
 // History preview actions + backdrop.
 document

@@ -10,7 +10,7 @@
 import { isMyGo } from "mygo-runtime";
 import { Capture, History, events } from "./mygo";
 import type * as Native from "./mygo";
-import { base64ToBytes, downloadBlob } from "./util";
+import { downloadBlob } from "./util";
 
 /** `true` when the page runs inside a MyGo window. */
 export const hasNative = isMyGo();
@@ -24,17 +24,26 @@ export type OverlayInfo = Native.OverlayInfo;
 /** One stored capture, as listed by the `History` service. */
 export type HistoryEntry = Native.HistoryEntry;
 
-/** What the in-place selection action bar asks Go to do with the selection. */
-export type SelectionAction = "annotate" | "copy" | "pin" | "save";
-
 /** Size and opacity of a pin window, persisted by Go. */
 export type PinState = Native.PinWindowState;
+export type PinArchiveEntry = Native.PinArchiveEntry;
+
+export function listArchivedPins(): Promise<PinArchiveEntry[]> {
+  if (!hasNative) return Promise.resolve([]);
+  return Capture.listArchivedPins();
+}
+
+export function restoreArchivedPin(id: string): Promise<void> {
+  if (!hasNative) return Promise.resolve();
+  return Capture.restoreArchivedPin(id);
+}
 
 /** Payload of `scroll:init`: sent to the scroll control bar window. */
 export type ScrollInit = Native.ScrollInitPayload;
 
 /** One `scroll:progress` event of a scrolling-capture session. */
 export interface ScrollProgress {
+  sessionId: string;
   frames: number;
   /** Total stitched height in image pixels. */
   height: number;
@@ -54,6 +63,8 @@ export type OverlayCapture = Native.OverlayCapturePayload;
 
 /** What `Capture.FinishAnnotated` does with the composited PNG. */
 export type FinishAnnotatedAction = "copy" | "pin" | "save" | "cancel";
+
+export type CaptureActionResult = Native.CaptureActionResult;
 
 /** Settings object pushed to `Capture.ApplySettings` (plan §3.4). */
 export interface Settings {
@@ -102,26 +113,6 @@ export function cancelRegion(): Promise<void> {
 export function captureFullScreen(): Promise<{ id: string }> {
   if (!hasNative) return Promise.resolve({ id: "browser-preview" });
   return Capture.captureFullScreen();
-}
-
-export function copyImage(base64: string): Promise<void> {
-  if (!hasNative) return browserCopyImage(base64);
-  return Capture.copyImage(base64);
-}
-
-export function exportImage(base64: string, suggestedName: string): Promise<string> {
-  if (!hasNative) return browserDownload(base64, suggestedName);
-  return Capture.exportImage(base64, suggestedName);
-}
-
-export function saveImageToFolder(base64: string): Promise<string> {
-  if (!hasNative) return browserDownload(base64, "Pinstill.png");
-  return Capture.saveImageToFolder(base64);
-}
-
-export function pinImage(base64: string): Promise<string> {
-  if (!hasNative) return Promise.resolve("browser-preview-pin");
-  return Capture.pinImage(base64);
 }
 
 export function pinClipboard(): Promise<string> {
@@ -180,8 +171,8 @@ export function prepareSelectionFast(rect: Rect): Promise<OverlayCapture> {
 export function finishAnnotated(
   action: FinishAnnotatedAction,
   dataBase64: string,
-): Promise<void> {
-  if (!hasNative) return Promise.resolve();
+): Promise<CaptureActionResult> {
+  if (!hasNative) return Promise.resolve({ completed: action !== "cancel", cancelled: action === "cancel" });
   return Capture.finishAnnotated(action, dataBase64);
 }
 
@@ -192,42 +183,50 @@ export function startScroll(rect: Rect, autoScroll: boolean): Promise<void> {
   return Capture.startScroll(rect, autoScroll);
 }
 
-export function finishScroll(action: ScrollFinishAction): Promise<void> {
+export function finishScroll(sessionId: string, action: ScrollFinishAction): Promise<void> {
   if (!hasNative) return Promise.resolve();
-  return Capture.finishScroll(action);
+  return Capture.finishScroll(sessionId, action);
 }
 
-export function setScrollAuto(enabled: boolean): Promise<void> {
+export function setScrollAuto(sessionId: string, enabled: boolean): Promise<void> {
   if (!hasNative) return Promise.resolve();
-  return Capture.setScrollAuto(enabled);
+  return Capture.setScrollAuto(sessionId, enabled);
 }
 
 /** Pauses/resumes frame capture for the running scrolling session (R9). */
-export function setScrollPaused(paused: boolean): Promise<void> {
+export function setScrollPaused(sessionId: string, paused: boolean): Promise<void> {
   if (!hasNative) return Promise.resolve();
-  return Capture.setScrollPaused(paused);
+  return Capture.setScrollPaused(sessionId, paused);
 }
 
 // ------------------------------------------------- scroll result window (R9)
 
-export function copyScrollResult(): Promise<void> {
-  if (!hasNative) return Promise.resolve();
-  return Capture.copyScrollResult();
+function requireScrollResultID(id: string): void {
+  if (typeof id !== "string" || !id.trim()) throw new Error("缺少长图结果 ID");
 }
 
-export function saveScrollResult(): Promise<string> {
-  if (!hasNative) return Promise.resolve("");
-  return Capture.saveScrollResult();
+export async function copyScrollResult(id: string): Promise<void> {
+  requireScrollResultID(id);
+  if (!hasNative) return;
+  return Capture.copyScrollResult(id);
 }
 
-export function pinScrollResult(): Promise<string> {
-  if (!hasNative) return Promise.resolve("browser-preview-pin");
-  return Capture.pinScrollResult();
+export async function saveScrollResult(id: string): Promise<string> {
+  requireScrollResultID(id);
+  if (!hasNative) return "";
+  return Capture.saveScrollResult(id);
 }
 
-export function closeScrollResult(): Promise<void> {
-  if (!hasNative) return Promise.resolve();
-  return Capture.closeScrollResult();
+export async function pinScrollResult(id: string): Promise<string> {
+  requireScrollResultID(id);
+  if (!hasNative) return "browser-preview-pin";
+  return Capture.pinScrollResult(id);
+}
+
+export async function closeScrollResult(id: string): Promise<void> {
+  requireScrollResultID(id);
+  if (!hasNative) return;
+  return Capture.closeScrollResult(id);
 }
 
 export function scrollAccessibilityGranted(): Promise<boolean> {
@@ -350,7 +349,6 @@ function subscribe<T>(event: { on: (listener: (payload: T) => void) => () => voi
 export const onCaptureCancelled = (cb: (payload: Native.CaptureCancelledPayload) => void) => subscribe(events.captureCancelled, cb);
 export const onCaptureFailed = (cb: (payload: Native.CaptureFailedPayload) => void) => subscribe(events.captureFailed, cb);
 export const onOverlayShown = (cb: (payload: OverlayInfo) => void) => subscribe(events.overlayShown, cb);
-export const onOverlayCapture = (cb: (payload: OverlayCapture) => void) => subscribe(events.overlayCapture, cb);
 export const onScrollInit = (cb: (payload: ScrollInit) => void) => subscribe(events.scrollInit, cb);
 export const onScrollProgress = (cb: (payload: ScrollProgress) => void) => subscribe(events.scrollProgress, (value) => cb({ ...value, status: value.status as ScrollProgress["status"] }));
 export const onScrollResult = (cb: (payload: ScrollResult) => void) => subscribe(events.scrollResult, cb);
@@ -365,23 +363,6 @@ function browserBeginRegion(): Promise<void> {
   // No overlay windows exist in a browser tab; the main page shows the design's
   // demo screenshot instead (see main.ts).
   return Promise.resolve();
-}
-
-function browserCopyImage(base64: string): Promise<void> {
-  const bytes = base64ToBytes(base64);
-  const blob = new Blob([bytes], { type: "image/png" });
-  if (navigator.clipboard?.write && typeof ClipboardItem !== "undefined") {
-    return navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]).catch(() => {
-      throw new Error("clipboard-unavailable");
-    });
-  }
-  return Promise.reject(new Error("clipboard-unavailable"));
-}
-
-async function browserDownload(base64: string, suggestedName: string): Promise<string> {
-  const filename = /\.[a-z0-9]+$/i.test(suggestedName) ? suggestedName : `${suggestedName}.png`;
-  downloadBlob(new Blob([base64ToBytes(base64)], { type: "image/png" }), filename);
-  return filename;
 }
 
 function browserCapture(rect: Rect): OverlayCapture {

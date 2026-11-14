@@ -54,6 +54,7 @@ interface RowBase {
   key: string;
   name: string;
   description: string;
+  disabled?: boolean;
 }
 
 /** The three OS-level permissions the permission centre reports (R7.1). */
@@ -183,7 +184,8 @@ export const SETTINGS_SCHEMA: SettingsCategory[] = [
           {
             key: "ocrKey",
             name: "提取屏幕文字",
-            description: "选择区域后直接提取其中的文字。",
+            description: "未启用 · 文字识别待接入，此快捷键不会注册。",
+            disabled: true,
             type: "shortcut",
           },
         ],
@@ -387,7 +389,8 @@ export const SETTINGS_SCHEMA: SettingsCategory[] = [
           {
             key: "ocrLanguage",
             name: "识别语言",
-            description: "优先识别常用语言，减少切换。",
+            description: "未启用 · 文字识别待接入。",
+            disabled: true,
             type: "select",
             options: [
               { value: "中英文混合", label: "中英文混合" },
@@ -399,7 +402,8 @@ export const SETTINGS_SCHEMA: SettingsCategory[] = [
           {
             key: "ocrCopy",
             name: "识别后自动复制",
-            description: "文字提取成功后写入剪贴板。",
+            description: "未启用 · 文字识别待接入。",
+            disabled: true,
             type: "toggle",
           },
           {
@@ -515,14 +519,17 @@ export const DEFAULT_PREFERENCES: Preferences = {
   sideBySide: true,
 };
 
-export const SHORTCUT_KEYS = ["captureKey", "pinKey", "ocrKey"] as const;
+export const SHORTCUT_KEYS = ["captureKey", "pinKey"] as const;
 
-/** Labels shown when a global shortcut fails to register. */
+/** Labels shown for partially applied native settings. */
 export const SETTINGS_KEY_LABELS: Record<string, string> = {
   captureKey: "区域截图快捷键",
   pinKey: "固定剪贴板图片快捷键",
   ocrKey: "提取屏幕文字快捷键",
   launchAtLogin: "登录后启动",
+  keepHistory: "保存历史",
+  retentionDays: "历史保留时间",
+  historyLimitMB: "历史容量上限",
 };
 
 function isMacPlatform(): boolean {
@@ -574,8 +581,7 @@ export function loadPreferences(): Preferences {
   const preferences: Preferences = { ...DEFAULT_PREFERENCES };
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return preferences;
-    const saved = JSON.parse(raw) as Record<string, unknown>;
+    const saved = (raw ? JSON.parse(raw) : {}) as Record<string, unknown>;
     const target = preferences as unknown as Record<string, unknown>;
     for (const key of Object.keys(DEFAULT_PREFERENCES)) {
       const candidate = saved[key];
@@ -654,7 +660,7 @@ export function toNativeSettings(preferences: Preferences): Settings {
   return {
     captureKey: preferences.captureKey,
     pinKey: preferences.pinKey,
-    ocrKey: preferences.ocrKey,
+    ocrKey: "",
     afterCapture,
     format,
     quality: numberIn(preferences.quality, NUMBER_FALLBACK.quality, 50, 100),

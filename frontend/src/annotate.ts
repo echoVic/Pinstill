@@ -457,7 +457,8 @@ export class AnnotationEngine {
   endDraw(): void {
     if (this.draft) {
       const draft = this.draft;
-      if (Math.abs(draft.x2 - draft.x) + Math.abs(draft.y2 - draft.y) > 3) {
+      const points = draft.kind === "brush" ? draft.points ?? [] : [{ x: draft.x2, y: draft.y2 }];
+      if (points.some((point) => Math.abs(point.x - draft.x) + Math.abs(point.y - draft.y) > 3)) {
         this.shapes.push(draft);
       }
       this.draft = null;

@@ -2,8 +2,8 @@
 // real in-place annotation surface.
 //
 // Flow (plan R3.1): drag a selection → `Capture.PrepareSelection(rect)` → Go
-// hides the overlay, captures the region, shows it again and emits
-// `overlay:capture` → the page renders the captured PNG into
+// captures through the transparent selection and returns the payload → the
+// page renders the captured PNG into
 // `#overlayCanvas` inside the selection and shows the COMPLETE annotation
 // toolbar (tools, color swatches, width/font slider, text entry, undo,
 // 复制/贴图/保存/取消). Actions send the composited PNG through
@@ -14,6 +14,7 @@
 // browser (no MyGo runtime) the flow is simulated with the design's demo image
 // and toasts, so the static preview stays demoable without console errors.
 
+import { DEFAULT_PREFERENCES, loadPreferences } from "./settings";
 import { AnnotationEngine, DEFAULT_TEXT_FONT, InlineTextEditor } from "./annotate";
 import type { WatermarkLayer } from "./annotate";
 import {
@@ -21,8 +22,6 @@ import {
   cancelRegion,
   finishAnnotated,
   hasNative,
-  onCaptureFailed,
-  onOverlayCapture,
   onOverlayShown,
   openPermissionSettings,
   overlayInfo,
@@ -48,6 +47,16 @@ import { blobToBase64, decodeImageBlob, flashButtonSuccess, setButtonPending } f
 const MIN_SELECTION = 3;
 const TOOLBAR_GAP = 10;
 const EDGE_MARGIN = 8;
+// Keep these in sync with internal/imagebudget/budget.go.
+const MAX_IMAGE_PIXELS = 32 * 1024 * 1024;
+const MAX_ENCODED_BYTES = 64 * 1024 * 1024;
+
+function checkImageDimensions(width: number, height: number): void {
+  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0) {
+    throw new Error("图片尺寸无效");
+  }
+  if (width > MAX_IMAGE_PIXELS / height) throw new Error("图片像素超过上限（32 × 1024²）");
+}
 
 type Phase = "idle" | "selecting" | "preparing" | "annotating" | "finishing";
 type AfterCapture = "inplace" | "clipboard" | "pin";
@@ -181,34 +190,14 @@ const captureErrorRetry = el<HTMLButtonElement>("captureErrorRetry");
 const captureErrorCancel = el<HTMLButtonElement>("captureErrorCancel");
 const hintInitialHTML = hint.innerHTML;
 
-interface StoredPreferences {
-  defaultColor?: unknown;
-  defaultWidth?: unknown;
-  defaultTool?: unknown;
-  tooltip?: unknown;
-  tooltipDelay?: unknown;
-  enterCopy?: unknown;
-  scrollAuto?: unknown;
-  watermarkText?: unknown;
-  watermarkOpacity?: unknown;
-}
-
-function readStoredPreferences(): StoredPreferences {
-  try {
-    return JSON.parse(localStorage.getItem("pinstill.preferences") ?? "{}") as StoredPreferences;
-  } catch {
-    return {};
-  }
-}
-
-const storedPreferences = readStoredPreferences();
+let storedPreferences = loadPreferences();
 let color =
   normalizeColor(storedPreferences.defaultColor) ?? PRESET_COLORS[0]!;
 let penWidth =
   typeof storedPreferences.defaultWidth === "number"
     ? clamp(Math.round(storedPreferences.defaultWidth), 1, 10)
     : 2;
-const watermarkText =
+let watermarkText =
   typeof storedPreferences.watermarkText === "string" && storedPreferences.watermarkText
     ? storedPreferences.watermarkText
     : "Pinstill";
@@ -265,21 +254,21 @@ function saveTextStyle(): void {
 }
 
 
-const watermarkOpacity =
+let watermarkOpacity =
   typeof storedPreferences.watermarkOpacity === "number"
     ? clamp(storedPreferences.watermarkOpacity, 10, 90)
     : 35;
 
 const initialTool = storedPreferences.defaultTool;
 let currentTool: ToolId =
-  typeof initialTool === "string" && isDrawTool(initialTool) ? initialTool : "rect";
-const tooltipsEnabled = storedPreferences.tooltip !== false;
-const tooltipDelayMs =
+  typeof initialTool === "string" && isDrawTool(initialTool) ? initialTool : DEFAULT_PREFERENCES.defaultTool as ToolId;
+let tooltipsEnabled = storedPreferences.tooltip !== false;
+let tooltipDelayMs =
   typeof storedPreferences.tooltipDelay === "number"
     ? clamp(Math.round(storedPreferences.tooltipDelay), 0, 2000)
     : 120;
-const enterCopyEnabled = storedPreferences.enterCopy !== false;
-const scrollAutoDefault = storedPreferences.scrollAuto !== false;
+let enterCopyEnabled = storedPreferences.enterCopy !== false;
+let scrollAutoDefault = storedPreferences.scrollAuto !== false;
 let entry = "重点说明";
 
 // Tiled watermark: a full-canvas layer (not a movable shape) with its own
@@ -288,6 +277,8 @@ let entry = "重点说明";
 interface WatermarkSettings {
   text: string;
   opacity: number;
+  generalText: string;
+  generalOpacity: number;
 }
 
 const WATERMARK_STYLE_KEY = "pinstill.watermark";
@@ -296,15 +287,22 @@ function loadWatermarkSettings(): WatermarkSettings {
   const fallback: WatermarkSettings = {
     text: watermarkText,
     opacity: clamp(watermarkOpacity, 10, 90),
+    generalText: watermarkText,
+    generalOpacity: clamp(watermarkOpacity, 10, 90),
   };
   try {
     const raw = JSON.parse(localStorage.getItem(WATERMARK_STYLE_KEY) ?? "null") as
       | Partial<WatermarkSettings>
       | null;
-    if (raw && typeof raw.text === "string") {
-      fallback.text = raw.text.slice(0, 20) || "Pinstill";
+    // Older toolbar values have no baseline: retain them once and attach the
+    // current defaults. Future general text/opacity changes take precedence.
+    const legacy = raw && raw.generalText === undefined && raw.generalOpacity === undefined;
+    if (raw && typeof raw.text === "string" && (legacy ||
+      (raw.generalText === fallback.generalText && raw.generalOpacity === fallback.generalOpacity))) {
+      fallback.text = raw.text.slice(0, 20);
       fallback.opacity = clamp(Math.round(Number(raw.opacity) || 30), 10, 90);
     }
+    localStorage.setItem(WATERMARK_STYLE_KEY, JSON.stringify(fallback));
   } catch {
     // Ignore broken storage and use the settings defaults.
   }
@@ -363,8 +361,9 @@ let currentY = 0;
 let committedRect: Rect | null = null;
 
 let engine: AnnotationEngine | null = null;
-let captureHandled = false;
-let handledCaptureId = "";
+let captureAttempt = 0;
+let captureImage: ImageBitmap | HTMLImageElement | HTMLCanvasElement | null = null;
+let settingsSequence = 0;
 let drawingPointer: number | null = null;
 
 let transientTimer: number | undefined;
@@ -692,15 +691,19 @@ async function startScrollFromToolbar(): Promise<void> {
     );
     return;
   }
+  const attempt = captureAttempt;
+  phase = "finishing";
   setToolbarPending(true, "正在进入滚动截图…");
   try {
     // R9: automatic scrolling by default (the user's preference can switch the
     // default); Go falls back to manual and reports autoDenied on the control
     // bar when the Accessibility permission is missing.
     await startScroll(committedRect, scrollAutoDefault);
-    phase = "finishing";
+    if (!currentAttempt(attempt)) return;
     setToolbarStatus("滚动截图进行中 · 结束后自动预览");
   } catch (error) {
+    if (!currentAttempt(attempt)) return;
+    phase = "annotating";
     setToolbarPending(false);
     setToolbarStatus(`无法开始滚动截图：${errorMessage(error)}`, "error");
   }
@@ -1057,13 +1060,37 @@ function normalizeAfterCapture(value: unknown): AfterCapture {
   return "inplace";
 }
 
+function reloadOverlayPreferences(): void {
+  storedPreferences = loadPreferences();
+  color = normalizeColor(storedPreferences.defaultColor) ?? DEFAULT_PREFERENCES.defaultColor;
+  penWidth = clamp(Math.round(storedPreferences.defaultWidth), 1, 10);
+  currentTool = isDrawTool(storedPreferences.defaultTool)
+    ? storedPreferences.defaultTool : DEFAULT_PREFERENCES.defaultTool as ToolId;
+  tooltipsEnabled = storedPreferences.tooltip;
+  tooltipDelayMs = clamp(Math.round(storedPreferences.tooltipDelay), 0, 2000);
+  enterCopyEnabled = storedPreferences.enterCopy;
+  scrollAutoDefault = storedPreferences.scrollAuto;
+  watermarkText = storedPreferences.watermarkText || "Pinstill";
+  watermarkOpacity = clamp(storedPreferences.watermarkOpacity, 10, 90);
+  watermark = loadWatermarkSettings();
+  textStyle = loadTextStyle();
+  document.documentElement.style.setProperty("--tooltip-delay", `${tooltipDelayMs}ms`);
+  toolbar.classList.toggle("no-tooltips", !tooltipsEnabled);
+  updateWidthValue();
+  setColor(color);
+  selectTool(currentTool);
+  applyTextStyleUI();
+  updateWatermarkUI();
+}
+
 function loadSettings(): Promise<void> {
+  const sequence = ++settingsSequence;
   return settings()
     .then((current) => {
-      afterCapture = normalizeAfterCapture(current.afterCapture);
+      if (sequence === settingsSequence) afterCapture = normalizeAfterCapture(current.afterCapture);
     })
     .catch(() => {
-      afterCapture = "inplace";
+      if (sequence === settingsSequence) afterCapture = "inplace";
     });
 }
 
@@ -1077,20 +1104,21 @@ function mappedAfterCapture(): { go: FinishAnnotatedAction; ui: ToolbarAction } 
 // Prepare → annotate
 // ---------------------------------------------------------------------------
 
-function handleCapture(payload: OverlayCapture | null | undefined): void {
-  if (!payload || !payload.url) return;
-  if (phase !== "preparing") return;
-  if (captureHandled) return;
-  if (payload.id && payload.id === handledCaptureId) return;
-  captureHandled = true;
-  handledCaptureId = payload.id ?? "capture";
-  void beginAnnotation(payload);
+function currentAttempt(attempt: number): boolean {
+  return attempt === captureAttempt;
+}
+
+function releaseCaptureImage(): void {
+  if (captureImage && "close" in captureImage) captureImage.close();
+  captureImage = null;
 }
 
 async function fetchCaptureBlob(url: string): Promise<Blob> {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`图片请求失败（HTTP ${response.status}）`);
-  return response.blob();
+  const blob = await response.blob();
+  if (blob.size > MAX_ENCODED_BYTES) throw new Error("图片文件超过上限（64 MiB）");
+  return blob;
 }
 
 /** Opens the inline text editor at a canvas point (text and tag tools). */
@@ -1140,27 +1168,34 @@ function openInlineText(point: { x: number; y: number }): void {
   });
 }
 
-async function beginAnnotation(payload: OverlayCapture): Promise<void> {
-  try {
-    await settingsReady;
-    const blob = await fetchCaptureBlob(payload.url);
-    const autoAction = mappedAfterCapture();
-    if (autoAction) {
-      // afterCapture copy/pin: skip the toolbar, finish with the raw PNG.
-      const rawBase64 = await blobToBase64(blob);
-      phase = "annotating";
-      setToolbarStatus(PENDING_LABELS[autoAction.ui]);
-      await finishWith(autoAction.go, rawBase64, autoAction.ui);
-      return;
-    }
+async function beginAnnotation(payload: OverlayCapture, attempt: number): Promise<void> {
+  await settingsReady;
+  if (!currentAttempt(attempt)) return;
+  const rect = payload.rect ?? committedRect ?? selectionRect();
+  const width = Math.round(payload.width ?? rect.width);
+  const height = Math.round(payload.height ?? rect.height);
+  checkImageDimensions(width, height);
+  const blob = await fetchCaptureBlob(payload.url);
+  if (!currentAttempt(attempt)) return;
+  const autoAction = mappedAfterCapture();
 
-    const image = await decodeImageBlob(blob);
-    const rect = payload.rect ?? committedRect ?? selectionRect();
+  const image = await decodeImageBlob(blob);
+  if (!currentAttempt(attempt)) {
+    if ("close" in image) image.close();
+    return;
+  }
+  let installed = false;
+  try {
+    checkImageDimensions("naturalWidth" in image ? image.naturalWidth : image.width ?? width,
+      "naturalHeight" in image ? image.naturalHeight : image.height ?? height);
     committedRect = rect;
     selection.classList.remove("capturing");
     positionSelection(rect);
-    canvas.width = Math.max(1, Math.round(payload.width || rect.width));
-    canvas.height = Math.max(1, Math.round(payload.height || rect.height));
+    // Clear the old width first: mixing a new width with the previous height
+    // could otherwise temporarily allocate more pixels than either image.
+    canvas.width = 0;
+    canvas.height = height;
+    canvas.width = width;
     canvas.hidden = false;
     prepareState.hidden = true;
     dim.hidden = true;
@@ -1190,10 +1225,19 @@ async function beginAnnotation(payload: OverlayCapture): Promise<void> {
     crosshairH.hidden = true;
     showToolbar();
     updateToolbarState();
-  } catch (error) {
-    const message = errorMessage(error);
-    reset();
-    showTransient(`标注准备失败：${message} · 请重新拖动选择`);
+    // Keep the previous source usable until drawing the replacement succeeds;
+    // resize rollback may need it to redraw the original annotations.
+    releaseCaptureImage();
+    captureImage = image;
+    installed = true;
+  } finally {
+    if (!installed && "close" in image) image.close();
+  }
+  if (autoAction) {
+    // Keep an editable surface ready if automatic copy/pin fails.
+    const rawBase64 = await blobToBase64(blob);
+    if (!currentAttempt(attempt)) return;
+    await finishWith(autoAction.go, rawBase64, autoAction.ui);
   }
 }
 
@@ -1215,7 +1259,12 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   });
 }
 
-async function prepareSelectionFor(rect: Rect, fast = false): Promise<void> {
+async function prepareSelectionFor(
+  rect: Rect,
+  fast = false,
+  onFailure?: (error: unknown) => void,
+): Promise<void> {
+  const attempt = ++captureAttempt;
   phase = "preparing";
   toolbarMoved = false;
   lastCanvasClick = null;
@@ -1225,10 +1274,6 @@ async function prepareSelectionFor(rect: Rect, fast = false): Promise<void> {
   // marks, size badge, crosshair and hint so the captured image contains none
   // of our UI (the selection interior is already transparent).
   hideToolbar();
-  // A resize may re-capture within the same session, so the delivery guard
-  // has to accept the next capture id.
-  captureHandled = false;
-  handledCaptureId = "";
   selection.classList.add("capturing");
   // No "capturing" spinner here: the wait is ~250ms at most and the spinner
   // looked like a hang while adjusting the region. A watchdog below recovers
@@ -1240,7 +1285,6 @@ async function prepareSelectionFor(rect: Rect, fast = false): Promise<void> {
   sizeBadge.hidden = true;
   demoToast.hidden = true;
   try {
-    let payload: OverlayCapture;
     if (fast) {
       // Let the browser paint the chrome-free frame before Go grabs the screen;
       // the timer fallback means rAF throttling can never stall the capture.
@@ -1254,20 +1298,32 @@ async function prepareSelectionFor(rect: Rect, fast = false): Promise<void> {
         requestAnimationFrame(() => requestAnimationFrame(finish));
         window.setTimeout(finish, 120);
       });
-      payload = await withTimeout(prepareSelectionFast(rect), 4000, "重新截取超时");
-    } else {
-      payload = await withTimeout(prepareSelection(rect), 10000, "截取超时");
+      if (!currentAttempt(attempt)) return;
     }
-    handleCapture(payload);
+    const preparation = (async () => {
+      const payload = fast
+        ? await prepareSelectionFast(rect)
+        : await withTimeout(prepareSelection(rect), 10000, "截取超时");
+      if (!currentAttempt(attempt)) return;
+      if (!payload?.url) throw new Error("截图数据无效");
+      await beginAnnotation(payload, attempt);
+    })();
+    // A stalled image fetch/decode must restore a resized selection too.
+    if (fast) await withTimeout(preparation, 4000, "重新截取超时");
+    else await preparation;
   } catch (error) {
-    if (captureHandled) return;
-    failPreparation(errorMessage(error));
+    if (!currentAttempt(attempt)) return;
+    // Invalidate pending fetch/decode work before restoring the old surface.
+    ++captureAttempt;
+    if (onFailure) {
+      onFailure(error);
+      return;
+    }
+    const message = errorMessage(error);
+    // The request error currently carries only text; capture:failed has no
+    // request identity and cannot safely supply its permission flag here.
+    showCaptureFailure(message, /屏幕录制权限|screen recording permission/i.test(message));
   }
-}
-
-function failPreparation(message: string): void {
-  reset();
-  showTransient(`截取失败：${message} · 请重新拖动选择`);
 }
 
 // ---------------------------------------------------------------------------
@@ -1279,8 +1335,7 @@ function hideCaptureError(): void {
 }
 
 function showCaptureFailure(rawMessage: string, permission: boolean): void {
-  inlineEditor?.cancel();
-  inlineEditor = null;
+  reset();
   phase = "finishing";
   hideToolbar();
   selection.classList.remove("capturing");
@@ -1345,6 +1400,7 @@ async function finishWith(
   uiAction: ToolbarAction = action as ToolbarAction,
 ): Promise<void> {
   if (phase === "finishing") return;
+  const attempt = captureAttempt;
   phase = "finishing";
   palettePanel.close();
   const button = actionButton(uiAction);
@@ -1355,14 +1411,27 @@ async function finishWith(
     return;
   }
   try {
-    await finishAnnotated(action, base64);
-    // Go hides the overlay and performs the action; the next overlay:shown
-    // (BeginRegion) resets this page.
+    const encodedLimit = Math.ceil(MAX_ENCODED_BYTES / 3) * 4;
+    if (base64.length > encodedLimit || (base64.length / 4 * 3 -
+      (base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0)) > MAX_ENCODED_BYTES) {
+      throw new Error("图片文件超过上限（64 MiB）");
+    }
+    const result = await finishAnnotated(action, base64);
+    if (!currentAttempt(attempt)) return;
+    if (result.completed || (action === "cancel" && result.cancelled)) {
+      reset();
+      return;
+    }
+    if (!result.cancelled) throw new Error("操作未完成，请重试");
+    setButtonPending(button, false);
+    phase = "annotating";
+    showToolbar();
+    setToolbarStatus("已取消保存，可继续标注");
   } catch (error) {
+    if (!currentAttempt(attempt)) return;
     const message = errorMessage(error);
     setButtonPending(button, false);
     if (!engine) {
-      // The afterCapture shortcut path has no annotation surface to return to.
       reset();
       showTransient(`操作失败：${message} · 请重新拖动选择`);
       return;
@@ -1381,7 +1450,11 @@ async function runAction(action: ToolbarAction): Promise<void> {
     return;
   }
   if (!engine) return;
-  await finishWith(action, engine.toPNGBase64(), action);
+  try {
+    await finishWith(action, engine.toPNGBase64(), action);
+  } catch (error) {
+    setToolbarStatus(`导出失败：${errorMessage(error)}`, "error");
+  }
 }
 
 // Showcase/test hook: render a generated image as the captured base, so the
@@ -1406,6 +1479,8 @@ hookHost.__pinstillDemoCapture = async (dataUrl: string): Promise<void> => {
 // ---------------------------------------------------------------------------
 
 function reset(): void {
+  ++captureAttempt;
+  releaseCaptureImage();
   phase = "idle";
   watermarkEnabled = false;
   if (inlineEditor) {
@@ -1421,8 +1496,6 @@ function reset(): void {
   transientTimer = undefined;
   demoResetTimer = undefined;
   engine = null;
-  captureHandled = false;
-  handledCaptureId = "";
   drawingPointer = null;
   committedRect = null;
   startX = 0;
@@ -1461,8 +1534,9 @@ function beginSelection(x: number, y: number): void {
 }
 
 function cancelRegionFlow(): void {
-  if (phase === "preparing" || phase === "finishing") return;
-  if (transientTimer) window.clearTimeout(transientTimer);
+  if (phase === "finishing") return;
+  reset();
+  const attempt = captureAttempt;
   phase = "finishing";
   hideToolbar();
   positionMasks(null);
@@ -1476,7 +1550,7 @@ function cancelRegionFlow(): void {
     reset();
     return;
   }
-  void cancelRegion().catch(() => reset());
+  void cancelRegion().catch(() => { if (currentAttempt(attempt)) reset(); });
 }
 
 // ---------------------------------------------------------------------------
@@ -1563,7 +1637,7 @@ async function recaptureSelection(rect: Rect, previous: Rect): Promise<void> {
   // Shrinking is instant: the new region lies inside the capture we already
   // have, so crop it locally instead of grabbing the screen again.
   if (
-    previous &&
+    previous && captureImage &&
     rect.x >= previous.x - 0.5 &&
     rect.y >= previous.y - 0.5 &&
     rect.x + rect.width <= previous.x + previous.width + 0.5 &&
@@ -1581,7 +1655,12 @@ async function recaptureSelection(rect: Rect, previous: Rect): Promise<void> {
     cropped.width = sw;
     cropped.height = sh;
     const cropCtx = cropped.getContext("2d");
-    cropCtx?.drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+    if (!cropCtx) return;
+    // Crop the original pixels. Cropping the composited canvas would bake in
+    // the annotations and watermark before the new engine draws them again.
+    cropCtx.drawImage(captureImage, sx, sy, sw, sh, 0, 0, sw, sh);
+    releaseCaptureImage();
+    captureImage = cropped;
     canvas.width = sw;
     canvas.height = sh;
     canvas.hidden = false;
@@ -1595,28 +1674,32 @@ async function recaptureSelection(rect: Rect, previous: Rect): Promise<void> {
     }
     return;
   }
+  const previousEngine = engine;
+  const previousWidth = canvas.width;
+  const previousHeight = canvas.height;
   committedRect = rect;
   positionSelection(rect);
-  try {
-    await prepareSelectionFor(rect, true);
-  } catch (error) {
-    // Keep the user's previous capture usable instead of freezing behind a
-    // "正在截取" state: restore the old region and its canvas (annotations are
-    // still in the engine).
-    if ((phase as Phase) === "preparing") {
-      phase = "annotating";
-      committedRect = previous;
-      canvas.hidden = false;
-      prepareState.hidden = true;
-      selection.classList.remove("capturing");
-      positionSelection(previous);
-      updateSizeBadge(previous);
-      showToolbar();
-      showTransient(`重新截取失败：${errorMessage(error)} · 已恢复原选区`, 3000);
-    }
-    return;
-  }
-  if (hadAnnotations && phase === "annotating") {
+  const preparation = prepareSelectionFor(rect, true, (error) => {
+    // Called only for the current attempt. The old source stays owned by this
+    // session until beginAnnotation successfully installs its replacement.
+    committedRect = previous;
+    engine = previousEngine;
+    canvas.width = 0;
+    canvas.height = previousHeight;
+    canvas.width = previousWidth;
+    canvas.hidden = false;
+    phase = "annotating";
+    prepareState.hidden = true;
+    dim.hidden = true;
+    selection.classList.remove("capturing");
+    positionSelection(previous);
+    engine?.redraw();
+    showToolbar();
+    showTransient(`重新截取失败 · 已恢复原选区：${errorMessage(error)}`);
+  });
+  const attempt = captureAttempt;
+  await preparation;
+  if (currentAttempt(attempt) && hadAnnotations && phase === "annotating") {
     showTransient("选区已调整 · 已重新截取（原有标注已重置）", 2200);
   }
 }
@@ -1758,7 +1841,7 @@ window.addEventListener("pointerup", (event) => {
 
 window.addEventListener("contextmenu", (event) => {
   event.preventDefault();
-  if (phase === "idle" || phase === "selecting") cancelRegionFlow();
+  if (phase === "idle" || phase === "selecting" || phase === "preparing") cancelRegionFlow();
 });
 
 window.addEventListener("keydown", (event) => {
@@ -1776,7 +1859,7 @@ window.addEventListener("keydown", (event) => {
       void finishWith("cancel", "");
       return;
     }
-    if (phase === "idle" || phase === "selecting") {
+    if (phase === "idle" || phase === "selecting" || phase === "preparing") {
       cancelRegionFlow();
       return;
     }
@@ -1788,7 +1871,7 @@ window.addEventListener("keydown", (event) => {
     undo();
     return;
   }
-  if (event.key === "Enter" && phase === "annotating") {
+  if (event.key === "Enter" && enterCopyEnabled && phase === "annotating") {
     if (palettePanel.isOpen() && palettePanel.contains(event.target)) return;
     event.preventDefault();
     void runAction("copy");
@@ -1799,13 +1882,9 @@ window.addEventListener("keydown", (event) => {
 // Events / init
 // ---------------------------------------------------------------------------
 
-onOverlayCapture((payload) => handleCapture(payload));
-
-onCaptureFailed((payload) => {
-  // Go reports capture failures to the overlay page now: stay here and show
-  // in-place guidance instead of involving the main window.
-  showCaptureFailure(payload.message, payload.permission);
-});
+// PrepareSelection returns the same payload it broadcasts. Only consume the
+// request result: overlay:capture and capture:failed lack an attempt identity,
+// so late events from cancelled/timed-out requests cannot be matched safely.
 
 captureErrorSettings.addEventListener("click", () => {
   void openPermissionSettings().catch(() => {});
@@ -1816,9 +1895,9 @@ onOverlayShown((payload) => {
   if (payload && Number.isFinite(payload.width) && payload.width > 0) displayInfo = payload;
   // PrepareSelection re-shows the overlay without overlay:shown; if this is a
   // new BeginRegion session, reset everything.
-  if (phase === "preparing" || phase === "annotating") return;
-  settingsReady = loadSettings();
   reset();
+  reloadOverlayPreferences();
+  settingsReady = loadSettings();
 });
 
 buildToolbar();

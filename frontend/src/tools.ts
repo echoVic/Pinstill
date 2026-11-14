@@ -49,6 +49,7 @@ export const TOOLS: ReadonlyArray<readonly [ToolId, string]> = [
 
 /** Lucide icon names used by `refreshPinstillIcons`. */
 export const TOOL_ICONS: Record<string, string> = {
+  drag: "move",
   rect: "square",
   ellipse: "circle",
   line: "minus",
