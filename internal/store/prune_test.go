@@ -258,3 +258,43 @@ func TestPruneHugeRetentionDaysDoesNotOverflow(t *testing.T) {
 		t.Fatalf("List() after huge retention = %v, want %q", ids, ancient.ID)
 	}
 }
+
+func TestPruneRetriesFailedFileCleanup(t *testing.T) {
+	s := testStore(t)
+	entry := mustSave(t, s, testPNG(t, 32, 32), time.Now().Add(-48*time.Hour))
+	blocked := filepath.Join(s.Dir(), entry.File)
+	if err := os.Remove(blocked); err != nil {
+		t.Fatalf("remove original PNG before blocker: %v", err)
+	}
+	if err := os.Mkdir(blocked, 0o755); err != nil {
+		t.Fatalf("make blocking directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(blocked, "live"), []byte("keep until retry"), 0o600); err != nil {
+		t.Fatalf("write blocker child: %v", err)
+	}
+
+	removed, err := s.Prune(1, 0)
+	if removed != 1 || err == nil {
+		t.Fatalf("first Prune() = (%d, %v), want (1, error)", removed, err)
+	}
+	if err := os.Remove(filepath.Join(blocked, "live")); err != nil {
+		t.Fatalf("remove blocker child: %v", err)
+	}
+	if err := os.Remove(blocked); err != nil {
+		t.Fatalf("remove blocker directory: %v", err)
+	}
+
+	reopened, err := Open(s.Dir())
+	if err != nil {
+		t.Fatalf("reopen before cleanup retry: %v", err)
+	}
+	removed, err = reopened.Prune(1, 0)
+	if removed != 1 || err != nil {
+		t.Fatalf("retry Prune() = (%d, %v), want (1, nil)", removed, err)
+	}
+	for _, name := range []string{entry.File, entry.Thumb} {
+		if _, err := os.Stat(filepath.Join(s.Dir(), name)); !os.IsNotExist(err) {
+			t.Fatalf("%q remains after cleanup retry (err = %v)", name, err)
+		}
+	}
+}

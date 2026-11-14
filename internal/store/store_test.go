@@ -3,14 +3,18 @@ package store
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"image"
 	"image/color"
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/echoVic/Pinstill/internal/diskio"
 )
 
 // testPNG builds a deterministic, non-uniform PNG of the requested size.
@@ -446,6 +450,39 @@ func TestClear(t *testing.T) {
 	}
 }
 
+func TestSavePublishesCommittedIndexBeforeDurabilityError(t *testing.T) {
+	s := testStore(t)
+	data := testPNG(t, 32, 32)
+	s.indexWriter = func(path string, data []byte, mode os.FileMode) error {
+		if err := diskio.WriteFileAtomic(path, data, mode); err != nil {
+			return err
+		}
+		if filepath.Base(path) == indexFileName {
+			return diskio.MarkCommitted(errors.New("directory sync failed"))
+		}
+		return nil
+	}
+
+	entry, err := s.Save(data, time.Now())
+	if err == nil {
+		t.Fatal("Save() returned nil error after committed durability failure")
+	}
+	if entry.ID == "" {
+		t.Fatalf("Save() returned empty entry with committed error: %v", err)
+	}
+	if listed := s.List(); len(listed) != 1 || listed[0].ID != entry.ID {
+		t.Fatalf("List() after committed Save = %v, want only %q", listed, entry.ID)
+	}
+
+	reopened, err := Open(s.Dir())
+	if err != nil {
+		t.Fatalf("Open() after committed Save: %v", err)
+	}
+	if listed := reopened.List(); len(listed) != 1 || listed[0].ID != entry.ID {
+		t.Fatalf("reopened List() = %v, want only %q", listed, entry.ID)
+	}
+}
+
 func TestReadPNGMissingFile(t *testing.T) {
 	s := testStore(t)
 	entry := mustSave(t, s, testPNG(t, 16, 16), time.Now())
@@ -505,8 +542,124 @@ func assertOnlyIndexFile(t *testing.T, dir string) {
 		t.Fatalf("os.ReadDir() error = %v", err)
 	}
 	for _, entry := range dirEntries {
-		if entry.Name() != indexFileName {
+		if entry.Name() != indexFileName && entry.Name() != ".pinstill.lock" {
 			t.Fatalf("unexpected file %q in store directory", entry.Name())
 		}
+	}
+}
+
+func TestClearRetriesFailedFileCleanup(t *testing.T) {
+	s := testStore(t)
+	entry := mustSave(t, s, testPNG(t, 32, 32), time.Now())
+	blocked := filepath.Join(s.Dir(), entry.File)
+	if err := os.Remove(blocked); err != nil {
+		t.Fatalf("remove original PNG before blocker: %v", err)
+	}
+	if err := os.Mkdir(blocked, 0o755); err != nil {
+		t.Fatalf("make blocking directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(blocked, "live"), []byte("keep until retry"), 0o600); err != nil {
+		t.Fatalf("write blocker child: %v", err)
+	}
+
+	if err := s.Clear(); err == nil {
+		t.Fatal("first Clear() returned nil despite blocked file")
+	}
+	if err := os.Remove(filepath.Join(blocked, "live")); err != nil {
+		t.Fatalf("remove blocker child: %v", err)
+	}
+	if err := os.Remove(blocked); err != nil {
+		t.Fatalf("remove blocker directory: %v", err)
+	}
+
+	reopened, err := Open(s.Dir())
+	if err != nil {
+		t.Fatalf("reopen before cleanup retry: %v", err)
+	}
+	if err := reopened.Clear(); err != nil {
+		t.Fatalf("retry Clear() error = %v", err)
+	}
+	for _, name := range []string{entry.File, entry.Thumb} {
+		if _, err := os.Stat(filepath.Join(s.Dir(), name)); !os.IsNotExist(err) {
+			t.Fatalf("%q remains after cleanup retry (err = %v)", name, err)
+		}
+	}
+}
+
+func TestDeleteRetriesFailedFileCleanup(t *testing.T) {
+	s := testStore(t)
+	entry := mustSave(t, s, testPNG(t, 32, 32), time.Now())
+	blocked := filepath.Join(s.Dir(), entry.File)
+	if err := os.Remove(blocked); err != nil {
+		t.Fatalf("remove original PNG before blocker: %v", err)
+	}
+	if err := os.Mkdir(blocked, 0o755); err != nil {
+		t.Fatalf("make blocking directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(blocked, "live"), []byte("keep until retry"), 0o600); err != nil {
+		t.Fatalf("write blocker child: %v", err)
+	}
+
+	if err := s.Delete(entry.ID); err == nil {
+		t.Fatal("first Delete() returned nil despite blocked file")
+	}
+	if err := os.Remove(filepath.Join(blocked, "live")); err != nil {
+		t.Fatalf("remove blocker child: %v", err)
+	}
+	if err := os.Remove(blocked); err != nil {
+		t.Fatalf("remove blocker directory: %v", err)
+	}
+
+	reopened, err := Open(s.Dir())
+	if err != nil {
+		t.Fatalf("reopen before cleanup retry: %v", err)
+	}
+	if err := reopened.Delete(entry.ID); err != nil {
+		t.Fatalf("retry Delete() error = %v", err)
+	}
+	for _, name := range []string{entry.File, entry.Thumb} {
+		if _, err := os.Stat(filepath.Join(s.Dir(), name)); !os.IsNotExist(err) {
+			t.Fatalf("%q remains after Delete retry (err = %v)", name, err)
+		}
+	}
+}
+
+func TestOpenRejectsOversizedIndexWithoutRecovery(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, indexFileName)
+	data := []byte(`{"version":1,"entries":[],"padding":"` + strings.Repeat("x", 8<<20) + `"}`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(dir); err == nil {
+		t.Fatal("Open() accepted an oversized index")
+	} else if errors.Is(err, errCorruptIndex) {
+		t.Fatalf("oversized index was treated as recoverable corruption: %v", err)
+	}
+	if info, err := os.Stat(path); err != nil || info.Size() != int64(len(data)) {
+		t.Fatalf("oversized index was altered: %v", err)
+	}
+}
+
+func TestDeleteSanitizesRefreshedIndexBeforeRemovingFiles(t *testing.T) {
+	s := testStore(t)
+	entry := mustSave(t, s, testPNG(t, 32, 32), time.Now())
+	outside := filepath.Join(filepath.Dir(s.Dir()), "outside-history.png")
+	if err := os.WriteFile(outside, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(outside) })
+	entry.File = "../outside-history.png"
+	data, err := json.Marshal(indexFile{Version: indexVersion, Entries: []Entry{entry}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, s.Dir(), indexFileName, data)
+
+	if err := s.Delete(entry.ID); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Fatalf("tampered index caused deletion outside store: %v", err)
 	}
 }

@@ -8,13 +8,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"image/png"
+	"image"
+	"image/jpeg"
+	"slices"
+
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/echoVic/Pinstill/internal/diskio"
+	"github.com/echoVic/Pinstill/internal/imagebudget"
 )
 
 const (
@@ -22,6 +28,7 @@ const (
 	indexVersion  = 1
 	pngExt        = ".png"
 	thumbExt      = ".thumb.jpg"
+	maxIndexBytes = 8 << 20
 
 	// maxRetentionDays caps the age limit so multiplying by 24h cannot
 	// overflow time.Duration for absurd configuration values. A retention of
@@ -49,14 +56,17 @@ type Entry struct {
 type Store struct {
 	dir string
 
-	mu      sync.Mutex
-	entries []Entry // newest first
+	mu            sync.Mutex
+	entries       []Entry // newest first
+	pendingDelete []Entry // records whose files still need removal
+	indexWriter   func(string, []byte, os.FileMode) error
 }
 
 // indexFile is the on-disk JSON shape of index.json.
 type indexFile struct {
-	Version int     `json:"version"`
-	Entries []Entry `json:"entries"`
+	Version       int     `json:"version"`
+	Entries       []Entry `json:"entries"`
+	PendingDelete []Entry `json:"pendingDelete,omitempty"`
 }
 
 // Open creates dir when needed and loads the history index. A missing or
@@ -75,14 +85,39 @@ func Open(dir string) (*Store, error) {
 	}
 
 	s := &Store{dir: absolute}
-	raw, err := readIndex(absolute)
+	unlock, err := diskio.LockDir(absolute)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	raw, err := readIndexState(absolute)
 	switch {
 	case err == nil:
-		entries := sanitizeEntries(raw)
+		rawEntries := raw.Entries
+		entries := sanitizeEntries(rawEntries)
+		pendingDelete := sanitizeEntries(raw.PendingDelete)
+		for i := range entries {
+			entry := &entries[i]
+			if validThumbnail(filepath.Join(absolute, thumbName(entry.ID))) {
+				entry.Thumb = thumbName(entry.ID)
+				continue
+			}
+			data, readErr := diskio.ReadFile(filepath.Join(absolute, entry.File), imagebudget.MaxEncodedBytes)
+			if readErr != nil {
+				entry.Thumb = ""
+				continue
+			}
+			source, decodeErr := imagebudget.DecodePNG(data)
+			entry.Thumb = thumbName(entry.ID)
+			if decodeErr != nil || !ensureThumbnail(absolute, *entry, source) {
+				entry.Thumb = ""
+			}
+		}
 		s.entries = entries
+		s.pendingDelete = pendingDelete
 		// Persist the cleaned index when entries were dropped, so a manually
 		// edited index does not keep failing validation on every start.
-		if len(entries) != len(raw) {
+		if !slices.Equal(entries, rawEntries) || !slices.Equal(pendingDelete, raw.PendingDelete) {
 			if err := s.writeIndex(entries); err != nil {
 				return nil, err
 			}
@@ -94,6 +129,7 @@ func Open(dir string) (*Store, error) {
 			return nil, recoverErr
 		}
 		s.entries = recovered
+		s.pendingDelete = nil
 		if err := s.writeIndex(recovered); err != nil {
 			return nil, err
 		}
@@ -112,7 +148,7 @@ func (s *Store) Save(pngData []byte, createdAt time.Time) (Entry, error) {
 	if len(pngData) == 0 {
 		return Entry{}, errors.New("store: empty image")
 	}
-	source, err := png.Decode(bytes.NewReader(pngData))
+	source, err := imagebudget.DecodePNG(pngData)
 	if err != nil {
 		return Entry{}, fmt.Errorf("store: decode PNG: %w", err)
 	}
@@ -131,6 +167,11 @@ func (s *Store) Save(pngData []byte, createdAt time.Time) (Entry, error) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.lockAndRefresh()
+	if err != nil {
+		return Entry{}, err
+	}
+	defer unlock()
 
 	id, err := s.uniqueIDLocked(createdAt)
 	if err != nil {
@@ -161,6 +202,9 @@ func (s *Store) Save(pngData []byte, createdAt time.Time) (Entry, error) {
 	next = append(next, entry)
 	sortEntries(next)
 	if err := s.writeIndex(next); err != nil {
+		if diskio.Committed(err) {
+			return entry, err
+		}
 		_ = removeIfExists(pngPath)
 		_ = removeIfExists(thumbPath)
 		return Entry{}, err
@@ -199,7 +243,7 @@ func (s *Store) ReadPNG(id string) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("store: screenshot %q not found", id)
 	}
-	data, err := os.ReadFile(filepath.Join(s.dir, entry.File))
+	data, err := diskio.ReadFile(filepath.Join(s.dir, entry.File), imagebudget.MaxEncodedBytes)
 	if err != nil {
 		return nil, fmt.Errorf("store: read screenshot %q: %w", id, err)
 	}
@@ -214,6 +258,11 @@ func (s *Store) Delete(id string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.lockAndRefresh()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 
 	next := make([]Entry, 0, len(s.entries))
 	var removed Entry
@@ -227,32 +276,34 @@ func (s *Store) Delete(id string) error {
 		next = append(next, entry)
 	}
 	if !found {
-		return nil
+		_, cleanupErr := s.cleanupPendingDeletes()
+		return cleanupErr
 	}
-	if err := s.writeIndex(next); err != nil {
+	pending := appendPendingDeletes(s.pendingDelete, []Entry{removed})
+	if err := s.writeIndexState(next, pending); err != nil {
 		return err
 	}
-	s.entries = next
-	return s.removeFiles(removed)
+	_, cleanupErr := s.cleanupPendingDeletes()
+	return cleanupErr
 }
 
 // Clear removes every screenshot and resets the index.
 func (s *Store) Clear() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	removed := s.entries
-	if err := s.writeIndex(nil); err != nil {
+	unlock, err := s.lockAndRefresh()
+	if err != nil {
 		return err
 	}
-	s.entries = nil
-	var firstErr error
-	for _, entry := range removed {
-		if err := s.removeFiles(entry); err != nil && firstErr == nil {
-			firstErr = err
-		}
+	defer unlock()
+
+	removed := append([]Entry(nil), s.entries...)
+	pending := appendPendingDeletes(s.pendingDelete, removed)
+	if err := s.writeIndexState(nil, pending); err != nil {
+		return err
 	}
-	return firstErr
+	_, err = s.cleanupPendingDeletes()
+	return err
 }
 
 // Prune removes screenshots older than retentionDays (0 disables the age
@@ -262,6 +313,11 @@ func (s *Store) Clear() error {
 func (s *Store) Prune(retentionDays int, maxBytes int64) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.lockAndRefresh()
+	if err != nil {
+		return 0, err
+	}
+	defer unlock()
 
 	kept := make([]Entry, 0, len(s.entries))
 	removed := make([]Entry, 0)
@@ -279,35 +335,27 @@ func (s *Store) Prune(retentionDays int, maxBytes int64) (int, error) {
 	}
 
 	if maxBytes > 0 && len(kept) > 0 {
-		var total int64
-		for _, entry := range kept {
-			total += entry.Size
+		// Grow the newest-first prefix against the remaining budget. Summing
+		// all sizes first can overflow for malformed positive index values.
+		keepCount, total := 1, kept[0].Size
+		for keepCount < len(kept) && total <= maxBytes && kept[keepCount].Size <= maxBytes-total {
+			total += kept[keepCount].Size
+			keepCount++
 		}
-		if total > maxBytes {
-			keepCount := len(kept)
-			for keepCount > 1 && total > maxBytes {
-				keepCount--
-				total -= kept[keepCount].Size
-			}
-			removed = append(removed, kept[keepCount:]...)
-			kept = kept[:keepCount]
-		}
+		removed = append(removed, kept[keepCount:]...)
+		kept = kept[:keepCount]
 	}
 
 	if len(removed) == 0 {
-		return 0, nil
+		cleaned, cleanupErr := s.cleanupPendingDeletes()
+		return cleaned, cleanupErr
 	}
-	if err := s.writeIndex(kept); err != nil {
+	pending := appendPendingDeletes(s.pendingDelete, removed)
+	if err := s.writeIndexState(kept, pending); err != nil {
 		return 0, err
 	}
-	s.entries = kept
-	var firstErr error
-	for _, entry := range removed {
-		if err := s.removeFiles(entry); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	return len(removed), firstErr
+	_, cleanupErr := s.cleanupPendingDeletes()
+	return len(removed), cleanupErr
 }
 
 // uniqueIDLocked allocates an ID that neither the index nor the directory
@@ -353,38 +401,121 @@ func (s *Store) removeFiles(entry Entry) error {
 	return nil
 }
 
+func appendPendingDeletes(existing, added []Entry) []Entry {
+	if len(added) == 0 {
+		return append([]Entry(nil), existing...)
+	}
+	pending := append([]Entry(nil), existing...)
+	seen := make(map[string]struct{}, len(pending))
+	for _, entry := range pending {
+		seen[entry.ID] = struct{}{}
+	}
+	for _, entry := range added {
+		if _, ok := seen[entry.ID]; ok {
+			continue
+		}
+		pending = append(pending, entry)
+		seen[entry.ID] = struct{}{}
+	}
+	return pending
+}
+
+// cleanupPendingDeletes retries file removal after the index has already
+// dropped the records. The pending list stays durable until every file is
+// gone, so a transient filesystem error remains actionable on the next call.
+// The caller must hold s.mu and the directory lock.
+func (s *Store) cleanupPendingDeletes() (int, error) {
+	if len(s.pendingDelete) == 0 {
+		return 0, nil
+	}
+	pending := append([]Entry(nil), s.pendingDelete...)
+	remaining := make([]Entry, 0, len(pending))
+	cleaned := 0
+	var firstErr error
+	for i, entry := range pending {
+		if err := s.removeFiles(entry); err != nil {
+			firstErr = err
+			remaining = append(remaining, pending[i:]...)
+			break
+		}
+		cleaned++
+	}
+	if cleaned == 0 {
+		return 0, firstErr
+	}
+	if err := s.writeIndexState(s.entries, remaining); err != nil {
+		return cleaned, errors.Join(firstErr, err)
+	}
+	return cleaned, firstErr
+}
+
 // writeIndex atomically replaces index.json with entries. The caller must hold
 // s.mu (Open calls it during construction before the store is shared).
 func (s *Store) writeIndex(entries []Entry) error {
+	return s.writeIndexState(entries, s.pendingDelete)
+}
+
+func (s *Store) writeIndexState(entries, pendingDelete []Entry) error {
 	if entries == nil {
 		entries = []Entry{}
 	}
-	payload := indexFile{Version: indexVersion, Entries: entries}
+	if pendingDelete == nil {
+		pendingDelete = []Entry{}
+	}
+	payload := indexFile{Version: indexVersion, Entries: entries, PendingDelete: pendingDelete}
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
 		return fmt.Errorf("store: encode index: %w", err)
 	}
 	data = append(data, '\n')
-	if err := writeFileAtomic(filepath.Join(s.dir, indexFileName), data, 0o644); err != nil {
+	write := writeFileAtomic
+	if s.indexWriter != nil {
+		write = s.indexWriter
+	}
+	if err := write(filepath.Join(s.dir, indexFileName), data, 0o644); err != nil {
+		if diskio.Committed(err) {
+			s.entries = entries
+			s.pendingDelete = pendingDelete
+		}
 		return fmt.Errorf("store: write index: %w", err)
 	}
+	s.entries = entries
+	s.pendingDelete = pendingDelete
 	return nil
 }
 
-// readIndex loads index.json, distinguishing a missing file from a corrupt one.
-func readIndex(dir string) ([]Entry, error) {
-	data, err := os.ReadFile(filepath.Join(dir, indexFileName))
+func readIndexState(dir string) (indexFile, error) {
+	data, err := diskio.ReadFile(filepath.Join(dir, indexFileName), maxIndexBytes)
 	if err != nil {
-		return nil, fmt.Errorf("store: read index: %w", err)
+		return indexFile{}, fmt.Errorf("store: read index: %w", err)
 	}
-	var index indexFile
+	// Check the version before decoding records: a newer schema may use a
+	// different record shape and must never be mistaken for corrupt old data.
+	var index struct {
+		Version       int             `json:"version"`
+		Entries       json.RawMessage `json:"entries"`
+		PendingDelete json.RawMessage `json:"pendingDelete"`
+	}
 	if err := json.Unmarshal(data, &index); err != nil {
-		return nil, fmt.Errorf("%w: %v", errCorruptIndex, err)
+		return indexFile{}, fmt.Errorf("%w: %v", errCorruptIndex, err)
 	}
 	if index.Version > indexVersion {
-		return nil, fmt.Errorf("store: index version %d is newer than supported version %d", index.Version, indexVersion)
+		return indexFile{}, fmt.Errorf("store: index version %d is newer than supported version %d", index.Version, indexVersion)
 	}
-	return index.Entries, nil
+	if len(index.Entries) == 0 || bytes.Equal(bytes.TrimSpace(index.Entries), []byte("null")) {
+		return indexFile{}, fmt.Errorf("%w: missing entries array", errCorruptIndex)
+	}
+	var state indexFile
+	state.Version = index.Version
+	if err := json.Unmarshal(index.Entries, &state.Entries); err != nil {
+		return indexFile{}, fmt.Errorf("%w: %v", errCorruptIndex, err)
+	}
+	if len(index.PendingDelete) != 0 && !bytes.Equal(bytes.TrimSpace(index.PendingDelete), []byte("null")) {
+		if err := json.Unmarshal(index.PendingDelete, &state.PendingDelete); err != nil {
+			return indexFile{}, fmt.Errorf("%w: %v", errCorruptIndex, err)
+		}
+	}
+	return state, nil
 }
 
 // sanitizeEntries drops entries that do not match the frozen ID/file contract,
@@ -440,12 +571,12 @@ func recoverEntries(dir string) ([]Entry, error) {
 			continue
 		}
 		pngPath := filepath.Join(dir, name)
-		data, err := os.ReadFile(pngPath)
+		data, err := diskio.ReadFile(pngPath, imagebudget.MaxEncodedBytes)
 		if err != nil {
 			continue
 		}
-		config, err := png.DecodeConfig(bytes.NewReader(data))
-		if err != nil || config.Width <= 0 || config.Height <= 0 {
+		source, err := imagebudget.DecodePNG(data)
+		if err != nil {
 			continue
 		}
 		info, err := dirEntry.Info()
@@ -455,13 +586,13 @@ func recoverEntries(dir string) ([]Entry, error) {
 		entry := Entry{
 			ID:        id,
 			CreatedAt: info.ModTime().Round(0),
-			Width:     config.Width,
-			Height:    config.Height,
+			Width:     source.Bounds().Dx(),
+			Height:    source.Bounds().Dy(),
 			Size:      int64(len(data)),
 			File:      pngName(id),
 			Thumb:     thumbName(id),
 		}
-		if !ensureThumbnail(dir, entry, data) {
+		if !ensureThumbnail(dir, entry, source) {
 			entry.Thumb = ""
 		}
 		recovered = append(recovered, entry)
@@ -472,14 +603,10 @@ func recoverEntries(dir string) ([]Entry, error) {
 
 // ensureThumbnail makes sure the entry's thumbnail file exists, rebuilding it
 // from the PNG when needed. It reports whether a thumbnail is available.
-func ensureThumbnail(dir string, entry Entry, pngData []byte) bool {
+func ensureThumbnail(dir string, entry Entry, source image.Image) bool {
 	thumbPath := filepath.Join(dir, entry.Thumb)
-	if info, err := os.Stat(thumbPath); err == nil && info.Size() > 0 {
+	if validThumbnail(thumbPath) {
 		return true
-	}
-	source, err := png.Decode(bytes.NewReader(pngData))
-	if err != nil {
-		return false
 	}
 	thumbnail, err := encodeThumbnail(source)
 	if err != nil {
@@ -505,37 +632,7 @@ func sortEntries(entries []Entry) {
 // writeFileAtomic writes data to path via a temporary file in the same
 // directory followed by a rename, so a crash can never leave a partial file.
 func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
-	dir := filepath.Dir(path)
-	temp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tempName := temp.Name()
-	discard := func() {
-		_ = temp.Close()
-		_ = os.Remove(tempName)
-	}
-	if _, err := temp.Write(data); err != nil {
-		discard()
-		return err
-	}
-	if err := temp.Sync(); err != nil {
-		discard()
-		return err
-	}
-	if err := temp.Close(); err != nil {
-		_ = os.Remove(tempName)
-		return err
-	}
-	if err := os.Chmod(tempName, mode); err != nil {
-		_ = os.Remove(tempName)
-		return err
-	}
-	if err := os.Rename(tempName, path); err != nil {
-		_ = os.Remove(tempName)
-		return err
-	}
-	return nil
+	return diskio.WriteFileAtomic(path, data, mode)
 }
 
 // removeIfExists deletes path and treats a missing file as success.
@@ -544,4 +641,35 @@ func removeIfExists(path string) error {
 		return err
 	}
 	return nil
+}
+
+// lockAndRefresh is called with s.mu held. The OS lock covers the complete
+// transaction so independently opened handles cannot overwrite each other.
+func (s *Store) lockAndRefresh() (func(), error) {
+	unlock, err := diskio.LockDir(s.dir)
+	if err != nil {
+		return nil, err
+	}
+	current, err := readIndexState(s.dir)
+	if err != nil {
+		unlock()
+		return nil, err
+	}
+	s.entries = sanitizeEntries(current.Entries)
+	s.pendingDelete = sanitizeEntries(current.PendingDelete)
+	return unlock, nil
+}
+
+func validThumbnail(path string) bool {
+	data, err := diskio.ReadFile(path, imagebudget.MaxEncodedBytes)
+	if err != nil {
+		return false
+	}
+	// Reject oversized thumbnails before decoding their full pixel data.
+	config, err := jpeg.DecodeConfig(bytes.NewReader(data))
+	if err != nil || config.Width > thumbnailMaxEdge || config.Height > thumbnailMaxEdge {
+		return false
+	}
+	_, format, err := imagebudget.Decode(data)
+	return err == nil && format == "jpeg"
 }
