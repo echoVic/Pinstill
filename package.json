@@ -8,7 +8,8 @@
     "generate": "mygo generate",
     "dev:web": "vite --config vite.config.ts",
     "build:web": "vite build --config vite.config.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test work/tests/*.test.mjs frontend/tests/*.test.mjs"
   },
   "devDependencies": {
     "mygo-cli": "0.9.0",

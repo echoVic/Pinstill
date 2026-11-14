@@ -34,6 +34,14 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
       - run: npm ci
+      - name: Tooling and frontend regression tests (synthetic)
+        run: node --test work/tests/*.test.mjs frontend/tests/*.test.mjs
+      - name: Shell syntax
+        run: bash -n work/e2e.sh
       - run: npm run typecheck
       - run: npm run build:web
