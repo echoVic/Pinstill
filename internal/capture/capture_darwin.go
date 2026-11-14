@@ -3,16 +3,16 @@
 package capture
 
 import (
-	"bytes"
+	"context"
 	"errors"
 	"fmt"
-	"image/png"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
 
 	"github.com/ebitengine/purego"
+	"github.com/echoVic/Pinstill/internal/imagebudget"
 )
 
 const (
@@ -35,8 +35,15 @@ func Supported() bool { return true }
 // top-left, negative values allowed) and returns the PNG encoded result. The
 // system utility writes Retina screenshots at device pixel resolution.
 func CaptureRegion(rect Rect, opts CaptureOptions) ([]byte, error) {
-	if rect.Empty() {
-		return nil, errors.New("capture: empty capture region")
+	_, _, width, height := pointRect(rect)
+	if width == 0 || height == 0 {
+		return nil, errors.New("capture: empty or invalid capture region")
+	}
+	if err := imagebudget.CheckDimensions(width, height); err != nil {
+		return nil, err
+	}
+	if err := checkDarwinCapturePixels(width, height); err != nil {
+		return nil, err
 	}
 	sleepBeforeCapture(opts)
 
@@ -52,25 +59,19 @@ func CaptureRegion(rect Rect, opts CaptureOptions) ([]byte, error) {
 	defer func() { _ = os.Remove(name) }()
 
 	args := append(buildScreencaptureArgs(rect, opts), name)
-	cmd := exec.Command(screencapturePath, args...)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		if detail := strings.TrimSpace(stderr.String()); detail != "" {
+	ctx, cancel := context.WithTimeout(context.Background(), captureTimeout)
+	defer cancel()
+	stderr, err := runCaptureCommand(ctx, screencapturePath, args...)
+	if err != nil {
+		if detail := strings.TrimSpace(string(stderr)); detail != "" {
 			return nil, fmt.Errorf("capture: screencapture failed: %w (%s)", err, detail)
 		}
 		return nil, fmt.Errorf("capture: screencapture failed: %w", err)
 	}
 
-	data, err := os.ReadFile(name)
+	data, err := readCaptureFile(name)
 	if err != nil {
 		return nil, fmt.Errorf("capture: read screenshot: %w", err)
-	}
-	if len(data) == 0 {
-		return nil, errors.New("capture: screencapture produced an empty file")
-	}
-	if _, err := png.DecodeConfig(bytes.NewReader(data)); err != nil {
-		return nil, fmt.Errorf("capture: screencapture produced invalid PNG: %w", err)
 	}
 	return data, nil
 }

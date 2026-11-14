@@ -1,6 +1,9 @@
 package capture
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 func TestNormalizeSelectionHandlesReverseDrag(t *testing.T) {
 	got := NormalizeSelection(Point{X: 420, Y: 280}, Point{X: 120, Y: 80})
@@ -133,5 +136,18 @@ func TestCaptureServiceNormalizeSelection(t *testing.T) {
 	want := NormalizeSelection(start, end)
 	if got := (CaptureService{}).NormalizeSelection(start, end); got != want {
 		t.Fatalf("CaptureService.NormalizeSelection() = %+v, want %+v", got, want)
+	}
+}
+
+func TestNormalizeSelectionRejectsNonFiniteEndpointsAndOverflow(t *testing.T) {
+	for _, points := range [][2]Point{
+		{{X: math.NaN(), Y: 1}, {X: 20, Y: 30}},
+		{{X: 1, Y: 1}, {X: 20, Y: math.Inf(1)}},
+		{{X: math.Inf(-1), Y: 1}, {X: 20, Y: 30}},
+		{{X: -math.MaxFloat64, Y: 1}, {X: math.MaxFloat64, Y: 30}},
+	} {
+		if got := NormalizeSelection(points[0], points[1]); got != (Rect{}) {
+			t.Errorf("NormalizeSelection(%+v, %+v) = %+v, want zero rectangle", points[0], points[1], got)
+		}
 	}
 }

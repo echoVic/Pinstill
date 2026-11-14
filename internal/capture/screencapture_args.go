@@ -1,9 +1,6 @@
 package capture
 
-import (
-	"fmt"
-	"math"
-)
+import "fmt"
 
 // buildScreencaptureArgs assembles the argument vector for macOS'
 // /usr/sbin/screencapture to capture a rectangle. It is a pure function so the
@@ -26,18 +23,5 @@ func buildScreencaptureArgs(rect Rect, opts CaptureOptions) []string {
 // by screencapture's -R flag. Width and height never drop to zero for a
 // non-empty rectangle.
 func pointRect(rect Rect) (x, y, width, height int) {
-	if rect.Empty() {
-		return 0, 0, 0, 0
-	}
-	x = int(math.Round(rect.X))
-	y = int(math.Round(rect.Y))
-	width = int(math.Round(rect.Width))
-	height = int(math.Round(rect.Height))
-	if width < 1 {
-		width = 1
-	}
-	if height < 1 {
-		height = 1
-	}
-	return x, y, width, height
+	return PixelRect(rect, 1)
 }

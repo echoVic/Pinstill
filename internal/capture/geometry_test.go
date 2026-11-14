@@ -1,6 +1,9 @@
 package capture
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 func TestPixelRectScalesAndRounds(t *testing.T) {
 	tests := []struct {
@@ -200,5 +203,49 @@ func TestPointRectRoundsHalfPointsAwayFromZero(t *testing.T) {
 				t.Fatalf("pointRect(%+v) = %v, want %v", tt.rect, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestGeometryRejectsNonFiniteRectangles(t *testing.T) {
+	for _, invalid := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		for _, rect := range []Rect{
+			{X: invalid, Y: 20, Width: 30, Height: 40},
+			{X: 10, Y: invalid, Width: 30, Height: 40},
+			{X: 10, Y: 20, Width: invalid, Height: 40},
+			{X: 10, Y: 20, Width: 30, Height: invalid},
+		} {
+			if !rect.Empty() {
+				t.Errorf("Rect%+v.Empty() = false for invalid geometry", rect)
+			}
+			x, y, w, h := PixelRect(rect, 2)
+			if got := [4]int{x, y, w, h}; got != [4]int{} {
+				t.Errorf("PixelRect(%+v, 2) = %v, want zeros", rect, got)
+			}
+			x, y, w, h = pointRect(rect)
+			if got := [4]int{x, y, w, h}; got != [4]int{} {
+				t.Errorf("pointRect(%+v) = %v, want zeros", rect, got)
+			}
+		}
+	}
+}
+
+func TestPixelRectRejectsNonFiniteScaleAndOverflow(t *testing.T) {
+	intLimit := -float64(-int(^uint(0)>>1) - 1)
+	for _, tt := range []struct {
+		rect  Rect
+		scale float64
+	}{
+		{Rect{Width: 20, Height: 30}, math.NaN()},
+		{Rect{Width: 20, Height: 30}, math.Inf(1)},
+		{Rect{Width: 20, Height: 30}, math.MaxFloat64},
+		{Rect{X: intLimit, Width: 20, Height: 30}, 1},
+		{Rect{Y: -intLimit * 2, Width: 20, Height: 30}, 1},
+		{Rect{Width: intLimit, Height: 30}, 1},
+		{Rect{Width: 20, Height: intLimit}, 1},
+	} {
+		x, y, w, h := PixelRect(tt.rect, tt.scale)
+		if got := [4]int{x, y, w, h}; got != [4]int{} {
+			t.Errorf("PixelRect(%+v, %v) = %v, want zeros", tt.rect, tt.scale, got)
+		}
 	}
 }
