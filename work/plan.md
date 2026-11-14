@@ -1,6 +1,8 @@
 # Pinstill 真实功能开发计划（Round 1，Lead 维护）
 
-> 状态：进行中。本文件是 **接口契约的唯一来源**。任何一方需要改动契约，先给 Lead 发消息，不要自行改接口。
+> 历史记录：本文件保留早期开发过程，旧接口、框架版本与测试结论已被当前实现取代。当前使用方式见 README，审计结果见 AUDIT.md，原生接口以 Go 服务与生成的 frontend/src/mygo.ts 为准。以下内容不再作为当前开发约束。
+>
+> 当时状态：进行中。本文件是 **接口契约的唯一来源**。任何一方需要改动契约，先给 Lead 发消息，不要自行改接口。
 > 背景：仓库当前是「设计原型 + MyGo 桌面壳」。本轮把核心链路做真：真实区域截图 → 标注 → 复制/导出/固定 → 历史/截图架 → 全局快捷键/托盘/设置接线。
 > 视觉与交互的基准是 `outputs/pinstill-design.html`（保持现有 UI 语言与布局，不要重新设计）。
 
@@ -980,3 +982,8 @@ R8 删除主窗口编辑器后，设置页有若干项变成「惰性」（保�
 - 窗口未打开时的截图失败改用**系统通知**（`mygo.NewNotification`）提示。
 
 验证：`esc` 自检增加第二段（关闭主窗口 → 截图 → 取消 → 主窗口保持隐藏，`main_after_hidden_cancel=false`）；完整 e2e **23 项 ALL CHECKS PASSED**；签名构建 11:40:39。
+# Superseded runtime plan
+
+This document is retained as project history. Its prototype commands and
+runtime assumptions are superseded by the current Go selftest modes and the
+isolated `work/e2e.sh` harness. It is not an executable checklist.

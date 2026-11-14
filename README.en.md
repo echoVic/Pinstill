@@ -36,15 +36,15 @@ the capture history later.
   to copy, Esc to close; positions/sizes/opacity restored after a restart.
 - **Scrolling capture**: automatic scrolling and stitching by default, auto-finish when the page
   stops moving, tall-image result preview (copy / save / pin), manual fallback; the selection frame
-  stays visible while capturing.
+  marks the region between frames and briefly hides during capture.
 - **History**: capture cards with thumbnails, large preview, copy / save / pin / delete, retention by
   days and total size.
-- **System integration**: menu-bar tray, global hotkeys (⌘⇧1 capture, ⌘⇧2 pin clipboard, ⌘⇧O OCR),
+- **System integration**: menu-bar tray, global hotkeys (⌘⇧1 capture, ⌘⇧2 pin clipboard),
   7 settings categories, permission centre for screen recording / accessibility / launch at login.
 - Double-click the canvas or press Enter to copy; Esc cancels; drag the selection corners to adjust
   the region and recapture.
 
-OCR, translation and QR decoding are clearly marked as *not implemented yet*.
+OCR, translation and QR decoding are clearly marked as *not implemented yet*. OCR does not register or reserve a global hotkey.
 
 ## Screenshots
 
@@ -72,6 +72,9 @@ open build/darwin-arm64/Pinstill.app
 
 Development mode with Vite HMR: `npm run dev`.
 
+Local builds use ad-hoc signing by default and need no developer certificate. For a release,
+set `MACOS_SIGNING_IDENTITY`; to notarize it, also set `MACOS_NOTARY_PROFILE` to a saved keychain profile.
+
 On first launch, grant **Screen Recording** (required for captures); automatic scrolling capture
 also needs **Accessibility**.
 
@@ -91,9 +94,11 @@ also needs **Accessibility**.
 ```bash
 GOTOOLCHAIN=auto go test ./...
 GOTOOLCHAIN=auto go vet ./...
+npm test
+npm run typecheck
 npm run build:web
 
-# end-to-end acceptance: full build + 23 app-level selftests
+# end-to-end acceptance: full build + 24 app-level selftests
 bash work/e2e.sh
 bash work/e2e.sh --skip-build
 ```
@@ -101,17 +106,24 @@ bash work/e2e.sh --skip-build
 The e2e suite covers real quit, real capture + history + clipboard, overlay rendering, selection
 mapping, in-place annotation flows, pins (including restart restore), scrolling capture, history
 actions, hotkey registration, settings, permissions, palette, text styles, watermark, and more.
-Use `PINSTILL_DATA_DIR=/tmp/pinstill-data` to isolate captures, pins and session files.
+Quit Pinstill first; the script stops if an instance is running. Each case gets a fresh temporary
+data directory, with only the pin persistence setup/check pair sharing one. Logs and data are kept
+in each isolated data directory's `artifacts/` folder. Direct `PINSTILL_SELFTEST` launches also require
+an existing absolute `PINSTILL_DATA_DIR` containing a regular `.pinstill-selftest` file with `pinstill-selftest` followed by a newline. The script creates it automatically. Every case has a 120-second timeout, configurable with `PINSTILL_SELFTEST_TIMEOUT_SECONDS` (1–3600). Test windows use temporary WebView storage and do not change the installed
+app's preferences or launch-at-login setting. Native tests still operate the desktop and clipboard.
+`npm test` runs synthetic frontend and tooling checks without launching the app.
 
 ## Limitations
 
-- Windows backend is cross-compiled and unverified on real hardware (HiDPI mapping may be off).
+- Windows backend converts MyGo DIPs to monitor-local physical pixels and composes the cursor. Mixed DPI, negative origins and cursor hotspots have synthetic tests; real hardware remains unverified.
 - OCR / translation / QR are not implemented.
-- Scrolling capture depends on Accessibility; fixed headers/footers can break stitching; limits are
-  120 frames / 30000px.
+- Scrolling capture depends on Accessibility. Static sticky headers have regression coverage; animated headers, fixed footers and indistinguishable repeated content remain heuristic. Limits are 120 frames, 30000px height or 32 Mi pixels, whichever comes first. Capture controls request OS exclusion and briefly hide during each capture; native compositor behavior remains unverified.
 - The overlay covers the visible work area (menu bar and Dock excluded on macOS).
 - Launch-at-login reports `Operation not permitted` when the app is not in `/Applications`.
 - Mixed-DPI multi-monitor setups are not fully tested.
+- Startup restores the newest 60 active pins and explicitly archives older ones without deleting images. Restore archived pins from History after closing enough active pins. Archived pins never reopen automatically; ordinary new pins have no runtime count cap.
+- Images are limited to 64 MiB encoded data and 32 Mi pixels. A corresponding RGBA canvas alone occupies 128 MiB; decoder and WebView overhead is additional. Extreme aspect ratios may reduce one pin dimension to 1 DIP.
+- Session storage retains only the active selection and result preview, with a staged replacement during writes. Failed cleanup blocks further additions until it can be retried; startup clears the cache.
 
 ## Contributing
 
