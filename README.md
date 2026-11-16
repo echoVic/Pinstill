@@ -1,9 +1,9 @@
 # Pinstill · 钉图
 
+简体中文 | [English](README.en.md)
+
 **截屏 → 就地标注 → 复制 / 贴图 / 保存 → 回到历史**，一条快捷键全部完成。
 纯 Go + 系统 WebView，无 Electron、无 cgo；截图只在本机处理，不上传任何内容。
-
-[English](README.en.md) · [特性](#特性) · [截图](#截图) · [从源码构建](#从源码构建) · [使用](#使用) · [架构](#架构) · [开发与测试](#开发与测试) · [已知限制](#已知限制) · [参与贡献](#参与贡献)
 
 [![CI](https://github.com/echoVic/Pinstill/actions/workflows/ci.yml/badge.svg)](https://github.com/echoVic/Pinstill/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
@@ -12,278 +12,72 @@
 
 ![选区就地标注](outputs/pinstill-overlay.jpg)
 
-## 这是什么
+## 下载
 
-Pinstill（pin + still）是一个 macOS / Windows 的桌面截图与标注工具。它把
-「截取屏幕 → 在选区旁就地操作 → 把截图挂在桌面上 → 回到历史」放进同一条工作流：
-
-- 截图后**不跳窗口**，截图直接显示在桌面选区里，标注工具栏就浮在旁边；
-- 贴图是始终置顶的无边框窗口，可以随手摆、缩放、调透明度，重启后自动恢复；
-- 历史默认可按保留天数 / 容量上限自动清理，截图文件保存在本机。
-
-桌面外壳使用 [MyGo](https://mygo.egoist.dev/)（Go + 系统 WebView，纯 Go、无 cgo），
-界面是 Vite + TypeScript 的多页面前端。历史版本有 macOS 端到端验收记录；本次维护使用合成测试，
-最新改动仍需桌面回归。Windows 有 GDI 截图后端且交叉编译通过，**尚未真机验证**。
-
-## 特性
-
-**截图与标注**
-
-- **区域截图 + 就地完整工具栏**：全局快捷键或托盘唤起全屏选区，遮罩 + 十字线 + 尺寸角标；松手后 Go **透过透明选区直接截屏（无闪烁）**，overlay 就地把截图显示在选区里，并浮出**完整标注工具栏**（可按住手柄拖到不挡内容的位置；截取后还可拖动选区**四角**调整范围，松开即重新截取）
-- 工具：矩形 / 圆 / 直线 / 箭头 / 画笔 / 文字 / 标签 / 马赛克 / 高亮 / 水印，撤销（⌘Z），颜色与粗细（默认 2px，可调），翻译 / 提取文字 / 二维码（标注「待接入」）
-- **文字样式**：粗体 / 斜体、字号 10–32pt（默认 14pt）、字体（系统默认 / 苹方 / Helvetica / Georgia / Menlo），样式会记住并在输入框里实时预览
-- **平铺水印**：点水印工具即把**斜向（-30°）、稀疏平铺的水印文字**铺满整张截图，可调文字 / 不透明度（10–90%）/ 颜色 / 字号；再点一次即可关闭，导出图片自动包含水印
-- **调色板**：40 个预设色 + 饱和度/明度方块 + 色相滑条 + HEX 输入 + 最近 8 色（持久化）；Esc 只关面板、不取消截图
-- **权限引导**：屏幕录制权限缺失时在选区原地提示并可一键打开系统设置
-- 快捷键：Enter 或**双击画布**复制、Esc 取消；支持「截图后」自动复制 / 自动贴图
-
-**贴图与历史**
-
-- **挂在桌面（贴图）**：始终置顶的无边框贴图窗口；拖动摆放、滚轮缩放、右下角手柄按比例缩放、⌘/Ctrl+滚轮调透明度、右键菜单（复制 / 保存 / 关闭 / 透明度 / 原始大小）、双击复制、Esc 关闭；多张各自独立摆放，**重启应用后自动恢复**
-- **历史与预览**：截图自动落盘、真实缩略图卡片；点击打开大图预览（复制 / 保存 / 贴图 / 删除，←/→ 切换、Esc 关闭）、单条删除 / 清空；保留天数与容量上限生效。主窗口只有历史 + 偏好设置
-- **整屏截图**：托盘菜单「截取整个屏幕」静默截取鼠标所在显示器 → 存历史 → 按「截图后」执行（默认复制到剪贴板）
-- **复制 / 导出**：写入剪贴板；按设置里的 PNG / JPEG、质量、文件名前缀走系统保存对话框，并定位到默认保存文件夹
-
-**滚动截图**
-
-- 选区里点「滚动截图」后 overlay 隐藏、浮出紧凑控制条，同时**选区范围框**（画在选区外的 2px 边框，不会进长图）保持显示，随时知道正在截哪一块
-- 默认自动滚动并抓帧拼接，连续抓帧无变化 / 达到上限（120 帧、30000px 高度或 32 Mi 像素，以先达到者为准）时**自动完成**并弹出长图结果预览（复制 / 保存 / 贴图 / 关闭）
-- 依赖 macOS「辅助功能」权限，未授权时自动降级为手动滚动；控制条可暂停 / 继续、切换自动 / 手动、立即完成、取消，长图同样进历史
-
-**系统集成**
-
-- **托盘**：菜单栏常驻图标：截取区域 / 截取整个屏幕 / 固定剪贴板图片 / 历史与设置 / 退出
-- **窗口按需出现**：历史 / 设置窗口只在托盘「历史与设置」或界面里的显式入口打开；截图取消、失败、激活应用都不会再自动弹窗（窗口未打开时的截图失败用系统通知提示）
-- **全局快捷键**：默认 ⌘⇧1（截取区域）、⌘⇧2（固定剪贴板图片），可在设置里重新录制；提取文字尚未接入，不注册或占用快捷键
-- **设置**：7 个分类（通用与截图 / 快捷键 / 保存与历史 / 标注与水印 / 贴图与桌面 / 识别与翻译 / 权限），localStorage 持久化并实时推给 Go 侧生效
-- **权限中心**：实时显示屏幕录制、辅助功能、登录时启动的真实系统状态，可请求权限、打开系统设置、重新检测；缺少屏幕录制权限时主窗口显示引导横幅
-
-> OCR / 翻译 / 二维码识别仍是「待接入」占位（点开有明确说明，不会假装可用）。
-
-## 截图
-
-以下截图均使用合成图 / 自绘遮罩生成，不含任何用户桌面内容（由 `PINSTILL_SELFTEST=showcase` 产出）。
-
-斜向平铺水印（水印工具 + 文字 / 不透明度设置行，实时预览）：
-
-![平铺水印](outputs/pinstill-watermark.jpg)
-
-把截图挂在桌面（贴图，始终置顶）：
-
-![桌面贴图](outputs/pinstill-pin.jpg)
-
-滚动截图：默认自动滚动，控制条可暂停 / 切手动 / 立即完成：
-
-![滚动截图控制条](outputs/pinstill-scroll.jpg)
-
-滚动截图完成后的长图预览（复制 / 保存 / 贴图 / 关闭，Esc 关闭）：
-
-![滚动截图结果预览](outputs/pinstill-scroll-result.jpg)
-
-历史（主窗口只有历史 + 偏好设置）：
-
-![历史](outputs/pinstill-history.jpg)
-
-点击历史卡片打开大图预览（←/→ 切换、Esc 关闭）：
-
-![历史预览](outputs/pinstill-preview.jpg)
-
-偏好设置：
-
-![偏好设置](outputs/pinstill-settings.jpg)
-
-设计稿快照（交互原型，作为视觉基准保留）：[outputs/pinstill-design.html](outputs/pinstill-design.html)。
-在仓库根目录运行任意静态文件服务器即可查看，例如：
-
-```bash
-python3 -m http.server 8765
-# 打开 http://127.0.0.1:8765/outputs/pinstill-design.html
-```
-
-## 从源码构建
-
-### 环境要求
-
-- macOS 13+（Apple Silicon / Intel），已安装 Xcode Command Line Tools
-- Go **1.27+**（版本以 [go.mod](go.mod) 为准）
-- Node.js **22+** 与 npm
-
-### 构建
-
-```bash
-git clone https://github.com/echoVic/Pinstill.git
-cd Pinstill
-
-npm install
-npm run build:web          # 构建前端产物到 dist/
-./node_modules/.bin/mygo build
-# 或 npm run build
-
-open build/darwin-arm64/Pinstill.app
-```
-
-产物在 `build/darwin-arm64/`（`.app` 与 `.dmg`）。
-
-开发模式（Vite 热更新 + MyGo 窗口）：
-
-```bash
-npm run dev
-```
+从 [Releases](https://github.com/echoVic/Pinstill/releases) 下载 macOS 版，需要 macOS 13 或以上。Windows 截图后端（GDI）已经交叉编译通过，但尚未真机验证，暂不提供正式安装包。
 
 ## 使用
 
 1. 启动后常驻菜单栏；按 **⌘⇧1**（或点托盘「截取区域」）进入选区。
-2. 拖选区域 → 松手即完成截屏并浮出标注工具栏；直接标注，Enter / 双击画布复制，Esc 取消。
-3. 拖选区四角可调整范围，松手重新截取；点「滚动截图」进入长截图。
-4. 点「贴图」把截图钉在桌面；点「保存」走系统保存对话框；点「复制」进剪贴板。
-5. 托盘 →「历史与设置」查看历史与全部偏好。
+2. 拖选区域，松手即完成截屏并浮出标注工具栏；标注后按 Enter 或双击画布复制，Esc 取消。
+3. 拖选区四角可以调整范围，松手重新截取；点「滚动截图」进入长截图。
+4. 点「贴图」把截图钉在桌面，点「保存」走系统保存对话框，点「复制」进剪贴板。
+5. 托盘 →「历史与设置」查看历史、贴图和全部偏好。
 
-快捷键与行为都可以在**设置**里修改；「截图后」可设为就地标注（默认）/ 复制 / 贴图。
+快捷键和「截图后」的行为（标注 / 复制 / 贴图）都可以在设置里改。
+
+## 功能
+
+- **截图与标注**：区域截图、整屏截图，遮罩、十字线和尺寸角标；松手后截图直接显示在选区里，完整标注工具栏浮在旁边。矩形、圆、直线、箭头、画笔、文字、标签、马赛克、高亮和平铺水印，支持撤销、40 色调色板、HEX 输入和文字样式。
+- **贴图**：始终置顶的无边框窗口，可以拖动、缩放、调透明度，右键有复制 / 保存 / 透明度 / 原始大小；多张各自摆放，重启后自动恢复（最多 60 张活动贴图，更早的归档）。
+- **历史**：截图自动落盘，显示真实缩略图；大图预览支持复制、保存、贴图和删除，保留天数与容量上限生效。
+- **滚动截图**：自动滚动抓帧拼接，达到 120 帧、30000px 高度或 32 Mi 像素时自动完成，也可以暂停、切手动或立即完成。需要辅助功能权限，未授权时降级为手动滚动。
+- **托盘与快捷键**：菜单栏常驻；截取区域 **⌘⇧1**、固定剪贴板图片 **⌘⇧2**，可在设置里重新录制。
+- **设置与权限**：7 类偏好实时生效；权限中心显示屏幕录制、辅助功能和登录启动的真实状态。
+
+OCR、翻译和二维码识别仍是「待接入」占位，点开有说明，不会假装可用。
 
 ## 数据与权限
 
-- 历史目录：`~/Library/Application Support/Pinstill/captures/`（PNG + `*.thumb.jpg` + `index.json`）
-- 桌面贴图：`~/Library/Application Support/Pinstill/pins/`（`<id>.png` + `pins.json`，重启后按此恢复）
-- 当前会话缓存：`~/Library/Caches/Pinstill/session/`（启动时清空，运行中只保留当前选区与长图预览；替换时临时保留新旧文件，清理失败会阻止继续新增并允许重试）
-- 页面通过内部自定义协议 `shot://localhost/...` 读取这些图片，**不经过网络，也不上传任何内容**
-- 首次截图需要「屏幕录制」权限：系统设置 → 隐私与安全性 → 屏幕录制；权限缺失时应用会原地提示并可跳转
-- 滚动截图自动滚动需要「辅助功能」权限（未授权自动降级为手动）
-- 开发 / 自检可用 `PINSTILL_DATA_DIR=/tmp/pinstill-data` 把 captures、pins、session 隔离到指定目录
-  （生成 README 截图的 `PINSTILL_SELFTEST=showcase` 强制要求设置该变量，避免读到真实历史）
+- 历史在 `~/Library/Application Support/Pinstill/captures/`，贴图在 `.../pins/`，当前会话缓存在 `~/Library/Caches/Pinstill/session/`。
+- 页面通过 `shot://localhost/...` 读取这些图片，不经过网络，也不上传任何内容。
+- 首次截图需要「屏幕录制」权限；滚动截图的自动滚动需要「辅助功能」权限，未授权时自动降级为手动。
+- 开发或自检时用 `PINSTILL_DATA_DIR=/tmp/pinstill-data` 隔离数据目录，不会读到真实历史。
 
-## 架构
+## 开发
 
-```
-┌────────────────────────────── macOS / Windows ──────────────────────────────┐
-│  MyGo (Go + 系统 WebView, 纯 Go / 无 cgo)                                     │
-│                                                                              │
-│  internal/app      编排层：截图流程、窗口、托盘、快捷键、设置、滚动会话、自检      │
-│  internal/capture  平台截图后端（macOS screencapture / Windows GDI）+ 权限预检  │
-│  internal/store    历史持久化：PNG + 缩略图 + index.json + 保留策略              │
-│  internal/pin      贴图持久化：图片 + pins.json（位置/大小/透明度）              │
-│  internal/stitch   滚动截图拼接：重叠检测 + 累积                                │
-│                                                                              │
-│  ┌──────────────── Vite + TypeScript 多页面前端 ────────────────┐            │
-│  │ index.html   主窗口（历史 / 设置）                            │            │
-│  │ overlay.html 全屏选区 + 就地标注                              │            │
-│  │ pin.html     置顶贴图窗口                                     │            │
-│  │ scroll.html  滚动截图控制条                                   │            │
-│  │ result.html  滚动截图长图预览                                 │            │
-│  │ frame.html   滚动截图范围框（透明、点击穿透）                  │            │
-│  └──────────────────────────────────────────────────────────────┘            │
-└──────────────────────────────────────────────────────────────────────────────┘
-```
-
-- Go ↔ JS 通过 MyGo 的绑定（`mygo.BindAs`）与自定义事件通信；前端唯一原生入口是 `frontend/src/bridge.ts`
-- 截图图像单向通过自定义协议读取（避免 base64 过大）；标注完成回传仍走 base64
-- `work/plan.md` 记录了每轮开发的接口契约与实测结论，可作为实现细节参考
-
-## 开发与测试
+需要 Go 1.27+（以 `go.mod` 为准）、Node 22+ 和 npm。
 
 ```bash
-# 单元测试 / 静态检查
+npm install
+npm run build:web          # 构建前端到 dist/
+npm run build              # 或 ./node_modules/.bin/mygo build
+npm run dev                # 开发模式，Vite 热更新 + MyGo 窗口
+```
+
+检查（与 CI 一致）：
+
+```bash
 GOTOOLCHAIN=auto go test ./...
 GOTOOLCHAIN=auto go vet ./...
-
-# 真实截图后端集成测试（需要屏幕录制权限）
-GOTOOLCHAIN=auto go test -tags integration ./internal/capture
-
-# 前端与开发脚本回归测试（合成数据，不启动桌面应用）
 npm test
 npm run typecheck
-
-# 前端构建
-npm run build:web
-
-# 端到端验收（构建 + 24 项应用级自检）
-bash work/e2e.sh
-bash work/e2e.sh --skip-build   # 用现有构建产物只跑自检
+bash work/e2e.sh --skip-build   # 24 项应用级自检；去掉 --skip-build 会先完整构建
 ```
 
-`work/e2e.sh` 依次执行 Go 测试 / vet / Windows 交叉编译、前端与桌面构建，以及 24 项自检：
-真实退出、真实截图 + 历史 + 剪贴板、overlay 渲染、选区映射像素级对比、Esc 取消、就地标注全流程
-（copy / pin / cancel + afterCapture）、桌面贴图交互、贴图重启恢复、滚动截图（自动 + 手动 + 结果预览）、
-整屏截图、历史动作、主窗口视图、贴图窗口、全局快捷键注册、设置应用、权限中心、调色板、文字样式、
-双击复制、选区四角调整、平铺水印等。
-
-自检通过环境变量驱动，模式见下表；日志、截图和隔离数据保存在脚本打印的新建临时目录中，各项产物位于对应数据目录的 `artifacts/` 下：
-
-```text
-PINSTILL_SELFTEST=quit|capture|overlay|drag|esc|flow|pinui|pinpersist-setup|pinpersist-check|
-                  scroll|scrollflow|scrollmanual|fullscreen|historyactions|uicapture|pin|history|
-                  hotkeys|settings|perms|palette|textstyle|dblclick|resize|watermark|showcase|scrollshot|hold
-```
-
-> 运行自检前请先退出 Pinstill；脚本检测到正在运行的实例会停止。每项自检使用新建的隔离数据目录，
-> 只有贴图持久化的 setup/check 两次启动共用目录。直接运行任何 `PINSTILL_SELFTEST` 模式也必须设置
-> `PINSTILL_DATA_DIR`，目录必须已存在、为绝对路径，并包含内容为 `pinstill-selftest` 加换行的 `.pinstill-selftest` 普通文件；脚本会自动创建。每项默认超时 120 秒，可通过 `PINSTILL_SELFTEST_TIMEOUT_SECONDS=1..3600` 调整。测试页面使用临时 WebView 存储，不修改正式版偏好设置和登录启动项；
-> 原生截图、剪贴板和辅助功能测试仍会操作真实桌面。`showcase` / `scrollshot` 的 README 内容使用合成图像。
-
-普通 `npm run build` 默认使用 ad-hoc 签名，不依赖开发者证书或公证凭据。发布构建需显式设置
-`MACOS_SIGNING_IDENTITY`；需要公证时，再将已保存的 keychain profile 名称传入 `MACOS_NOTARY_PROFILE`。
-
-## 项目结构
-
-```text
-cmd/pinstill/main.go          桌面入口：单实例、绑定服务、窗口与托盘生命周期
-internal/app/                 编排层：截图流程、绑定服务、事件、托盘、快捷键、设置、自检
-internal/capture/             平台截图后端（macOS screencapture / Windows GDI）+ 权限 + 选择框几何
-internal/store/               历史持久化：PNG + 缩略图 + index.json + 保留策略
-internal/pin/                 桌面贴图持久化：图片 + pins.json
-internal/stitch/              滚动截图拼接
-internal/imagebudget/         图片字节、像素与编码预算
-internal/diskio/              目录文件锁与持久化原子写入
-frontend/index.html           主窗口（历史 / 设置）
-frontend/overlay.html         全屏选区 + 就地标注
-frontend/pin.html             置顶贴图窗口
-frontend/scroll.html          滚动截图控制条
-frontend/result.html          滚动截图长图预览
-frontend/frame.html           滚动截图范围框
-frontend/src/                 TypeScript 模块（bridge.ts 是唯一的原生调用入口）
-vite.config.ts                多页面构建入口
-work/e2e.sh                   端到端验收脚本（构建 + 24 项 selftest）
-work/plan.md                  已被当前实现取代的历史开发记录
-```
+`go test -tags integration ./internal/capture` 会跑真实截图后端，需要屏幕录制权限。
 
 ## 已知限制
 
-- **Windows 未真机验证**：GDI 后端在原生边界按显示器把 MyGo DIP 坐标转换为物理像素，并支持光标合成；混合 DPI、负坐标和光标热点有合成测试，实际显示器仍需验收
-- **OCR / 翻译 / 二维码** 尚未接入服务，UI 明确标注「待接入」
-- **滚动截图**：默认自动滚动，依赖 macOS「辅助功能」权限（未授权自动降级为手动）；滚轮事件在部分 App（自绘滚动 / 虚拟列表）可能不生效；静态固定表头有回归测试，动态表头、固定表尾及完全重复的内容仍可能无法可靠匹配，请优先框选内部滚动区；连续 3 帧无变化会自动完成，等待时间随抓帧耗时变化；上限 120 帧、30000px 高度或 32 Mi 像素；控制条和范围框会在抓帧时短暂隐藏并请求系统截图排除，实际合成器行为待验证
-- **overlay 覆盖的是屏幕可见工作区**（macOS Panel 被 AppKit 约束在菜单栏与 Dock 之外），无法直接框选菜单栏 / Dock 区域；选区坐标按窗口实际 frame 换算，截图内容不受影响
-- **登录启动**在未安装到 `/Applications` 的构建里会返回 `Operation not permitted`，设置页会如实展示
-- **导出 / 保存 / 历史另存对话框**未纳入自动化自检（模态框），建议人工确认一次
-- 贴图恢复依赖保存时的几何信息：显示器拔插后越界的贴图会被夹回可见屏幕，不会自动重排
-- 启动时最多恢复最新的 60 张活动贴图，较早贴图显式归档，原图保留；历史页可手动恢复，活动贴图达到 60 张时需先关闭一张；归档贴图不会在之后启动时自动冒出。普通新建贴图没有运行数量上限；全局快捷键的真实按键建议人工确认
-- 图片输入与导出限制为 64 MiB 编码数据、32 Mi 像素；128 MiB 只表示对应 RGBA 画布大小，解码器和 WebView 另需内存。极高或极宽贴图为保持比例，允许一边缩至 1 DIP
-- 多显示器：overlay 只出现在鼠标所在显示器；DPI / 缩放不同的混合显示器组合未充分测试
-
-## 路线图
-
-- [x] 区域截图 + 就地标注工具栏 + 双击 / Enter 复制
-- [x] 贴图（含重启恢复）、历史、滚动截图（自动 / 手动 + 结果预览）
-- [x] 文字样式、调色板、斜向平铺水印、选区四角调整
-- [x] 权限中心、登录启动、7 类偏好设置
-- [ ] OCR / 翻译 / 二维码接入
-- [ ] Windows 真机验证与适配
-- [x] 提供二进制 release（[下载 v0.1.1](https://github.com/echoVic/Pinstill/releases/tag/v0.1.1)）
+- Windows 只有交叉编译和合成测试，混合 DPI、负坐标和多显示器仍需真机验收。
+- OCR、翻译、二维码尚未接入；滚动截图对自绘滚动、动态表头和完全重复的内容可能失效。
+- overlay 覆盖屏幕可见工作区，不能直接框选菜单栏和 Dock；多显示器与混合缩放未充分测试。
+- 登录启动在未安装到 `/Applications` 的构建里会失败，设置页会如实显示。
 
 ## 参与贡献
 
-欢迎 Issue / PR。提交前请尽量保证：
+欢迎 Issue 和 PR。提交前请保证 `gofmt -l .` 无输出、`go vet ./...` 和 `go test ./...` 通过；改前端或交互时跑一次 `bash work/e2e.sh --skip-build`。提交信息用 `feat: / fix: / docs: / perf: / test:` 前缀，说明「为什么」。
 
-- `gofmt -l .` 无输出、`GOTOOLCHAIN=auto go vet ./...` 与 `go test ./...` 通过；
-- 改动前端或交互时跑一次 `bash work/e2e.sh --skip-build`（完整构建版本更佳）；
-- 不要提交 `build/`、`dist/`、`node_modules/`、真实桌面截图或本机私有配置；
-- 提交信息使用 `feat: / fix: / docs: / perf: / test:` 前缀，说明「为什么」而不只是「改了什么」。
+## 致谢与许可
 
-## License
-
-[MIT](LICENSE) © 2026 echovic
-
-## 致谢
-
-- [MyGo](https://mygo.egoist.dev/) — Go + 系统 WebView 的桌面框架
-- [Vite](https://vite.dev/) — 前端构建
-- [Lucide](https://lucide.dev/) — 图标（ISC）
-- 以及所有上游开源依赖的作者
+桌面外壳 [MyGo](https://mygo.egoist.dev/)（Go + 系统 WebView），前端 Vite，图标 Lucide（ISC）。[MIT](LICENSE) © 2026 echovic。
