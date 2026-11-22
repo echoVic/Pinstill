@@ -67,11 +67,29 @@ export interface OverlayCapturePayload {
 
 /** OverlayInfo tells the overlay page where the selection surface is. */
 export interface OverlayInfo {
+  session?: number;
   displayX: number;
   displayY: number;
   width: number;
   height: number;
   scale: number;
+  cursorX: number;
+  cursorY: number;
+  hasCursor?: boolean;
+  windows?: OverlayWindow[];
+}
+
+/**
+ * OverlayWindow describes one visible desktop window projected into
+ * overlay-local CSS pixels, ordered front-to-back for hover snapping.
+ */
+export interface OverlayWindow {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  owner?: string;
+  title?: string;
 }
 
 /** PinArchiveEntry is a saved pin intentionally kept closed at startup. */
@@ -257,6 +275,13 @@ export const Capture = {
   /** OverlayInfo describes the display the overlay covers. */
   overlayInfo(): Promise<OverlayInfo> {
     return call("Capture.OverlayInfo");
+  },
+  /**
+   * OverlayReady notifies Go that the overlay page has painted its clean
+   * initial state for session and may be revealed without stale-frame flash.
+   */
+  overlayReady(session: number): Promise<void> {
+    return call("Capture.OverlayReady", session);
   },
   /** PermissionGranted reports whether the OS lets the app record the screen. */
   permissionGranted(): Promise<boolean> {

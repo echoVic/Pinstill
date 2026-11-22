@@ -21,6 +21,9 @@ export type Rect = Native.Rect;
 /** Display geometry the overlay page runs on. */
 export type OverlayInfo = Native.OverlayInfo;
 
+/** Visible desktop window projected into overlay-local CSS pixels. */
+export type OverlayWindow = Native.OverlayWindow;
+
 /** One stored capture, as listed by the `History` service. */
 export type HistoryEntry = Native.HistoryEntry;
 
@@ -107,6 +110,11 @@ export function beginRegion(): Promise<void> {
 export function cancelRegion(): Promise<void> {
   if (!hasNative) return Promise.resolve();
   return Capture.cancelRegion();
+}
+
+export function overlayReady(session: number): Promise<void> {
+  if (!hasNative || !Number.isFinite(session) || session <= 0) return Promise.resolve();
+  return Capture.overlayReady(session);
 }
 
 
@@ -275,12 +283,34 @@ export function openLoginItemsSettings(): Promise<void> {
 
 export function overlayInfo(): Promise<OverlayInfo> {
   if (!hasNative) {
+    const width = window.innerWidth;
+    const height = window.innerHeight;
     return Promise.resolve({
       displayX: 0,
       displayY: 0,
-      width: window.innerWidth,
-      height: window.innerHeight,
+      width,
+      height,
       scale: window.devicePixelRatio || 1,
+      cursorX: 0,
+      cursorY: 0,
+      windows: [
+        {
+          x: Math.round(width * 0.14),
+          y: Math.round(height * 0.14),
+          width: Math.max(120, Math.round(width * 0.44)),
+          height: Math.max(100, Math.round(height * 0.56)),
+          owner: "Safari",
+          title: "设计评审",
+        },
+        {
+          x: Math.round(width * 0.42),
+          y: Math.round(height * 0.24),
+          width: Math.max(120, Math.round(width * 0.44)),
+          height: Math.max(100, Math.round(height * 0.54)),
+          owner: "Terminal",
+          title: "Pinstill",
+        },
+      ],
     });
   }
   return Capture.overlayInfo();

@@ -95,30 +95,56 @@ func (a *App) withScrollChromeHidden(session *scrollSession, hide, show func(), 
 	return shot()
 }
 
+type scrollControlChrome interface {
+	IsDestroyed() bool
+	IsVisible() bool
+	Bounds() mygo.Rectangle
+	Hide()
+	ShowInactive()
+}
+
 func (a *App) captureScrollFrame(session *scrollSession) ([]byte, error) {
 	a.mu.Lock()
-	control, frame := a.control, a.scrollFrame
+	control := a.control
 	a.mu.Unlock()
-	controlVisible := control != nil && !control.IsDestroyed() && control.IsVisible()
-	frameVisible := frame != nil && !frame.IsDestroyed() && frame.IsVisible()
+	var chrome scrollControlChrome
+	if control != nil {
+		chrome = control
+	}
+	return a.captureScrollFrameWith(session, chrome, 20*time.Millisecond)
+}
+
+func (a *App) captureScrollFrameWith(session *scrollSession, control scrollControlChrome, delay time.Duration) ([]byte, error) {
+	active := false
+	hideControl := false
+	a.runScrollUI(func() {
+		active = a.scrollResultIsCurrent(session) && !session.isStopped()
+		if active && control != nil && !control.IsDestroyed() && control.IsVisible() {
+			b := control.Bounds()
+			hideControl = regionIntersects(b.X, b.Y, b.Width, b.Height, session.region)
+		}
+	})
+	if !active {
+		return nil, errors.New("滚动截图会话已结束")
+	}
+	if !hideControl {
+		// scrollFrame sits 2px outside session.region, has no shadow, and uses
+		// content protection, so neither it nor a non-overlapping control bar
+		// needs to flicker off/on between frames.
+		return a.captureRegion(session.region, capture.CaptureOptions{IncludeCursor: false})
+	}
 	var data []byte
 	err := a.withScrollChromeHidden(session, func() {
-		if controlVisible {
+		if !control.IsDestroyed() {
 			control.Hide()
 		}
-		if frameVisible {
-			frame.Hide()
-		}
 	}, func() {
-		if controlVisible && !control.IsDestroyed() {
-			control.Show()
-		}
-		if frameVisible && !frame.IsDestroyed() {
-			frame.Show()
+		if !control.IsDestroyed() {
+			control.ShowInactive()
 		}
 	}, func() (err error) {
 		data, err = a.captureRegion(session.region, capture.CaptureOptions{IncludeCursor: false})
 		return err
-	}, 20*time.Millisecond)
+	}, delay)
 	return data, err
 }

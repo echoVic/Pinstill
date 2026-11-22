@@ -166,7 +166,7 @@ func TestPayloadJSONContract(t *testing.T) {
 		{
 			name:  "overlay info",
 			value: OverlayInfo{DisplayX: 0, DisplayY: 0, Width: 1920, Height: 1080, Scale: 2},
-			want:  []string{"displayX", "displayY", "height", "scale", "width"},
+			want:  []string{"cursorX", "cursorY", "displayX", "displayY", "height", "scale", "width"},
 		},
 		{
 			name:  "pin init",

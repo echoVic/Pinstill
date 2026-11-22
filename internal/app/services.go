@@ -25,6 +25,12 @@ func (s *CaptureService) BeginRegion() error { return s.app.beginRegion() }
 // CancelRegion cancels the running region capture.
 func (s *CaptureService) CancelRegion() { s.app.cancelRegion() }
 
+// OverlayReady notifies Go that the overlay page has painted its clean
+// initial state for session and may be revealed without stale-frame flash.
+func (s *CaptureService) OverlayReady(session uint64) {
+	s.app.revealOverlay(session)
+}
+
 // PrepareSelection captures the region the user selected and hands it back
 // to the overlay, so it can annotate the capture in place on the desktop.
 func (s *CaptureService) PrepareSelection(rect Rect) (OverlayCapturePayload, error) {

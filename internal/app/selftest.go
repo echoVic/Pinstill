@@ -1348,7 +1348,13 @@ func (a *App) selftestScrollFlow() {
 	for _, action := range []string{"copy", "save", "pin", "close"} {
 		selftestRequire(strings.Contains(","+actions+",", ","+action+","), "scroll result missing %s", action)
 	}
-	eval(`document.querySelector('[data-result-action="close"]')?.click(), 'ok'`)
+	// Let Eval return before the click tears down its WebView.
+	selftestRequire(eval(`(() => {
+		const button = document.querySelector('[data-result-action="close"]');
+		if (!button) return 'missing';
+		setTimeout(() => button.click(), 100);
+		return 'scheduled';
+	})()`) == "scheduled", "scroll result close was not scheduled")
 	time.Sleep(700 * time.Millisecond)
 	a.mu.Lock()
 	stillOpen := a.result != nil

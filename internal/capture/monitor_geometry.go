@@ -29,24 +29,9 @@ func monitorPixelRect(rect Rect, monitors []monitorGeometry) ([4]int, error) {
 		r[i] = int64(v)
 	}
 	r[2], r[3] = max(1, r[2]), max(1, r[3])
-	minDPI := int64(math.MaxInt32)
-	for _, m := range monitors {
-		if m.dpi <= 0 || m.dpi > math.MaxInt32 || m.pixels.Empty() {
-			return [4]int{}, errors.New("capture: invalid monitor geometry")
-		}
-		for _, v := range []int{m.pixels.Min.X, m.pixels.Min.Y, m.pixels.Max.X, m.pixels.Max.Y} {
-			if int64(v) < math.MinInt32 || int64(v) > math.MaxInt32 {
-				return [4]int{}, errors.New("capture: invalid monitor bounds")
-			}
-		}
-		minDPI = min(minDPI, int64(m.dpi))
-	}
-	physical := make([][4]int64, len(monitors))
-	logical := make([][4]int64, len(monitors))
-	for i, m := range monitors {
-		p := [4]int64{int64(m.pixels.Min.X), int64(m.pixels.Min.Y), int64(m.pixels.Max.X) - int64(m.pixels.Min.X), int64(m.pixels.Max.Y) - int64(m.pixels.Min.Y)}
-		physical[i] = p
-		logical[i] = [4]int64{scaleDIP(p[0], 96, minDPI), scaleDIP(p[1], 96, minDPI), scaleDIP(p[2], 96, int64(m.dpi)), scaleDIP(p[3], 96, int64(m.dpi))}
+	physical, logical, err := buildMonitorSpaces(monitors)
+	if err != nil {
+		return [4]int{}, err
 	}
 	toPixels := func(i int) [4]int64 {
 		p, d, dpi := physical[i], logical[i], int64(monitors[i].dpi)
@@ -67,6 +52,61 @@ func monitorPixelRect(rect Rect, monitors []monitorGeometry) ([4]int, error) {
 		return [4]int{}, err
 	}
 	return [4]int{int(pixels[0]), int(pixels[1]), int(pixels[2]), int(pixels[3])}, nil
+}
+
+func buildMonitorSpaces(monitors []monitorGeometry) (physical, logical [][4]int64, err error) {
+	if len(monitors) == 0 {
+		return nil, nil, errors.New("capture: missing monitors")
+	}
+	minDPI := int64(math.MaxInt32)
+	for _, m := range monitors {
+		if m.dpi <= 0 || m.dpi > math.MaxInt32 || m.pixels.Empty() {
+			return nil, nil, errors.New("capture: invalid monitor geometry")
+		}
+		for _, v := range []int{m.pixels.Min.X, m.pixels.Min.Y, m.pixels.Max.X, m.pixels.Max.Y} {
+			if int64(v) < math.MinInt32 || int64(v) > math.MaxInt32 {
+				return nil, nil, errors.New("capture: invalid monitor bounds")
+			}
+		}
+		minDPI = min(minDPI, int64(m.dpi))
+	}
+	physical = make([][4]int64, len(monitors))
+	logical = make([][4]int64, len(monitors))
+	for i, m := range monitors {
+		p := [4]int64{int64(m.pixels.Min.X), int64(m.pixels.Min.Y), int64(m.pixels.Max.X) - int64(m.pixels.Min.X), int64(m.pixels.Max.Y) - int64(m.pixels.Min.Y)}
+		physical[i] = p
+		logical[i] = [4]int64{scaleDIP(p[0], 96, minDPI), scaleDIP(p[1], 96, minDPI), scaleDIP(p[2], 96, int64(m.dpi)), scaleDIP(p[3], 96, int64(m.dpi))}
+	}
+	return physical, logical, nil
+}
+
+// pixelsToMonitorDIPRect maps a Win32 physical-pixel rectangle to MyGo screen DIPs.
+func pixelsToMonitorDIPRect(px [4]int, monitors []monitorGeometry) (Rect, bool) {
+	if px[2] <= 0 || px[3] <= 0 || len(monitors) == 0 {
+		return Rect{}, false
+	}
+	r64 := [4]int64{int64(px[0]), int64(px[1]), int64(px[2]), int64(px[3])}
+	for _, v := range r64 {
+		if v < math.MinInt32 || v > math.MaxInt32 {
+			return Rect{}, false
+		}
+	}
+	physical, logical, err := buildMonitorSpaces(monitors)
+	if err != nil {
+		return Rect{}, false
+	}
+	i := monitorOrder(r64, physical)[0]
+	dpi := float64(monitors[i].dpi)
+	rect := Rect{
+		X:      float64(logical[i][0]) + float64(r64[0]-physical[i][0])*96.0/dpi,
+		Y:      float64(logical[i][1]) + float64(r64[1]-physical[i][1])*96.0/dpi,
+		Width:  float64(r64[2]) * 96.0 / dpi,
+		Height: float64(r64[3]) * 96.0 / dpi,
+	}
+	if rect.Empty() {
+		return Rect{}, false
+	}
+	return rect, true
 }
 
 // scaleDIP is MyGo's scaled() with 64-bit intermediates and quotient-first

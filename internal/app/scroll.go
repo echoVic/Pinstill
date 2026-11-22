@@ -9,6 +9,7 @@ import (
 	"image/draw"
 	"image/png"
 	"log"
+	"math"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -124,6 +125,8 @@ func (a *App) createScrollControl() {
 		}()
 	})
 	win.SetContentProtection(true)
+	win.SetSkipTaskbar(true)
+	win.SetVisibleOnAllWorkspaces(true)
 	a.control = win
 }
 
@@ -149,8 +152,11 @@ func (a *App) createScrollFrame() {
 		BackgroundColor:   "rgba(0,0,0,0)",
 		URL:               "/frame.html",
 	})
+	win.SetHasShadow(false)
 	win.SetIgnoreMouseEvents(true)
 	win.SetContentProtection(true)
+	win.SetSkipTaskbar(true)
+	win.SetVisibleOnAllWorkspaces(true)
 	a.mu.Lock()
 	a.scrollFrame = win
 	a.mu.Unlock()
@@ -161,9 +167,18 @@ func (a *App) createScrollFrame() {
 // region would end up in every stitched screenshot.
 const scrollFrameBorder = 2
 
+func scrollFrameBounds(region capture.Rect) mygo.Rectangle {
+	return mygo.Rectangle{
+		X:      int(math.Round(region.X)) - scrollFrameBorder,
+		Y:      int(math.Round(region.Y)) - scrollFrameBorder,
+		Width:  int(math.Round(region.Width)) + scrollFrameBorder*2,
+		Height: int(math.Round(region.Height)) + scrollFrameBorder*2,
+	}
+}
+
 // showScrollFrame places the region marker just outside the capture region and
-// shows it; the window stays click-through so manual scrolling still reaches
-// the app underneath.
+// shows it without stealing focus; the window stays click-through so manual
+// scrolling still reaches the app underneath.
 func (a *App) showScrollFrame(region capture.Rect) {
 	a.mu.Lock()
 	win := a.scrollFrame
@@ -171,14 +186,11 @@ func (a *App) showScrollFrame(region capture.Rect) {
 	if win == nil || win.IsDestroyed() {
 		return
 	}
-	win.SetBounds(mygo.Rectangle{
-		X:      int(region.X) - scrollFrameBorder,
-		Y:      int(region.Y) - scrollFrameBorder,
-		Width:  int(region.Width) + scrollFrameBorder*2,
-		Height: int(region.Height) + scrollFrameBorder*2,
-	})
+	win.SetBounds(scrollFrameBounds(region))
+	win.SetHasShadow(false)
 	win.SetIgnoreMouseEvents(true)
-	win.Show()
+	win.SetContentProtection(true)
+	win.ShowInactive()
 }
 
 // hideScrollFrame removes the region marker when the session ends.
@@ -309,12 +321,14 @@ func (a *App) startScroll(rect Rect, autoScroll bool) error {
 		simulatedScrollCounter.Store(0)
 	}
 	if overlay != nil {
+		overlay.SetOpacity(0)
 		overlay.Hide()
 	}
 	a.mu.Lock()
 	if err := a.releaseOverlayCacheLocked(); err != nil {
 		a.mu.Unlock()
 		if overlay != nil {
+			overlay.SetOpacity(1)
 			overlay.Show()
 			overlay.Focus()
 		}
@@ -345,7 +359,7 @@ func (a *App) startScroll(rect Rect, autoScroll bool) error {
 		a.captureGeneration++
 		a.mu.Unlock()
 		a.placeScrollControl(region)
-		control.Show()
+		control.ShowInactive()
 		a.showScrollFrame(region)
 		emitToWindow(a, control, EventScrollInit, ScrollInitPayload{
 			SessionID:            session.id,

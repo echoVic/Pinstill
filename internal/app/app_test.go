@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"testing"
@@ -377,5 +378,176 @@ func TestStoreCaptureIdentifiesItsOwnHistoryEntry(t *testing.T) {
 		} else if payload.HistoryID != "" {
 			t.Fatal("capture with history disabled must not identify an older history image")
 		}
+	}
+}
+
+func TestProjectOverlayWindowsAndLifecycle(t *testing.T) {
+	raw := []capture.WindowInfo{
+		{ID: 1, PID: 10, Owner: "Safari", Title: "Docs", Rect: capture.Rect{X: 100, Y: 10, Width: 800, Height: 600}},
+		{ID: 2, PID: 20, Owner: "Code", Title: "main.go", Rect: capture.Rect{X: 1500, Y: 100, Width: 600, Height: 400}},
+		{ID: 3, PID: 30, Owner: "OffScreen", Rect: capture.Rect{X: 2000, Y: 100, Width: 300, Height: 300}},
+	}
+	surface := capture.Rect{X: 0, Y: 25, Width: 1920, Height: 1055}
+	got := projectOverlayWindows(raw, surface)
+	if len(got) != 2 {
+		t.Fatalf("len(projectOverlayWindows) = %d, want 2 (%+v)", len(got), got)
+	}
+	if got[0] != (OverlayWindow{X: 100, Y: 0, Width: 800, Height: 585, Owner: "Safari", Title: "Docs"}) {
+		t.Fatalf("got[0] = %+v", got[0])
+	}
+	if got[1] != (OverlayWindow{X: 1500, Y: 75, Width: 420, Height: 400, Owner: "Code", Title: "main.go"}) {
+		t.Fatalf("got[1] = %+v", got[1])
+	}
+
+	a := newTestApp(t)
+	a.sessionDir = t.TempDir()
+	a.overlayDisplay = mygo.Display{
+		WorkArea:    mygo.Rectangle{X: 0, Y: 25, Width: 1920, Height: 1055},
+		Bounds:      mygo.Rectangle{X: 0, Y: 0, Width: 1920, Height: 1080},
+		ScaleFactor: 2,
+	}
+	a.overlayRect = a.overlayDisplay.WorkArea
+	a.overlayWindows = got
+	a.overlayCursorX = 250
+	a.overlayCursorY = 180
+	a.overlayHasCursor = true
+
+	info := a.overlayInfo()
+	if !info.HasCursor || info.CursorX != 250 || info.CursorY != 180 {
+		t.Fatalf("overlayInfo cursor = (%v, %v, %v)", info.HasCursor, info.CursorX, info.CursorY)
+	}
+	if len(info.Windows) != 2 || info.Windows[0].Owner != "Safari" {
+		t.Fatalf("overlayInfo windows = %+v", info.Windows)
+	}
+	// Mutating the returned slice must not alter internal state.
+	info.Windows[0].Owner = "Mutated"
+	if a.overlayInfo().Windows[0].Owner != "Safari" {
+		t.Fatal("overlayInfo leaked internal windows slice")
+	}
+
+	a.mu.Lock()
+	err := a.releaseOverlayCacheLocked()
+	a.mu.Unlock()
+	if err != nil {
+		t.Fatalf("releaseOverlayCacheLocked() error = %v", err)
+	}
+	cleared := a.overlayInfo()
+	if cleared.HasCursor || cleared.CursorX != 0 || cleared.CursorY != 0 || len(cleared.Windows) != 0 {
+		t.Fatalf("overlayInfo after releaseOverlayCacheLocked = %+v", cleared)
+	}
+}
+
+func TestListVisibleWindowsUsesCustomProvider(t *testing.T) {
+	var seenPID int
+	a := &App{
+		visibleWindows: func(excludePID int) []capture.WindowInfo {
+			seenPID = excludePID
+			return []capture.WindowInfo{{Owner: "Terminal", Rect: capture.Rect{X: 10, Y: 20, Width: 300, Height: 200}}}
+		},
+	}
+	got := a.listVisibleWindows()
+	if seenPID != os.Getpid() || len(got) != 1 || got[0].Owner != "Terminal" {
+		t.Fatalf("listVisibleWindows() = %+v (seenPID=%d, want %d)", got, seenPID, os.Getpid())
+	}
+}
+
+func TestRevealOverlaySessionGating(t *testing.T) {
+	var reveals []float64
+	a := newTestApp(t)
+	a.sessionDir = t.TempDir()
+	a.overlayDisplay = mygo.Display{
+		WorkArea:    mygo.Rectangle{Width: 1920, Height: 1080},
+		Bounds:      mygo.Rectangle{Width: 1920, Height: 1080},
+		ScaleFactor: 1,
+	}
+	a.overlayRect = a.overlayDisplay.WorkArea
+	a.capturing = true
+	a.overlaySession = 7
+	a.setOverlayOpacity = func(v float64) { reveals = append(reveals, v) }
+	if got := a.overlayInfo().Session; got != 7 {
+		t.Fatalf("overlayInfo().Session = %d, want 7", got)
+	}
+
+	// Zero or mismatched sessions are ignored.
+	a.revealOverlay(0)
+	a.revealOverlay(6)
+	if len(reveals) != 0 {
+		t.Fatalf("unexpected reveals for invalid session: %v", reveals)
+	}
+
+	// Matching active session reveals once and clears overlaySession so duplicates are ignored.
+	a.revealOverlay(7)
+	a.revealOverlay(7)
+	if len(reveals) != 1 || reveals[0] != 1 {
+		t.Fatalf("reveals = %v, want [1]", reveals)
+	}
+	if a.overlayInfo().Session != 0 {
+		t.Fatalf("overlaySession after reveal = %d, want 0", a.overlayInfo().Session)
+	}
+
+	// Pending reveal is cancelled by cancelRegion, active scroll, or releaseOverlayCacheLocked.
+	a.overlaySession = 8
+	a.scroll = &scrollSession{id: "scroll-1"}
+	a.revealOverlay(8)
+	if len(reveals) != 1 {
+		t.Fatalf("reveal ran during active scroll: %v", reveals)
+	}
+	a.scroll = nil
+
+	a.overlaySession = 9
+	timerFired := false
+	a.overlayRevealTimer = time.AfterFunc(time.Hour, func() { timerFired = true })
+	a.mu.Lock()
+	err := a.releaseOverlayCacheLocked()
+	a.mu.Unlock()
+	if err != nil {
+		t.Fatalf("releaseOverlayCacheLocked() error = %v", err)
+	}
+	if a.overlaySession != 0 || a.overlayRevealTimer != nil {
+		t.Fatalf("releaseOverlayCacheLocked did not clear reveal state: session=%d timer=%v", a.overlaySession, a.overlayRevealTimer)
+	}
+	a.revealOverlay(9)
+	if len(reveals) != 1 || timerFired {
+		t.Fatalf("reveal ran after release: reveals=%v timerFired=%v", reveals, timerFired)
+	}
+
+	a.overlaySession = 10
+	a.cancelRegion()
+	a.revealOverlay(10)
+	if len(reveals) != 1 {
+		t.Fatalf("reveal ran after cancelRegion: %v", reveals)
+	}
+}
+
+func TestOverlayInfoMarshalsZeroCursorCoordinates(t *testing.T) {
+	data, err := json.Marshal(OverlayInfo{HasCursor: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if fields["cursorX"] != float64(0) || fields["cursorY"] != float64(0) {
+		t.Fatalf("overlay info dropped a valid zero cursor coordinate: %s", data)
+	}
+}
+
+func TestRevealOverlayChecksSessionWhenUIRuns(t *testing.T) {
+	a := newTestApp(t)
+	a.capturing = true
+	a.overlaySession = 1
+	var queued func()
+	a.overlayUI = func(fn func()) { queued = fn }
+	a.setOverlayOpacity = func(float64) { t.Error("previous session revealed a new overlay") }
+
+	a.revealOverlay(1)
+	if queued == nil {
+		t.Fatal("reveal did not dispatch to the UI thread")
+	}
+	a.overlaySession = 2
+	queued()
+	if a.overlaySession != 2 {
+		t.Fatal("reveal consumed the new session")
 	}
 }

@@ -96,7 +96,7 @@ export function page(name, { bridge = {}, globals = {}, storage = {} } = {}) {
     clearInterval: id => timers.delete(id),
   });
   const bridgeDefaults = { hasNative: true, historyList: async () => [], listArchivedPins: async () => [], applySettings: async () => ({}), permissionGranted: async () => true,
-    settings: async () => ({ afterCapture: 'inplace' }), overlayInfo: async () => ({ width: 1200, height: 800 }),
+    settings: async () => ({ afterCapture: 'inplace' }), overlayInfo: async () => ({ width: 1200, height: 800 }), overlayReady: async () => {},
   };
   const bridgeMock = new Proxy({ ...bridgeDefaults, ...bridge }, { get: (target, key) => key in target ? target[key] : key.startsWith('on') ? cb => { listeners.set(key, cb); return () => {}; } : () => { throw new Error(`Unexpected bridge call ${key}`); } });
   const context = vm.createContext({ console, URL, URLSearchParams, Blob, Error, performance, document, window,

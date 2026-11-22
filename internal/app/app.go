@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -32,13 +33,22 @@ type App struct {
 	pinStore    *pin.Store
 	pageSession *mygo.Session
 
-	main           *mygo.Window
-	overlay        *mygo.Window
-	control        *mygo.Window
-	scrollFrame    *mygo.Window
-	result         *mygo.Window
-	overlayDisplay mygo.Display
-	overlayRect    mygo.Rectangle
+	main               *mygo.Window
+	overlay            *mygo.Window
+	control            *mygo.Window
+	scrollFrame        *mygo.Window
+	result             *mygo.Window
+	overlayDisplay     mygo.Display
+	overlayRect        mygo.Rectangle
+	overlayWindows     []OverlayWindow
+	overlayCursorX     float64
+	overlayCursorY     float64
+	overlayHasCursor   bool
+	overlaySession     uint64
+	overlayRevealTimer *time.Timer
+	setOverlayOpacity  func(float64)
+	overlayUI          func(func())
+	visibleWindows     func(excludePID int) []capture.WindowInfo
 
 	// resultPNG/resultMeta back the scrolling-capture preview window.
 	resultPNG           []byte
@@ -147,6 +157,7 @@ func (a *App) prepareQuit(snapshot func() error) error {
 	a.mu.Lock()
 	session := a.scroll
 	a.captureGeneration++
+	a.clearOverlayRevealLocked()
 	a.mu.Unlock()
 	if session != nil {
 		session.mu.Lock()
@@ -301,6 +312,7 @@ func (a *App) createOverlay() {
 		go a.cancelRegion()
 	})
 	win.SetContentProtection(true)
+	win.SetHasShadow(false)
 	a.overlay = win
 }
 
@@ -394,6 +406,7 @@ func (a *App) beginRegion() error {
 	}
 	a.capturing = true
 	a.captureGeneration++
+	session := a.captureGeneration
 	a.mu.Unlock()
 
 	if !capture.Supported() {
@@ -403,46 +416,142 @@ func (a *App) beginRegion() error {
 		a.failCapture(capture.ErrUnsupported, false)
 		return capture.ErrUnsupported
 	}
-	disp := mygo.Screen.DisplayNearestPoint(mygo.Screen.CursorScreenPoint())
-	a.mu.Lock()
-	a.overlayDisplay = disp
-	mainWin := a.main
-	overlay := a.overlay
-	a.mu.Unlock()
-	if mainWin != nil {
-		// Restore the main window after a cancel only when it was visible
-		// before the capture: closing the window and cancelling a shot must
-		// not pop the history/settings panel back up.
-		visible := hideForCapture(mainWin)
+	cursor := mygo.Screen.CursorScreenPoint()
+	disp := mygo.Screen.DisplayNearestPoint(cursor)
+	rawWindows := a.listVisibleWindows()
+	var showErr error
+	a.runOverlayUI(func() {
+		if !a.selectionIsCurrent(session) {
+			return
+		}
 		a.mu.Lock()
-		a.restoreMainAfterCapture = visible
+		mainWin, overlay := a.main, a.overlay
+		if overlay == nil {
+			a.capturing = false
+			a.mu.Unlock()
+			showErr = errors.New("选区窗口不可用")
+			return
+		}
 		a.mu.Unlock()
-	}
-	if overlay == nil {
+
+		// Reopen the main window on cancel only if it had been visible.
+		restoreMain := mainWin != nil && hideForCapture(mainWin)
+		// AppKit keeps panel frames inside the work area. Read back the
+		// actual frame so the selection maps to the right pixels.
+		area := disp.WorkArea
+		if area.Width <= 0 || area.Height <= 0 {
+			area = disp.Bounds
+		}
+		// Wake the WebView without flashing pixels from the previous shot.
+		overlay.SetOpacity(0)
+		overlay.SetBounds(area)
+		overlay.Show()
+		actual := overlay.ContentBounds()
+		if actual.Width <= 0 || actual.Height <= 0 {
+			actual = area
+		}
+		surface := capture.Rect{
+			X:      float64(actual.X),
+			Y:      float64(actual.Y),
+			Width:  float64(actual.Width),
+			Height: float64(actual.Height),
+		}
+		projected := projectOverlayWindows(rawWindows, surface)
 		a.mu.Lock()
-		a.capturing = false
+		a.clearOverlayRevealLocked()
+		a.restoreMainAfterCapture = restoreMain
+		a.overlayDisplay = disp
+		a.overlayRect = actual
+		a.overlayWindows = projected
+		a.overlayCursorX = float64(cursor.X - actual.X)
+		a.overlayCursorY = float64(cursor.Y - actual.Y)
+		a.overlayHasCursor = true
+		a.overlaySession = session
+		a.overlayRevealTimer = time.AfterFunc(120*time.Millisecond, func() {
+			a.revealOverlay(session)
+		})
 		a.mu.Unlock()
-		return errors.New("选区窗口不可用")
-	}
-	// A panel is a titled window underneath: AppKit keeps its frame inside
-	// the screen's visible frame, which excludes the menu bar and the Dock.
-	// Ask for the work area and read back the frame the window really got,
-	// so the selection maps to the right pixels either way.
-	area := disp.WorkArea
-	if area.Width <= 0 || area.Height <= 0 {
-		area = disp.Bounds
-	}
-	overlay.SetBounds(mygo.Rectangle{X: area.X, Y: area.Y, Width: area.Width, Height: area.Height})
-	overlay.Show()
-	actual := overlay.ContentBounds()
-	if actual.Width <= 0 || actual.Height <= 0 {
-		actual = area
+		_ = EventOverlayShown.Emit(overlay, a.overlayInfo())
+	})
+	return showErr
+}
+
+// Serialize the session checks with native show, hide and reveal calls.
+func (a *App) runOverlayUI(fn func()) {
+	if a.overlayUI != nil {
+		a.overlayUI(fn)
+		return
 	}
 	a.mu.Lock()
-	a.overlayRect = actual
+	native := a.overlay != nil || a.main != nil
 	a.mu.Unlock()
-	_ = EventOverlayShown.Emit(overlay, a.overlayInfo())
-	return nil
+	if native {
+		mygo.RunOnMain(fn)
+	} else {
+		fn()
+	}
+}
+
+// Caller holds a.mu.
+func (a *App) clearOverlayRevealLocked() {
+	if a.overlayRevealTimer != nil {
+		a.overlayRevealTimer.Stop()
+		a.overlayRevealTimer = nil
+	}
+	a.overlaySession = 0
+}
+
+func (a *App) revealOverlay(session uint64) {
+	if session == 0 {
+		return
+	}
+	a.runOverlayUI(func() {
+		a.mu.Lock()
+		if !a.capturing || a.quitting || a.scroll != nil || a.overlaySession != session {
+			a.mu.Unlock()
+			return
+		}
+		a.clearOverlayRevealLocked()
+		overlay := a.overlay
+		setOpacity := a.setOverlayOpacity
+		a.mu.Unlock()
+		if setOpacity != nil {
+			setOpacity(1)
+			return
+		}
+		if overlay != nil && !overlay.IsDestroyed() {
+			overlay.SetOpacity(1)
+		}
+	})
+}
+
+func (a *App) listVisibleWindows() []capture.WindowInfo {
+	a.mu.Lock()
+	fn := a.visibleWindows
+	a.mu.Unlock()
+	if fn == nil {
+		fn = capture.VisibleWindows
+	}
+	return fn(os.Getpid())
+}
+
+func projectOverlayWindows(raw []capture.WindowInfo, surface capture.Rect) []OverlayWindow {
+	projected := capture.ProjectWindowsToSurface(raw, surface, 12, 128)
+	if len(projected) == 0 {
+		return nil
+	}
+	out := make([]OverlayWindow, len(projected))
+	for i, w := range projected {
+		out[i] = OverlayWindow{
+			X:      w.Rect.X,
+			Y:      w.Rect.Y,
+			Width:  w.Rect.Width,
+			Height: w.Rect.Height,
+			Owner:  w.Owner,
+			Title:  w.Title,
+		}
+	}
+	return out
 }
 
 // overlayInfo describes the display the overlay currently covers.
@@ -451,6 +560,11 @@ func (a *App) overlayInfo() OverlayInfo {
 	disp := a.overlayDisplay
 	rect := a.overlayRect
 	overlay := a.overlay
+	windows := slices.Clone(a.overlayWindows)
+	cursorX := a.overlayCursorX
+	cursorY := a.overlayCursorY
+	hasCursor := a.overlayHasCursor
+	session := a.overlaySession
 	a.mu.Unlock()
 	if overlay != nil {
 		if live := overlay.ContentBounds(); live.Width > 0 && live.Height > 0 {
@@ -467,36 +581,46 @@ func (a *App) overlayInfo() OverlayInfo {
 		}
 	}
 	return OverlayInfo{
-		DisplayX: rect.X,
-		DisplayY: rect.Y,
-		Width:    rect.Width,
-		Height:   rect.Height,
-		Scale:    disp.ScaleFactor,
+		Session:   session,
+		DisplayX:  rect.X,
+		DisplayY:  rect.Y,
+		Width:     rect.Width,
+		Height:    rect.Height,
+		Scale:     disp.ScaleFactor,
+		CursorX:   cursorX,
+		CursorY:   cursorY,
+		HasCursor: hasCursor,
+		Windows:   windows,
 	}
 }
 
 // cancelRegion hides the overlay and brings the main window back.
 func (a *App) cancelRegion() bool {
-	a.mu.Lock()
-	if a.scroll != nil {
+	completed := false
+	a.runOverlayUI(func() {
+		a.mu.Lock()
+		if a.scroll != nil {
+			a.mu.Unlock()
+			return
+		}
+		overlay := a.overlay
+		restoreMain := a.restoreMainAfterCapture
+		a.restoreMainAfterCapture = false
+		a.capturing = false
+		a.captureGeneration++
+		reportCacheCleanup(a.releaseOverlayCacheLocked())
 		a.mu.Unlock()
-		return false
-	}
-	overlay := a.overlay
-	restoreMain := a.restoreMainAfterCapture
-	a.restoreMainAfterCapture = false
-	a.capturing = false
-	a.captureGeneration++
-	reportCacheCleanup(a.releaseOverlayCacheLocked())
-	a.mu.Unlock()
-	if overlay != nil {
-		overlay.Hide()
-	}
-	if restoreMain {
-		a.showMain()
-	}
-	emitToMain(a, EventCaptureCancelled, CaptureCancelledPayload{Reason: "user"})
-	return true
+		if overlay != nil {
+			overlay.SetOpacity(0)
+			overlay.Hide()
+		}
+		if restoreMain {
+			a.showMain()
+		}
+		emitToMain(a, EventCaptureCancelled, CaptureCancelledPayload{Reason: "user"})
+		completed = true
+	})
+	return completed
 }
 
 // captureRegion wraps the native capture. Selftests can run without the

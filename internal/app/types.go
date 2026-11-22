@@ -29,13 +29,29 @@ type CaptureActionResult struct {
 	Cancelled bool `json:"cancelled"`
 }
 
+// OverlayWindow describes one visible desktop window projected into
+// overlay-local CSS pixels, ordered front-to-back for hover snapping.
+type OverlayWindow struct {
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
+	Owner  string  `json:"owner,omitempty"`
+	Title  string  `json:"title,omitempty"`
+}
+
 // OverlayInfo tells the overlay page where the selection surface is.
 type OverlayInfo struct {
-	DisplayX int     `json:"displayX"`
-	DisplayY int     `json:"displayY"`
-	Width    int     `json:"width"`
-	Height   int     `json:"height"`
-	Scale    float64 `json:"scale"`
+	Session   uint64          `json:"session,omitempty"`
+	DisplayX  int             `json:"displayX"`
+	DisplayY  int             `json:"displayY"`
+	Width     int             `json:"width"`
+	Height    int             `json:"height"`
+	Scale     float64         `json:"scale"`
+	CursorX   float64         `json:"cursorX"`
+	CursorY   float64         `json:"cursorY"`
+	HasCursor bool            `json:"hasCursor,omitempty"`
+	Windows   []OverlayWindow `json:"windows,omitempty"`
 }
 
 // CaptureCancelledPayload reports a capture the user backed out of.

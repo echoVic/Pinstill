@@ -25,6 +25,7 @@ import {
   onOverlayShown,
   openPermissionSettings,
   overlayInfo,
+  overlayReady,
   prepareSelection,
   prepareSelectionFast,
   settings,
@@ -32,6 +33,7 @@ import {
   type FinishAnnotatedAction,
   type OverlayCapture,
   type OverlayInfo,
+  type OverlayWindow,
   type Rect,
 } from "./bridge";
 import {
@@ -353,6 +355,10 @@ let displayInfo: OverlayInfo | null = null;
 let phase: Phase = "idle";
 let afterCapture: AfterCapture = "inplace";
 let settingsReady: Promise<void> = Promise.resolve();
+let detectedWindows: OverlayWindow[] = [];
+let pressWindow: OverlayWindow | null = null;
+let dragMoved = false;
+let overlayShownHandled = false;
 
 let startX = 0;
 let startY = 0;
@@ -451,8 +457,10 @@ function moveCrosshair(x: number, y: number): void {
   crosshairH.style.top = `${y}px`;
 }
 
-function updateSizeBadge(rect: Rect, toolbarAbove = false): void {
-  sizeBadge.textContent = `${Math.round(rect.width)} × ${Math.round(rect.height)}`;
+function updateSizeBadge(rect: Rect, toolbarAbove = false, label?: string): void {
+  const dims = `${Math.round(rect.width)} × ${Math.round(rect.height)}`;
+  const cleanLabel = label?.trim().slice(0, 24) ?? "";
+  sizeBadge.textContent = cleanLabel ? `${cleanLabel} · ${dims}` : dims;
   sizeBadge.hidden = false;
   const badgeWidth = sizeBadge.offsetWidth || 84;
   const badgeHeight = sizeBadge.offsetHeight || 24;
@@ -516,6 +524,91 @@ function positionSelection(rect: Rect): void {
   selection.style.top = `${rect.y}px`;
   selection.style.width = `${rect.width}px`;
   selection.style.height = `${rect.height}px`;
+}
+
+function sanitizeWindows(list: OverlayWindow[] | undefined): OverlayWindow[] {
+  if (!Array.isArray(list)) return [];
+  return list.filter(
+    (w): w is OverlayWindow =>
+      Boolean(w) &&
+      Number.isFinite(w.x) &&
+      Number.isFinite(w.y) &&
+      Number.isFinite(w.width) &&
+      Number.isFinite(w.height) &&
+      w.width >= MIN_SELECTION &&
+      w.height >= MIN_SELECTION,
+  );
+}
+
+function clampWindowRect(win: OverlayWindow): Rect {
+  const vw = viewportWidth();
+  const vh = viewportHeight();
+  const x = clamp(Math.round(win.x), 0, vw);
+  const y = clamp(Math.round(win.y), 0, vh);
+  const right = clamp(Math.round(win.x + win.width), x, vw);
+  const bottom = clamp(Math.round(win.y + win.height), y, vh);
+  return {
+    x,
+    y,
+    width: Math.max(0, right - x),
+    height: Math.max(0, bottom - y),
+  };
+}
+
+function findWindowAt(x: number, y: number): OverlayWindow | null {
+  for (const win of detectedWindows) {
+    if (
+      x >= win.x &&
+      x < win.x + win.width &&
+      y >= win.y &&
+      y < win.y + win.height
+    ) {
+      return win;
+    }
+  }
+  return null;
+}
+
+function showWindowPreview(win: OverlayWindow | null): void {
+  if (win) {
+    const rect = clampWindowRect(win);
+    if (rect.width >= MIN_SELECTION && rect.height >= MIN_SELECTION) {
+      selection.classList.add("window-preview");
+      positionSelection(rect);
+      updateSizeBadge(rect, false, win.owner);
+      return;
+    }
+  }
+  selection.classList.remove("window-preview");
+  selection.hidden = true;
+  positionMasks(null);
+  dim.hidden = false;
+  sizeBadge.hidden = true;
+}
+
+function updateHoveredWindow(x: number, y: number): void {
+  if (phase !== "idle") return;
+  showWindowPreview(findWindowAt(x, y));
+}
+
+function applyOverlayInfo(info: OverlayInfo | null): void {
+  if (info && Number.isFinite(info.width) && info.width > 0) displayInfo = info;
+  detectedWindows = sanitizeWindows(info?.windows);
+  if (phase !== "idle") return;
+  if (
+    info?.hasCursor &&
+    typeof info.cursorX === "number" &&
+    typeof info.cursorY === "number" &&
+    Number.isFinite(info.cursorX) &&
+    Number.isFinite(info.cursorY)
+  ) {
+    const cx = clamp(info.cursorX, 0, viewportWidth());
+    const cy = clamp(info.cursorY, 0, viewportHeight());
+    moveCrosshair(cx, cy);
+    updateHoveredWindow(cx, cy);
+  } else {
+    showWindowPreview(null);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -700,7 +793,8 @@ async function startScrollFromToolbar(): Promise<void> {
     // bar when the Accessibility permission is missing.
     await startScroll(committedRect, scrollAutoDefault);
     if (!currentAttempt(attempt)) return;
-    setToolbarStatus("滚动截图进行中 · 结束后自动预览");
+    detectedWindows = [];
+    reset();
   } catch (error) {
     if (!currentAttempt(attempt)) return;
     phase = "annotating";
@@ -1358,6 +1452,7 @@ function showCaptureFailure(rawMessage: string, permission: boolean): void {
 
 function dismissCaptureFailure(): void {
   hideCaptureError();
+  detectedWindows = [];
   reset();
   // The 取消 button ends the capture session (like Esc elsewhere); Go hides the
   // overlay. The page never expects the main window from a failure.
@@ -1419,6 +1514,7 @@ async function finishWith(
     const result = await finishAnnotated(action, base64);
     if (!currentAttempt(attempt)) return;
     if (result.completed || (action === "cancel" && result.cancelled)) {
+      detectedWindows = [];
       reset();
       return;
     }
@@ -1490,7 +1586,9 @@ function reset(): void {
   }
   hideCaptureError();
   positionMasks(null);
-  selection.classList.remove("capturing");
+  pressWindow = null;
+  dragMoved = false;
+  selection.classList.remove("capturing", "window-preview");
   if (transientTimer) window.clearTimeout(transientTimer);
   if (demoResetTimer) window.clearTimeout(demoResetTimer);
   transientTimer = undefined;
@@ -1506,6 +1604,8 @@ function reset(): void {
   dim.hidden = false;
   selection.hidden = true;
   canvas.hidden = true;
+  canvas.width = 0;
+  canvas.height = 0;
   prepareState.hidden = true;
   sizeBadge.hidden = true;
   crosshairV.hidden = true;
@@ -1517,24 +1617,32 @@ function reset(): void {
   document.body.style.cursor = "crosshair";
 }
 
-function beginSelection(x: number, y: number): void {
+function beginSelection(x: number, y: number, snapped: OverlayWindow | null = null): void {
   phase = "selecting";
   selection.classList.remove("capturing");
   startX = x;
   startY = y;
   currentX = x;
   currentY = y;
+  pressWindow = snapped;
+  dragMoved = false;
   hint.hidden = true;
   demoToast.hidden = true;
   canvas.hidden = true;
   prepareState.hidden = true;
   hideToolbar();
   moveCrosshair(x, y);
-  renderSelection();
+  if (snapped) {
+    showWindowPreview(snapped);
+  } else {
+    selection.classList.remove("window-preview");
+    renderSelection();
+  }
 }
 
 function cancelRegionFlow(): void {
   if (phase === "finishing") return;
+  detectedWindows = [];
   reset();
   const attempt = captureAttempt;
   phase = "finishing";
@@ -1779,7 +1887,10 @@ window.addEventListener("pointerdown", (event) => {
   } catch {
     // Window listeners still see the drag.
   }
-  beginSelection(event.clientX, event.clientY);
+  const x = clamp(event.clientX, 0, viewportWidth());
+  const y = clamp(event.clientY, 0, viewportHeight());
+  const snapped = findWindowAt(x, y);
+  beginSelection(x, y, snapped);
 });
 
 window.addEventListener("pointermove", (event) => {
@@ -1791,17 +1902,42 @@ window.addEventListener("pointermove", (event) => {
     updateSizeBadge(rect);
     return;
   }
+  if (phase === "idle") {
+    const x = clamp(event.clientX, 0, viewportWidth());
+    const y = clamp(event.clientY, 0, viewportHeight());
+    moveCrosshair(x, y);
+    updateHoveredWindow(x, y);
+    return;
+  }
   if (phase === "selecting") {
     currentX = clamp(event.clientX, 0, viewportWidth());
     currentY = clamp(event.clientY, 0, viewportHeight());
     moveCrosshair(currentX, currentY);
-    renderSelection();
+    if (
+      !dragMoved &&
+      (Math.abs(currentX - startX) >= MIN_SELECTION ||
+        Math.abs(currentY - startY) >= MIN_SELECTION)
+    ) {
+      dragMoved = true;
+      pressWindow = null;
+      selection.classList.remove("window-preview");
+    }
+    if (dragMoved || !pressWindow) {
+      renderSelection();
+    }
     return;
   }
   if (phase === "annotating" && drawingPointer !== null && engine) {
     const point = canvasPoint(event);
     if (point) engine.moveDraw(point);
   }
+});
+
+document.documentElement.addEventListener("pointerleave", () => {
+  if (phase !== "idle") return;
+  crosshairV.hidden = true;
+  crosshairH.hidden = true;
+  showWindowPreview(null);
 });
 
 window.addEventListener("pointerup", (event) => {
@@ -1821,6 +1957,19 @@ window.addEventListener("pointerup", (event) => {
     return;
   }
   if (phase === "selecting" && event.button === 0) {
+    if (!dragMoved && pressWindow) {
+      const finalRect = clampWindowRect(pressWindow);
+      pressWindow = null;
+      selection.classList.remove("window-preview");
+      if (finalRect.width < MIN_SELECTION || finalRect.height < MIN_SELECTION) {
+        reset();
+        return;
+      }
+      committedRect = finalRect;
+      positionSelection(finalRect);
+      void prepareSelectionFor(finalRect);
+      return;
+    }
     const rect = selectionRect();
     if (rect.width < MIN_SELECTION || rect.height < MIN_SELECTION) {
       reset();
@@ -1891,13 +2040,25 @@ captureErrorSettings.addEventListener("click", () => {
 });
 captureErrorRetry.addEventListener("click", () => void retryCapture());
 captureErrorCancel.addEventListener("click", () => dismissCaptureFailure());
+function notifyOverlayReady(session: number | undefined, attempt: number): void {
+  if (typeof session !== "number" || !Number.isFinite(session) || session <= 0) return;
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      if (!currentAttempt(attempt)) return;
+      void overlayReady(session).catch(() => {});
+    });
+  });
+}
+
 onOverlayShown((payload) => {
-  if (payload && Number.isFinite(payload.width) && payload.width > 0) displayInfo = payload;
+  overlayShownHandled = true;
   // PrepareSelection re-shows the overlay without overlay:shown; if this is a
   // new BeginRegion session, reset everything.
   reset();
   reloadOverlayPreferences();
+  applyOverlayInfo(payload);
   settingsReady = loadSettings();
+  notifyOverlayReady(payload?.session, captureAttempt);
 });
 
 buildToolbar();
@@ -1907,7 +2068,10 @@ reset();
 settingsReady = loadSettings();
 void overlayInfo()
   .then((info) => {
-    if (info && Number.isFinite(info.width) && info.width > 0) displayInfo = info;
+    if (!overlayShownHandled && phase === "idle") {
+      applyOverlayInfo(info);
+      notifyOverlayReady(info?.session, captureAttempt);
+    }
   })
   .catch(() => {
     displayInfo = null;

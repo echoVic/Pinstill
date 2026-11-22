@@ -58,6 +58,11 @@
   .selection.capturing { border-color: transparent; }
   .selection.capturing::before,
   .selection.capturing::after { display: none; }
+  .selection.window-preview {
+    border: 2px solid var(--amber);
+    box-shadow: inset 0 0 0 1px rgba(255, 250, 240, 0.55);
+    pointer-events: none;
+  }
 
   /* Corner handles: after the capture lands in the selection the four
      corners can be dragged to adjust the captured area (the overlay then
@@ -543,7 +548,9 @@
   </div>
 
   <div class="hint" id="hint">
-    <span class="hint-key">拖动</span> 选择截图区域
+    <span class="hint-key">单击</span> 截取窗口
+    <span class="hint-sep">·</span>
+    <span class="hint-key">拖动</span> 选择区域
     <span class="hint-sep">·</span>
     <span class="hint-key">Esc</span> 取消
   </div>

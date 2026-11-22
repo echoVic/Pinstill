@@ -16,6 +16,11 @@ import (
 func (a *App) releaseOverlayCacheLocked() error {
 	a.annotationDigest = [32]byte{}
 	a.annotationPayload = capturePayload{}
+	a.overlayWindows = nil
+	a.overlayCursorX = 0
+	a.overlayCursorY = 0
+	a.overlayHasCursor = false
+	a.clearOverlayRevealLocked()
 	return a.releaseCacheFileLocked(&a.overlaySessionFile)
 }
 
@@ -138,6 +143,7 @@ func (a *App) finishAnnotation(action, dataBase64 string) (CaptureActionResult, 
 		return CaptureActionResult{}, errors.New("截图请求已取消")
 	}
 	if overlay != nil {
+		overlay.SetOpacity(0)
 		overlay.Hide()
 	}
 	actionFn := a.captureAction
@@ -153,6 +159,7 @@ func (a *App) finishAnnotation(action, dataBase64 string) (CaptureActionResult, 
 	}
 	a.mu.Unlock()
 	if current && (err != nil || !result.Completed) && overlay != nil {
+		overlay.SetOpacity(1)
 		overlay.Show()
 		overlay.Focus()
 	}
