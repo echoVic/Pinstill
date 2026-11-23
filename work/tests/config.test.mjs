@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
 import ts from 'typescript';
+import { resolveConfig } from 'vite';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -54,4 +55,12 @@ test('packaged builds use Pinstill GitHub Releases and pin only a public update 
   assert.equal(publicKey.length, 32);
   assert.equal(publicKey.toString('base64'), updates.publicKey);
   assert.equal(updates.privateKey, undefined);
+});
+
+test('the capture UI ships without a separate post-capture action card', async () => {
+  const settings = await resolveConfig({ configFile: join(repo, 'vite.config.ts') }, 'build');
+  const input = settings.build.rollupOptions.input;
+  assert.equal(Object.values(input).some(entry => basename(entry) === 'quick.html'), false);
+  assert.equal(existsSync(join(repo, 'frontend/quick.html')), false);
+  for (const page of ['overlay', 'result', 'pin', 'line']) assert.ok(input[page]);
 });

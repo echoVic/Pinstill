@@ -23,7 +23,7 @@ Builds with automatic updates check in the background, or you can choose “检�
 1. Pinstill lives in the menu bar; press **⌘⇧1** (or choose Capture Region from the tray) to start a selection.
 2. Drag a region and release to capture; the annotation toolbar appears next to it. Press Enter or double-click the canvas to copy, Esc to cancel.
 3. Drag any edge or corner to adjust the selection, then release to update the capture. Choose Scrolling Capture for a tall page.
-4. Choose Pin for an always-on-top window or Hang to put the image on the desktop clothesline. After copying or saving, the screenshot card at the bottom right offers more actions.
+4. Copy or save from the toolbar, choose Pin for an always-on-top window, or choose Hang to add the image to the desktop clothesline.
 5. From the menu bar, open Pin Manager to organize pins, toggle the desktop clothesline, or open History & Settings for captures and preferences.
 
 Hotkeys and what happens after a capture (annotate / copy / pin) are configurable in Settings.
@@ -35,7 +35,6 @@ Press V to select existing annotations. Drag to move a shape, double-click text 
 ## Features
 
 - **Capture and annotation** offers region and full-screen capture with a dim mask, crosshair and size badge. On macOS you can select across displays, with a fitted preview for annotation. Draw rectangles, ellipses, lines, arrows, freehand strokes, text, tags, mosaic, highlights and tiled watermarks using a 40-colour palette, hex input and text styles.
-- **Screenshot card** appears after you copy or save a region, full-screen, or scrolling capture. Copy, save, pin, or hang the image from the card. It stays open on hover and closes about six seconds after you move away.
 - **Pins** are always-on-top windows you can drag, resize, fade, rotate, and flip. Use Pin Manager to group pins, show or hide a group, and restore mouse clicks to click-through pins. Pin settings are restored with the images. Up to 60 pins stay active, with older ones archived.
 - **Desktop clothesline** displays a row of pictures centred below the menu bar on the primary Mac display and floats above ordinary windows while visible. Hang a capture from the toolbar or a preview, or add an image from a file or the clipboard. Drag to reorder. Select a picture to copy, save, pin, or remove it. Pictures, order, and visibility are restored when Pinstill restarts.
 - **History** displays local thumbnails. The large preview supports copy, save, pin, hang, and delete. Retention by age and size is configurable.

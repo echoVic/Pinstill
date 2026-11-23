@@ -1,6 +1,7 @@
 package capture
 
 import (
+	"context"
 	"errors"
 	"image"
 	"image/draw"
@@ -16,10 +17,17 @@ type DisplaySurface struct {
 }
 
 func CaptureDisplays(region Rect, opts CaptureOptions, displays []DisplaySurface) ([]byte, error) {
-	return captureDisplays(region, opts, displays, CaptureRegion)
+	return CaptureDisplaysContext(context.Background(), region, opts, displays)
 }
 
-func captureDisplays(region Rect, opts CaptureOptions, displays []DisplaySurface, grab func(Rect, CaptureOptions) ([]byte, error)) ([]byte, error) {
+func CaptureDisplaysContext(ctx context.Context, region Rect, opts CaptureOptions, displays []DisplaySurface) ([]byte, error) {
+	return captureDisplays(ctx, region, opts, displays, CaptureRegionContext)
+}
+
+func captureDisplays(ctx context.Context, region Rect, opts CaptureOptions, displays []DisplaySurface, grab func(context.Context, Rect, CaptureOptions) ([]byte, error)) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	left, top, width, height := pointRect(region)
 	if width == 0 || height == 0 {
 		return nil, errors.New("capture: invalid selection")
@@ -34,7 +42,7 @@ func captureDisplays(region Rect, opts CaptureOptions, displays []DisplaySurface
 		}
 		if part == region {
 			opts.BackingScale = display.Scale
-			return grab(region, opts)
+			return grab(ctx, region, opts)
 		}
 		pieces = append(pieces, DisplaySurface{Bounds: part, Scale: display.Scale})
 		scale = max(scale, display.Scale)
@@ -48,8 +56,11 @@ func captureDisplays(region Rect, opts CaptureOptions, displays []DisplaySurface
 	canvas := image.NewNRGBA(image.Rect(0, 0, int(math.Round(float64(width)*scale)), int(math.Round(float64(height)*scale))))
 	for _, piece := range pieces {
 		opts.BackingScale = piece.Scale
-		data, err := grab(piece.Bounds, opts)
+		data, err := grab(ctx, piece.Bounds, opts)
 		if err != nil {
+			return nil, err
+		}
+		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		opts.DelayMillis = 0
@@ -66,7 +77,14 @@ func captureDisplays(region Rect, opts CaptureOptions, displays []DisplaySurface
 			xdraw.NearestNeighbor.Scale(canvas, bounds, frame, frame.Bounds(), draw.Src, nil)
 		}
 	}
-	return imagebudget.EncodePNG(canvas)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	data, err := imagebudget.EncodePNG(canvas)
+	if err != nil {
+		return nil, err
+	}
+	return data, ctx.Err()
 }
 
 func checkScaledCapturePixels(width, height int, scale float64) error {

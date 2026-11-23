@@ -2,11 +2,12 @@
 
 package capture
 
+import "context"
+
 // Supported reports whether this platform has a real screen capture backend.
 func Supported() bool { return false }
 
-// CaptureRegion is unsupported on this platform.
-func CaptureRegion(_ Rect, _ CaptureOptions) ([]byte, error) {
+func captureRegion(_ context.Context, _ Rect, _ CaptureOptions) ([]byte, error) {
 	return nil, ErrUnsupported
 }
 

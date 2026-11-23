@@ -1,14 +1,13 @@
 package app
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
-
-	"github.com/echoVic/Pinstill/internal/imagebudget"
 )
 
 // The caller holds a.mu. Only files owned by the overlay are released; a
@@ -39,11 +38,11 @@ func (a *App) releaseCacheFileLocked(file *string) error {
 	return nil
 }
 
-func (a *App) writePreviewLocked(file *string, pngBytes []byte) (string, error) {
-	return a.writePreviewLockedWith(file, pngBytes, func(f *os.File, data []byte) error { _, err := f.Write(data); return err })
+func (a *App) writePreviewLocked(ctx context.Context, file *string, pngBytes []byte) (string, error) {
+	return a.writePreviewLockedWith(ctx, file, pngBytes, func(f *os.File, data []byte) error { _, err := f.Write(data); return err })
 }
 
-func (a *App) writePreviewLockedWith(file *string, pngBytes []byte, write func(*os.File, []byte) error) (string, error) {
+func (a *App) writePreviewLockedWith(ctx context.Context, file *string, pngBytes []byte, write func(*os.File, []byte) error) (string, error) {
 	if err := a.releasePendingPreviewsLocked(); err != nil {
 		return "", err
 	}
@@ -71,6 +70,9 @@ func (a *App) writePreviewLockedWith(file *string, pngBytes []byte, write func(*
 	err = write(f, pngBytes)
 	closeErr := f.Close()
 	if err = errors.Join(err, closeErr); err != nil {
+		return "", errors.Join(err, cleanup())
+	}
+	if err := ctx.Err(); err != nil {
 		return "", errors.Join(err, cleanup())
 	}
 	if err := a.releaseCacheFileLocked(file); err != nil {
@@ -121,9 +123,6 @@ func (a *App) finishAnnotation(action, dataBase64 string) (CaptureActionResult, 
 	if err != nil {
 		return CaptureActionResult{}, err
 	}
-	if _, err := imagebudget.DecodePNG(raw); err != nil {
-		return CaptureActionResult{}, fmt.Errorf("标注后的图片不是有效 PNG: %w", err)
-	}
 	digest := sha256.Sum256(raw)
 	a.mu.Lock()
 	payload := a.annotationPayload
@@ -162,9 +161,6 @@ func (a *App) finishAnnotation(action, dataBase64 string) (CaptureActionResult, 
 		reportCacheCleanup(a.releaseOverlayCacheLocked())
 	}
 	a.mu.Unlock()
-	if current && err == nil && result.Completed {
-		a.postQuickCapture(generation, action, raw, payload)
-	}
 	if current && (err != nil || !result.Completed) && overlay != nil {
 		overlay.SetOpacity(1)
 		overlay.Show()

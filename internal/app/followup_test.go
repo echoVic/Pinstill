@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
@@ -17,6 +18,37 @@ import (
 	"github.com/egoist/mygo"
 )
 
+func TestCancelledPreparationSkipsCaptureAndPreservesPreview(t *testing.T) {
+	t.Setenv("PINSTILL_SELFTEST_FAKE_CAPTURE", "1")
+	synctest.Test(t, func(t *testing.T) {
+		application := &App{
+			capturing:          true,
+			settings:           DefaultSettings(),
+			sessionDir:         t.TempDir(),
+			overlayDisplay:     mygo.Display{Bounds: mygo.Rectangle{Width: 800, Height: 600}},
+			overlaySessionFile: "previous.png",
+		}
+		previous := []byte("previous preview")
+		if err := os.WriteFile(filepath.Join(application.sessionDir, application.overlaySessionFile), previous, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+		defer cancel()
+		start := time.Now()
+		service := &CaptureService{app: application}
+		if _, err := service.PrepareSelection(ctx, Rect{Width: 80, Height: 50}); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("preparation result: %v", err)
+		}
+		if elapsed := time.Since(start); elapsed >= 90*time.Millisecond {
+			t.Fatalf("canceled preparation waited for the compositor: %v", elapsed)
+		}
+		files, err := os.ReadDir(application.sessionDir)
+		if err != nil || len(files) != 1 || files[0].Name() != "previous.png" || application.overlaySessionFile != "previous.png" {
+			t.Fatalf("canceled preparation changed the cache: %v, %v", files, err)
+		}
+	})
+}
+
 func TestFinishInvalidAnnotationRemainsEditable(t *testing.T) {
 	a := newTestApp(t)
 	a.capturing = true
@@ -25,6 +57,41 @@ func TestFinishInvalidAnnotationRemainsEditable(t *testing.T) {
 	}
 	if !a.capturing {
 		t.Fatal("validation failure discarded editable capture")
+	}
+}
+
+func TestTruncatedPNGDoesNotReachHistoryOrCaptureAction(t *testing.T) {
+	for _, keepHistory := range []bool{true, false} {
+		t.Run(map[bool]string{true: "with history", false: "without history"}[keepHistory], func(t *testing.T) {
+			application := newTestApp(t)
+			application.settings.KeepHistory = keepHistory
+			application.capturing = true
+			application.captureAction = func(string, []byte, capturePayload) (CaptureActionResult, error) {
+				t.Fatal("truncated PNG reached the capture action")
+				return CaptureActionResult{}, nil
+			}
+			png := gnPNGData(t, 80, 40)
+			result, err := application.finishAnnotated("copy", base64.StdEncoding.EncodeToString(png[:33]))
+			if err == nil || result.Completed || !application.capturing || len(application.store.List()) != 0 {
+				t.Fatalf("truncated annotation changed session or history: %+v, %v", result, err)
+			}
+		})
+	}
+}
+
+func TestScreenCaptureRejectsTransparentFrameBeforeHistory(t *testing.T) {
+	application := newTestApp(t)
+	for _, keepHistory := range []bool{true, false} {
+		application.settings.KeepHistory = keepHistory
+		payload, err := application.storeScreenCapture(gnTransparentPNG(t, 200, 200))
+		if !errors.Is(err, errEmptyScreenCapture) || payload.ID != "" || len(application.store.List()) != 0 {
+			t.Fatalf("transparent screen capture (history=%v): %+v, %v", keepHistory, payload, err)
+		}
+	}
+	application.settings.KeepHistory = true
+	payload, err := application.storeScreenCapture(gnTransparentPNGWithPixel(t, 200, 200, 1, 1))
+	if err != nil || payload.HistoryID == "" || payload.Width != 200 || payload.Height != 200 {
+		t.Fatalf("visible pixel should survive the blank-frame check: %+v, %v", payload, err)
 	}
 }
 
@@ -312,7 +379,7 @@ func TestPreviewWriteFailurePreservesPreviousFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte("previous pixels"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	_, err := a.writePreviewLockedWith(&previous, []byte("new pixels"), func(f *os.File, data []byte) error { _, _ = f.Write(data[:3]); return errors.New("disk full") })
+	_, err := a.writePreviewLockedWith(context.Background(), &previous, []byte("new pixels"), func(f *os.File, data []byte) error { _, _ = f.Write(data[:3]); return errors.New("disk full") })
 	if err == nil {
 		t.Fatal("failed preview write reported success")
 	}
@@ -324,6 +391,28 @@ func TestPreviewWriteFailurePreservesPreviousFile(t *testing.T) {
 	}
 	if files, _ := os.ReadDir(a.sessionDir); len(files) != 1 {
 		t.Fatalf("failed preview left %d files", len(files))
+	}
+}
+
+func TestCanceledPreviewWriteKeepsPreviousFile(t *testing.T) {
+	application := &App{sessionDir: t.TempDir()}
+	previous := "previous.png"
+	if err := os.WriteFile(filepath.Join(application.sessionDir, previous), []byte("old preview"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err := application.writePreviewLockedWith(ctx, &previous, []byte("new preview"), func(file *os.File, data []byte) error {
+		_, err := file.Write(data)
+		cancel()
+		return err
+	})
+	if !errors.Is(err, context.Canceled) || previous != "previous.png" {
+		t.Fatalf("canceled write replaced the preview: %q, %v", previous, err)
+	}
+	files, err := os.ReadDir(application.sessionDir)
+	if err != nil || len(files) != 1 || files[0].Name() != previous {
+		t.Fatalf("canceled write leaked a preview: %v, %v", files, err)
 	}
 }
 

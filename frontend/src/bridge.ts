@@ -129,24 +129,6 @@ export function pinClipboard(): Promise<string> {
   return Capture.pinClipboard();
 }
 
-export type QuickCaptureInfo = Native.QuickCaptureInfo;
-
-export function quickCapture(): Promise<QuickCaptureInfo> {
-  return Capture.quickCapture();
-}
-
-export function showQuickCapture(id: string): Promise<void> {
-  return Capture.showQuickCapture(id);
-}
-
-export function quickAction(id: string, action: string): Promise<CaptureActionResult> {
-  return Capture.quickAction(id, action);
-}
-
-export function dismissQuickCapture(id: string): Promise<void> {
-  return Capture.dismissQuickCapture(id);
-}
-
 export function closePin(id: string): Promise<void> {
   if (!hasNative) return Promise.resolve();
   return Capture.closePin(id);
@@ -238,16 +220,16 @@ export function settings(): Promise<Settings> {
   return Capture.settings().then((value) => value as Settings);
 }
 
-export function prepareSelection(rect: Rect): Promise<OverlayCapture> {
+export function prepareSelection(rect: Rect, signal: AbortSignal): Promise<OverlayCapture> {
   if (!hasNative) return Promise.resolve(browserCapture(rect));
-  return Capture.prepareSelection(rect);
+  return Capture.prepareSelection.with({ signal })(rect);
 }
 
 /** Re-capture after the page already hid its chrome (used when resizing the
  * selection): skips most of the compositor wait so the new image appears fast. */
-export function prepareSelectionFast(rect: Rect): Promise<OverlayCapture> {
+export function prepareSelectionFast(rect: Rect, signal: AbortSignal): Promise<OverlayCapture> {
   if (!hasNative) return Promise.resolve(browserCapture(rect));
-  return Capture.prepareSelectionFast(rect);
+  return Capture.prepareSelectionFast.with({ signal })(rect);
 }
 
 export type PixelSample = Native.PixelSample;

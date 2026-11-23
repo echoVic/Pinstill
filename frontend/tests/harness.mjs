@@ -99,7 +99,7 @@ export function page(name, { bridge = {}, globals = {}, storage = {} } = {}) {
     settings: async () => ({ afterCapture: 'inplace' }), overlayInfo: async () => ({ width: 1200, height: 800 }), overlayReady: async () => {},
   };
   const bridgeMock = new Proxy({ ...bridgeDefaults, ...bridge }, { get: (target, key) => key in target ? target[key] : key.startsWith('on') ? cb => { listeners.set(key, cb); return () => {}; } : () => { throw new Error(`Unexpected bridge call ${key}`); } });
-  const context = vm.createContext({ console, URL, URLSearchParams, Blob, Error, performance, document, window,
+  const context = vm.createContext({ console, URL, URLSearchParams, Blob, AbortController, Error, performance, document, window,
     Element, HTMLElement: Element, HTMLButtonElement: Element, HTMLInputElement: Element, Node: Element,
     navigator: { platform: 'MacIntel', userAgent: 'test' },
     localStorage: { getItem: key => storage[key] ?? null, setItem: (key, value) => storage[key] = value },

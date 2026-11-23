@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"math"
 	"slices"
 	"time"
@@ -217,11 +218,11 @@ func (a *App) previewOverlaySelection(caller *mygo.Window, session uint64, rect 
 	})
 }
 
-func (a *App) commitOverlaySurface(caller *mygo.Window) bool {
+func (a *App) commitOverlaySurface(ctx context.Context, caller *mygo.Window) bool {
 	committed := false
 	a.runOverlayUI(func() {
 		a.mu.Lock()
-		if !a.capturing || a.quitting || a.scroll != nil || (a.overlayCommitted && caller != a.overlay) || (a.overlaySource != nil && caller != a.overlaySource) {
+		if ctx.Err() != nil || !a.capturing || a.quitting || a.scroll != nil || (a.overlayCommitted && caller != a.overlay) || (a.overlaySource != nil && caller != a.overlaySource) {
 			a.mu.Unlock()
 			return
 		}

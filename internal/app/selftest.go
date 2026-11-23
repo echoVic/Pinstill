@@ -193,8 +193,6 @@ func (a *App) runSelfTest(mode string) {
 			a.selftestResize()
 		case "precision":
 			a.selftestPrecision()
-		case "quick":
-			a.selftestQuick()
 		case "multiscreen":
 			a.selftestMultiscreen()
 		case "watermark":

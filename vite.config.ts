@@ -27,7 +27,6 @@ export default defineConfig({
         frame: page("frame.html"),
         result: page("result.html"),
         line: page("line.html"),
-        quick: page("quick.html"),
       },
     },
   },

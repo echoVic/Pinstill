@@ -31,10 +31,10 @@ const (
 // Supported reports whether this platform has a real screen capture backend.
 func Supported() bool { return true }
 
-// CaptureRegion captures rect (screen points, origin at the primary display's
+// captureRegion captures rect (screen points, origin at the primary display's
 // top-left, negative values allowed) and returns the PNG encoded result. The
 // system utility writes Retina screenshots at device pixel resolution.
-func CaptureRegion(rect Rect, opts CaptureOptions) ([]byte, error) {
+func captureRegion(ctx context.Context, rect Rect, opts CaptureOptions) ([]byte, error) {
 	_, _, width, height := pointRect(rect)
 	if width == 0 || height == 0 {
 		return nil, errors.New("capture: empty or invalid capture region")
@@ -45,8 +45,6 @@ func CaptureRegion(rect Rect, opts CaptureOptions) ([]byte, error) {
 	if err := checkDarwinCapturePixels(width, height, opts.BackingScale); err != nil {
 		return nil, err
 	}
-	sleepBeforeCapture(opts)
-
 	tmp, err := os.CreateTemp("", "pinstill-capture-*.png")
 	if err != nil {
 		return nil, fmt.Errorf("capture: create temp file: %w", err)
@@ -59,7 +57,7 @@ func CaptureRegion(rect Rect, opts CaptureOptions) ([]byte, error) {
 	defer func() { _ = os.Remove(name) }()
 
 	args := append(buildScreencaptureArgs(rect, opts), name)
-	ctx, cancel := context.WithTimeout(context.Background(), captureTimeout)
+	ctx, cancel := context.WithTimeout(ctx, captureTimeout)
 	defer cancel()
 	stderr, err := runCaptureCommand(ctx, screencapturePath, args...)
 	if err != nil {
@@ -73,7 +71,7 @@ func CaptureRegion(rect Rect, opts CaptureOptions) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("capture: read screenshot: %w", err)
 	}
-	return data, nil
+	return data, ctx.Err()
 }
 
 var (

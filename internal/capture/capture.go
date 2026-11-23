@@ -1,6 +1,7 @@
 package capture
 
 import (
+	"context"
 	"errors"
 	"time"
 )
@@ -19,9 +20,26 @@ type CaptureOptions struct {
 	BackingScale float64
 }
 
-// sleepBeforeCapture blocks for opts.DelayMillis when a delay was requested.
-func sleepBeforeCapture(opts CaptureOptions) {
-	if opts.DelayMillis > 0 {
-		time.Sleep(time.Duration(min(opts.DelayMillis, 10_000)) * time.Millisecond)
+func CaptureRegion(rect Rect, opts CaptureOptions) ([]byte, error) {
+	return CaptureRegionContext(context.Background(), rect, opts)
+}
+
+func CaptureRegionContext(ctx context.Context, rect Rect, opts CaptureOptions) ([]byte, error) {
+	if err := waitCaptureDelay(ctx, opts); err != nil {
+		return nil, err
 	}
+	return captureRegion(ctx, rect, opts)
+}
+
+func waitCaptureDelay(ctx context.Context, opts CaptureOptions) error {
+	if opts.DelayMillis > 0 {
+		timer := time.NewTimer(time.Duration(min(opts.DelayMillis, 10_000)) * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return ctx.Err()
 }

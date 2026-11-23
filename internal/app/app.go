@@ -1,8 +1,10 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"image"
 	"log"
 	"net/http"
 	"os"
@@ -66,8 +68,6 @@ type App struct {
 	annotationDigest    [32]byte
 	annotationPayload   capturePayload
 	captureAction       func(string, []byte, capturePayload) (CaptureActionResult, error)
-	quick               *quickSession
-	quickAction         *quickSession
 
 	pins       map[string]*mygo.Window
 	pinStates  map[string]pin.State
@@ -471,7 +471,6 @@ func (a *App) beginRegion() error {
 	a.captureGeneration++
 	session := a.captureGeneration
 	a.mu.Unlock()
-	a.hideQuickCapture()
 
 	if !capture.Supported() {
 		a.mu.Lock()
@@ -698,10 +697,13 @@ func (a *App) captureRegion(region capture.Rect, opts capture.CaptureOptions) ([
 			}
 		}
 	}
-	return a.captureRegionOnDisplays(region, opts, nil)
+	return a.captureRegionOnDisplays(context.Background(), region, opts, nil)
 }
 
-func (a *App) captureRegionOnDisplays(region capture.Rect, opts capture.CaptureOptions, displays []capture.DisplaySurface) ([]byte, error) {
+func (a *App) captureRegionOnDisplays(ctx context.Context, region capture.Rect, opts capture.CaptureOptions, displays []capture.DisplaySurface) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if os.Getenv("PINSTILL_SELFTEST_SCROLL_SIM") != "" {
 		if pngBytes := simulatedScrollFrame(); len(pngBytes) > 0 {
 			return pngBytes, nil
@@ -713,9 +715,9 @@ func (a *App) captureRegionOnDisplays(region capture.Rect, opts capture.CaptureO
 		}
 	}
 	if runtime.GOOS == "darwin" && len(displays) > 0 {
-		return capture.CaptureDisplays(region, opts, displays)
+		return capture.CaptureDisplaysContext(ctx, region, opts, displays)
 	}
-	return capture.CaptureRegion(region, opts)
+	return capture.CaptureRegionContext(ctx, region, opts)
 }
 
 // prepareSelection captures the user's selection and hands the image back to
@@ -735,22 +737,29 @@ func (a *App) prepareSelectionFast(rect Rect) (OverlayCapturePayload, error) {
 }
 
 func (a *App) prepareSelectionWithDelay(rect Rect, chromeDelay time.Duration) (OverlayCapturePayload, error) {
-	return a.prepareSelectionFrom(nil, rect, chromeDelay)
+	return a.prepareSelectionFrom(context.Background(), nil, rect, chromeDelay)
 }
 
-func (a *App) prepareSelectionFrom(caller *mygo.Window, rect Rect, chromeDelay time.Duration) (OverlayCapturePayload, error) {
-	if caller != nil && !a.commitOverlaySurface(caller) {
+func (a *App) prepareSelectionFrom(ctx context.Context, caller *mygo.Window, rect Rect, chromeDelay time.Duration) (OverlayCapturePayload, error) {
+	if caller != nil && !a.commitOverlaySurface(ctx, caller) {
+		if err := ctx.Err(); err != nil {
+			return OverlayCapturePayload{}, err
+		}
 		return OverlayCapturePayload{}, errors.New("截图请求已取消")
 	}
 	a.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		a.mu.Unlock()
+		return OverlayCapturePayload{}, err
+	}
+	if !a.capturing || a.quitting || a.scroll != nil {
+		a.mu.Unlock()
+		return OverlayCapturePayload{}, errors.New("没有进行中的截图")
+	}
 	disp := a.overlayDisplay
 	origin := a.overlayRect
 	overlay := a.overlay
 	displays := a.captureDisplaysLocked()
-	if !a.capturing || a.scroll != nil {
-		a.mu.Unlock()
-		return OverlayCapturePayload{}, errors.New("没有进行中的截图")
-	}
 	a.captureGeneration++
 	generation := a.captureGeneration
 	a.mu.Unlock()
@@ -775,12 +784,21 @@ func (a *App) prepareSelectionFrom(caller *mygo.Window, rect Rect, chromeDelay t
 	}
 	// Give the page a moment to hide its selection border and badges so they
 	// are not part of the capture.
-	time.Sleep(chromeDelay)
+	timer := time.NewTimer(chromeDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return OverlayCapturePayload{}, ctx.Err()
+	case <-timer.C:
+	}
 	if !a.selectionIsCurrent(generation) {
 		return OverlayCapturePayload{}, errors.New("截图请求已取消")
 	}
 	s := a.settingsSnapshot()
-	pngBytes, err := a.captureRegionOnDisplays(region, capture.CaptureOptions{IncludeCursor: s.IncludeCursor}, displays)
+	pngBytes, err := a.captureRegionOnDisplays(ctx, region, capture.CaptureOptions{IncludeCursor: s.IncludeCursor}, displays)
+	if err := ctx.Err(); err != nil {
+		return OverlayCapturePayload{}, err
+	}
 	if !a.selectionIsCurrent(generation) {
 		return OverlayCapturePayload{}, errors.New("截图请求已取消")
 	}
@@ -788,31 +806,45 @@ func (a *App) prepareSelectionFrom(caller *mygo.Window, rect Rect, chromeDelay t
 		a.failSelection(err, false)
 		return OverlayCapturePayload{}, err
 	}
-	if blankPNG(pngBytes) {
+	img, err := imagebudget.DecodePNG(pngBytes)
+	if err := ctx.Err(); err != nil {
+		return OverlayCapturePayload{}, err
+	}
+	if !a.selectionIsCurrent(generation) {
+		return OverlayCapturePayload{}, errors.New("截图请求已取消")
+	}
+	if err != nil {
+		err = fmt.Errorf("截图数据无效: %w", err)
+		a.failSelection(err, false)
+		return OverlayCapturePayload{}, err
+	}
+	if blankCapture(img) {
 		err := errors.New("截图内容为空，可能缺少屏幕录制权限")
 		a.failSelection(err, true)
 		return OverlayCapturePayload{}, err
 	}
-	width, height := imageDimensions(pngBytes)
-	if width == 0 || height == 0 {
-		err := errors.New("截图数据无效")
-		a.failSelection(err, false)
-		return OverlayCapturePayload{}, err
-	}
+	width, height := img.Bounds().Dx(), img.Bounds().Dy()
 	// Cancellation and publication must not cross: either this write belongs
 	// to the active request, or no session file is created for it.
 	a.mu.Lock()
-	if !a.capturing || a.captureGeneration != generation {
+	if err := ctx.Err(); err != nil {
+		a.mu.Unlock()
+		return OverlayCapturePayload{}, err
+	}
+	if !a.capturing || a.quitting || a.captureGeneration != generation {
 		a.mu.Unlock()
 		return OverlayCapturePayload{}, errors.New("截图请求已取消")
 	}
-	sessionFile, err := a.writePreviewLocked(&a.overlaySessionFile, pngBytes)
+	sessionFile, err := a.writePreviewLocked(ctx, &a.overlaySessionFile, pngBytes)
 	if err == nil {
 		a.annotationDigest = [32]byte{}
 		a.annotationPayload = capturePayload{}
 	}
 	a.mu.Unlock()
 	if err != nil {
+		if ctx.Err() != nil {
+			return OverlayCapturePayload{}, err
+		}
 		err = fmt.Errorf("截图写入失败: %w", err)
 		a.failSelection(err, false)
 		return OverlayCapturePayload{}, err
@@ -870,7 +902,6 @@ func (a *App) captureFullScreen() {
 	generation := a.captureGeneration
 	mainWin := a.main
 	a.mu.Unlock()
-	a.hideQuickCapture()
 	if !capture.Supported() {
 		a.failCapture(capture.ErrUnsupported, false)
 		return
@@ -903,12 +934,12 @@ func (a *App) captureFullScreenAction(region capture.Rect, restoreMain bool, gen
 		a.failCapture(err, false)
 		return
 	}
-	if blankPNG(pngBytes) {
-		a.failCapture(errors.New("截图内容为空，可能缺少屏幕录制权限"), true)
+	payload, err := a.storeScreenCapture(pngBytes)
+	if !a.selectionIsCurrent(generation) {
 		return
 	}
-	payload, err := a.storeCapture(pngBytes)
-	if !a.selectionIsCurrent(generation) {
+	if errors.Is(err, errEmptyScreenCapture) {
+		a.failCapture(err, true)
 		return
 	}
 	if restoreMain {
@@ -929,8 +960,7 @@ func (a *App) captureFullScreenAction(region capture.Rect, restoreMain bool, gen
 	if actionFn == nil {
 		actionFn = a.applyCaptureAction
 	}
-	result, err := actionFn(action, pngBytes, payload)
-	if err != nil {
+	if _, err := actionFn(action, pngBytes, payload); err != nil {
 		a.toast(err.Error(), "error")
 	}
 	a.mu.Lock()
@@ -938,35 +968,46 @@ func (a *App) captureFullScreenAction(region capture.Rect, restoreMain bool, gen
 		a.capturing = false
 	}
 	a.mu.Unlock()
-	if err == nil && result.Completed {
-		a.postQuickCapture(generation, action, pngBytes, payload)
-	}
 }
 
 // storeCapture validates a capture and, when the user keeps history, writes
 // it to persistent history. Preview files have their own ownership. Shared by the overlay
 // actions, full-screen captures and the selftests.
 func (a *App) storeCapture(pngBytes []byte) (capturePayload, error) {
+	return a.storeCapturePNG(pngBytes, nil)
+}
+
+var errEmptyScreenCapture = errors.New("截图内容为空，可能缺少屏幕录制权限")
+
+func (a *App) storeScreenCapture(data []byte) (capturePayload, error) {
+	return a.storeCapturePNG(data, func(img image.Image) error {
+		if blankCapture(img) {
+			return errEmptyScreenCapture
+		}
+		return nil
+	})
+}
+
+func (a *App) storeCapturePNG(pngBytes []byte, check func(image.Image) error) (capturePayload, error) {
 	// Keep a history write and its retention decision atomic with settings
 	// changes, especially disabling and clearing history.
 	a.settingsMu.Lock()
 	defer a.settingsMu.Unlock()
 	s := a.settingsSnapshot()
-	img, err := imagebudget.DecodePNG(pngBytes)
-	if err != nil {
-		return capturePayload{}, fmt.Errorf("截图数据无效: %w", err)
-	}
-	width, height := img.Bounds().Dx(), img.Bounds().Dy()
-	id := captureID(time.Now())
-	payload := capturePayload{ID: id, Width: width, Height: height}
+	createdAt := time.Now()
+	payload := capturePayload{ID: captureID(createdAt)}
 	if s.KeepHistory {
 		if a.store == nil {
 			return capturePayload{}, errors.New("历史记录存储不可用，请重试或在设置中关闭历史记录")
 		}
-		entry, err := a.store.Save(pngBytes, time.Now())
+		entry, err := a.store.SaveCheckedPNG(pngBytes, createdAt, check)
 		if err != nil && entry.ID == "" {
+			if errors.Is(err, errEmptyScreenCapture) {
+				return capturePayload{}, err
+			}
 			return capturePayload{}, fmt.Errorf("历史记录写入失败，请重试或关闭历史记录: %w", err)
 		}
+		payload.Width, payload.Height = entry.Width, entry.Height
 		// A nonempty entry on error means the index was committed. Preserve
 		// its identity so a retry never saves the same annotation again.
 		if err != nil {
@@ -982,6 +1023,17 @@ func (a *App) storeCapture(pngBytes []byte) (capturePayload, error) {
 			}
 			a.emitHistoryChanged()
 		}
+	} else {
+		img, err := imagebudget.DecodePNG(pngBytes)
+		if err != nil {
+			return capturePayload{}, fmt.Errorf("截图数据无效: %w", err)
+		}
+		if check != nil {
+			if err := check(img); err != nil {
+				return capturePayload{}, err
+			}
+		}
+		payload.Width, payload.Height = img.Bounds().Dx(), img.Bounds().Dy()
 	}
 	return payload, nil
 }

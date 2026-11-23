@@ -145,12 +145,23 @@ func (s *Store) Dir() string { return s.dir }
 // Save persists a PNG screenshot and its thumbnail, then updates the index.
 // createdAt is truncated to the index representation; a zero value means now.
 func (s *Store) Save(pngData []byte, createdAt time.Time) (Entry, error) {
+	return s.SaveCheckedPNG(pngData, createdAt, nil)
+}
+
+// SaveCheckedPNG applies an optional read-only check to the decoded image before
+// generating its thumbnail or writing to history.
+func (s *Store) SaveCheckedPNG(pngData []byte, createdAt time.Time, check func(image.Image) error) (Entry, error) {
 	if len(pngData) == 0 {
 		return Entry{}, errors.New("store: empty image")
 	}
 	source, err := imagebudget.DecodePNG(pngData)
 	if err != nil {
 		return Entry{}, fmt.Errorf("store: decode PNG: %w", err)
+	}
+	if check != nil {
+		if err := check(source); err != nil {
+			return Entry{}, err
+		}
 	}
 	width, height := source.Bounds().Dx(), source.Bounds().Dy()
 	if width <= 0 || height <= 0 {

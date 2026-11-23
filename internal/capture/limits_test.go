@@ -55,9 +55,16 @@ func TestReadCaptureFileChecksBeforeRead(t *testing.T) {
 func TestCaptureDelayIsBounded(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		start := time.Now()
-		sleepBeforeCapture(CaptureOptions{DelayMillis: 60_000})
-		if elapsed := time.Since(start); elapsed > 10*time.Second {
-			t.Fatalf("delay = %v, want at most 10s", elapsed)
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		err := waitCaptureDelay(ctx, CaptureOptions{DelayMillis: 60_000})
+		if elapsed := time.Since(start); elapsed != 8*time.Second || err != context.DeadlineExceeded {
+			t.Fatalf("canceled delay = %v, %v", elapsed, err)
+		}
+		start = time.Now()
+		err = waitCaptureDelay(context.Background(), CaptureOptions{DelayMillis: 60_000})
+		if elapsed := time.Since(start); elapsed != 10*time.Second || err != nil {
+			t.Fatalf("capped delay = %v, %v", elapsed, err)
 		}
 	})
 }

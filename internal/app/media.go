@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/echoVic/Pinstill/internal/imagebudget"
 	"image"
 	"image/color"
 	"image/png"
@@ -16,6 +15,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/echoVic/Pinstill/internal/imagebudget"
 )
 
 // decodeImageBase64 accepts raw base64 or a data URL and returns the bytes.
@@ -37,14 +38,10 @@ func decodeImageBase64(data string) ([]byte, error) {
 	return raw, nil
 }
 
-// blankPNG reports whether the PNG has no visible pixels at all, which is
+// blankCapture reports whether the image has no visible pixels at all, which is
 // how macOS delivers a capture taken without the screen recording
 // permission.
-func blankPNG(pngBytes []byte) bool {
-	img, err := imagebudget.DecodePNG(pngBytes)
-	if err != nil {
-		return false
-	}
+func blankCapture(img image.Image) bool {
 	b := img.Bounds()
 	if b.Empty() {
 		return true

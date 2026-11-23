@@ -39,13 +39,13 @@ func (s *CaptureService) PreviewOverlaySelection(ctx context.Context, session ui
 // PrepareSelection captures the region the user selected and hands it back
 // to the overlay, so it can annotate the capture in place on the desktop.
 func (s *CaptureService) PrepareSelection(ctx context.Context, rect Rect) (OverlayCapturePayload, error) {
-	return s.app.prepareSelectionFrom(mygo.CallerWindow(ctx), rect, 90*time.Millisecond)
+	return s.app.prepareSelectionFrom(ctx, mygo.CallerWindow(ctx), rect, 90*time.Millisecond)
 }
 
 // PrepareSelectionFast re-captures a region the page has already prepared
 // (chrome hidden, one frame awaited): used when adjusting the selection.
 func (s *CaptureService) PrepareSelectionFast(ctx context.Context, rect Rect) (OverlayCapturePayload, error) {
-	return s.app.prepareSelectionFrom(mygo.CallerWindow(ctx), rect, 20*time.Millisecond)
+	return s.app.prepareSelectionFrom(ctx, mygo.CallerWindow(ctx), rect, 20*time.Millisecond)
 }
 
 // FinishAnnotated completes an in-place annotation: it stores the composited

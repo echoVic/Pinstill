@@ -389,6 +389,7 @@ const precision = new PrecisionInspector(
 let engine: AnnotationEngine | null = null;
 let displayedAnnotation: Readonly<Shape> | null = null;
 let captureAttempt = 0;
+let selectionPreparation: AbortController | null = null;
 let captureImage: ImageBitmap | HTMLImageElement | HTMLCanvasElement | null = null;
 let settingsSequence = 0;
 let drawingPointer: number | null = null;
@@ -1334,8 +1335,8 @@ function releaseCaptureImage(): void {
   captureImage = null;
 }
 
-async function fetchCaptureBlob(url: string): Promise<Blob> {
-  const response = await fetch(url);
+async function fetchCaptureBlob(url: string, signal: AbortSignal): Promise<Blob> {
+  const response = await fetch(url, { signal });
   if (!response.ok) throw new Error(`图片请求失败（HTTP ${response.status}）`);
   const blob = await response.blob();
   if (blob.size > MAX_ENCODED_BYTES) throw new Error("图片文件超过上限（64 MiB）");
@@ -1400,16 +1401,15 @@ function openInlineText(point: Point, shape?: Readonly<Shape>): void {
   });
 }
 
-async function beginAnnotation(payload: OverlayCapture, attempt: number): Promise<void> {
+async function beginAnnotation(payload: OverlayCapture, attempt: number, signal: AbortSignal): Promise<Blob | undefined> {
   await settingsReady;
   if (!currentAttempt(attempt)) return;
   const rect = payload.rect ?? committedRect ?? selectionRect();
   const width = Math.round(payload.width ?? rect.width);
   const height = Math.round(payload.height ?? rect.height);
   checkImageDimensions(width, height);
-  const blob = await fetchCaptureBlob(payload.url);
+  const blob = await fetchCaptureBlob(payload.url, signal);
   if (!currentAttempt(attempt)) return;
-  const autoAction = mappedAfterCapture();
 
   const image = await decodeImageBlob(blob);
   if (!currentAttempt(attempt)) {
@@ -1467,19 +1467,17 @@ async function beginAnnotation(payload: OverlayCapture, attempt: number): Promis
   } finally {
     if (!installed && "close" in image) image.close();
   }
-  if (autoAction) {
-    // Keep an editable surface ready if automatic copy/pin fails.
-    const rawBase64 = await blobToBase64(blob);
-    if (!currentAttempt(attempt)) return;
-    await finishWith(autoAction.go, rawBase64, autoAction.ui);
-  }
+  return blob;
 }
 
 /** Resolves with the promise result, or rejects after `ms` so a stuck native
  * capture can never leave the overlay frozen behind a spinner. */
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+function withPreparationTimeout<T>(promise: Promise<T>, controller: AbortController, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error(label)), ms);
+    const timer = window.setTimeout(() => {
+      reject(new Error(label));
+      controller.abort();
+    }, ms);
     promise.then(
       (value) => {
         window.clearTimeout(timer);
@@ -1499,6 +1497,9 @@ async function prepareSelectionFor(
   onFailure?: (error: unknown) => void,
 ): Promise<void> {
   const attempt = ++captureAttempt;
+  selectionPreparation?.abort();
+  const controller = new AbortController();
+  selectionPreparation = controller;
   phase = "preparing";
   precision.reset();
   toolbarMoved = false;
@@ -1537,19 +1538,26 @@ async function prepareSelectionFor(
     }
     const preparation = (async () => {
       const payload = fast
-        ? await prepareSelectionFast(rect)
-        : await withTimeout(prepareSelection(rect), 10000, "截取超时");
+        ? await prepareSelectionFast(rect, controller.signal)
+        : await prepareSelection(rect, controller.signal);
       if (!currentAttempt(attempt)) return;
       if (!payload?.url) throw new Error("截图数据无效");
-      await beginAnnotation(payload, attempt);
+      return beginAnnotation(payload, attempt, controller.signal);
     })();
-    // A stalled image fetch/decode must restore a resized selection too.
-    if (fast) await withTimeout(preparation, 4000, "重新截取超时");
-    else await preparation;
+    const blob = await withPreparationTimeout(preparation, controller, fast ? 4000 : 10000, fast ? "重新截取超时" : "截取超时");
+    if (!blob || !currentAttempt(attempt)) return;
+    selectionPreparation = null;
+    const autoAction = mappedAfterCapture();
+    if (autoAction) {
+      const rawBase64 = await blobToBase64(blob);
+      if (!currentAttempt(attempt)) return;
+      await finishWith(autoAction.go, rawBase64, autoAction.ui);
+    }
   } catch (error) {
     if (!currentAttempt(attempt)) return;
     // Invalidate pending fetch/decode work before restoring the old surface.
     ++captureAttempt;
+    controller.abort();
     if (onFailure) {
       onFailure(error);
       return;
@@ -1558,6 +1566,8 @@ async function prepareSelectionFor(
     // The request error currently carries only text; capture:failed has no
     // request identity and cannot safely supply its permission flag here.
     showCaptureFailure(message, /屏幕录制权限|screen recording permission/i.test(message));
+  } finally {
+    if (selectionPreparation === controller) selectionPreparation = null;
   }
 }
 
@@ -1723,6 +1733,8 @@ hookHost.__pinstillDemoCapture = async (dataUrl: string): Promise<void> => {
 
 function reset(): void {
   ++captureAttempt;
+  selectionPreparation?.abort();
+  selectionPreparation = null;
   precision.reset();
   if (keyboardAdjustment) window.clearTimeout(keyboardAdjustment.timer);
   keyboardAdjustment = null;

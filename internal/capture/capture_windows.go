@@ -3,6 +3,7 @@
 package capture
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"image"
@@ -18,7 +19,7 @@ import (
 // dependencies, so it cross-compiles from macOS and Linux with a stock toolchain
 // and works on any Windows version that has user32/gdi32.
 //
-// Input coordinates use MyGo 0.9's screen DIPs. Monitor origins and offsets
+// Input coordinates use MyGo's screen DIPs. Monitor origins and offsets
 // are converted separately by monitorPixelRect before GDI sees device pixels.
 const (
 	srcCopy = 0x00CC0020
@@ -92,12 +93,11 @@ func PermissionGranted() bool { return true }
 // recording privacy pane to open.
 func OpenPermissionSettings() error { return ErrUnsupported }
 
-// CaptureRegion grabs rect from the desktop and returns PNG bytes.
-func CaptureRegion(rect Rect, opts CaptureOptions) ([]byte, error) {
+// captureRegion grabs rect from the desktop and returns PNG bytes.
+func captureRegion(ctx context.Context, rect Rect, opts CaptureOptions) ([]byte, error) {
 	if rect.Empty() {
 		return nil, errors.New("capture: empty or invalid capture region")
 	}
-	sleepBeforeCapture(opts)
 	// GetDC and ReleaseDC must run on the same OS thread. Keep the entire
 	// GDI object lifetime, cursor composition, and encoder's DIB access here.
 	runtime.LockOSThread()
@@ -182,6 +182,9 @@ func CaptureRegion(rect Rect, opts CaptureOptions) ([]byte, error) {
 		}
 	}
 	procGdiFlush.Call()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	pixels := unsafe.Slice((*byte)(bits), byteSize)
 	// GDI stores 32bpp BI_RGB pixels as BGRX with a zero alpha channel; convert
@@ -191,12 +194,15 @@ func CaptureRegion(rect Rect, opts CaptureOptions) ([]byte, error) {
 		pixels[i], pixels[i+1], pixels[i+2], pixels[i+3] = r, g, b, 0xff
 	}
 	img := &image.RGBA{Pix: pixels, Stride: width * 4, Rect: image.Rect(0, 0, width, height)}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	data, err := imagebudget.EncodePNG(img)
 	if err != nil {
 		return nil, fmt.Errorf("capture: encode PNG: %w", err)
 	}
-	return data, nil
+	return data, ctx.Err()
 }
 
 type winRect struct{ Left, Top, Right, Bottom int32 }
