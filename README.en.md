@@ -22,7 +22,7 @@ Builds with automatic updates check in the background, or you can choose “检�
 
 1. Pinstill lives in the menu bar; press **⌘⇧1** (or choose Capture Region from the tray) to start a selection.
 2. Drag a region and release to capture; the annotation toolbar appears next to it. Press Enter or double-click the canvas to copy, Esc to cancel.
-3. Drag the selection corners to adjust the region and capture again; choose Scrolling Capture for a tall page.
+3. Drag any edge or corner to adjust the selection, then release to update the capture. Choose Scrolling Capture for a tall page.
 4. Pin puts the shot on top of other windows, Save opens the system save dialog, Copy puts it on the clipboard.
 5. Tray → History & Settings for captures, pins and all preferences.
 
@@ -33,7 +33,7 @@ Hotkeys and what happens after a capture (annotate / copy / pin) are configurabl
 - **Capture and annotation**: region and full-screen capture with a dim mask, crosshair and size badge; the shot appears inside the selection with the full toolbar beside it. Rectangle, ellipse, line, arrow, pen, text, tag, mosaic, highlight and tiled watermark, with undo, a 40-colour palette, hex input and text styles.
 - **Pins**: always-on-top borderless windows you can drag, scale and fade, with a right-click menu for copy, save, opacity and original size; each keeps its own place and they come back after a restart (up to 60 active pins, older ones archived).
 - **History**: captures are saved locally with real thumbnails; a large preview supports copy, save, pin and delete, and retention by days and size applies.
-- **Scrolling capture**: automatic scrolling and stitching that finishes at 120 frames, 30,000px or 32 Mi pixels, and can be paused, switched to manual or finished early. It needs Accessibility permission and falls back to manual scrolling without it.
+- **Scrolling capture**: starts in manual mode. Enable automatic scrolling from the controls with Accessibility permission. Pause, resume or finish at any time. Capture finishes automatically at 120 frames, 30,000 px or 32 Mi pixels.
 - **Tray and hotkeys**: a menu-bar icon; **⌘⇧1** captures a region and **⌘⇧2** pins the clipboard image, both re-recordable in Settings.
 - **Settings and permissions**: seven categories take effect immediately; the permission centre shows the real state of screen recording, Accessibility and launch at login.
 

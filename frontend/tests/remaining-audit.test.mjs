@@ -83,7 +83,7 @@ test('scroll progress from another or missing session cannot overwrite the curre
   p.emit('onScrollProgress', progress('', 7));
   p.emit('onScrollProgress', { frames: 8, height: 900, status: 'paused' });
   assert.equal(p.document.getElementById('scrollProgress').textContent, before);
-  assert.equal(p.document.querySelector('[data-scroll-action="mode"]').textContent, '手动');
+  assert.equal(p.document.querySelector('[data-scroll-action="mode"]').getAttribute('aria-pressed'), 'false');
   assert.equal(p.document.querySelector('[data-scroll-action="pause"]').textContent, '暂停');
 });
 

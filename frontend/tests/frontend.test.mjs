@@ -148,15 +148,29 @@ test('overlay tolerates null preferences and uses the shared default tool', () =
 test('a reused overlay reloads preferences and honors disabled Enter-to-copy', async () => {
   let finishes = 0;
   const p = page('overlay', { bridge: { prepareSelection: async () => shot('a'), finishAnnotated: async () => { finishes++; } } });
-  p.storage['pinstill.preferences'] = JSON.stringify({ defaultTool: 'brush', defaultWidth: 4, defaultColor: '#123456', enterCopy: false, tooltip: false, scrollAuto: false });
+  p.storage['pinstill.preferences'] = JSON.stringify({ defaultTool: 'brush', defaultWidth: 4, defaultColor: '#123456', enterCopy: false, tooltip: false });
   p.emit('onOverlayShown', { width: 1200, height: 800 });
   void select(p); await settle();
   assert.equal(p.run('engine.getTool()'), 'brush');
   assert.equal(p.document.getElementById('overlayWidth').value, '4');
   assert.equal(p.run('color'), '#123456');
-  assert.equal(p.run('scrollAutoDefault'), false);
   p.window.fire('keydown', { key: 'Enter' }); await settle();
   assert.equal(finishes, 0);
+});
+
+test('the scrolling tool opens a session without requesting auto-scroll, even with a legacy preference', async () => {
+  const requests = [];
+  const overlay = page('overlay', {
+    storage: { 'pinstill.preferences': '{"scrollAuto":true}' },
+    bridge: {
+      prepareSelection: async () => shot('selected'),
+      startScroll: async (...args) => requests.push(JSON.parse(JSON.stringify(args))),
+    },
+  });
+  await select(overlay);
+  assert.deepEqual(requests, []);
+  await overlay.run('startScrollFromToolbar()');
+  assert.deepEqual(requests, [[rect]]);
 });
 
 test('scroll handoff blocks competing keyboard finish actions until it fails', async () => {
@@ -284,7 +298,7 @@ test('a new scroll session clears old notices and discards old control completio
   p.emit('onScrollInit', { sessionId: 'session-' + p.run('sessionSequence'), auto: false });
   assert.equal(p.document.getElementById('scrollStatus').textContent, '手动滚动中…');
   mode.resolve(); await settle();
-  assert.equal(p.document.querySelector('[data-scroll-action="mode"]').textContent, '手动');
+  assert.equal(p.document.querySelector('[data-scroll-action="mode"]').getAttribute('aria-pressed'), 'false');
 });
 
 test('a local selection crop uses the original pixels rather than baked annotations', async () => {
@@ -299,6 +313,36 @@ test('a local selection crop uses the original pixels rather than baked annotati
   assert.equal(p.run('engine.canUndo()'), false, 'resizing resets annotations as the UI promises');
   assert.equal(p.run('engine.getWatermark().text'), 'Pinstill');
 });
+
+for (const { edge, start, end, expected } of [
+  { edge: 'n', start: [70, 10], end: [110, -20], expected: { x: 10, y: 0, width: 120, height: 90 } },
+  { edge: 's', start: [70, 90], end: [30, 115], expected: { x: 10, y: 10, width: 120, height: 105 } },
+  { edge: 'w', start: [10, 50], end: [2, 78], expected: { x: 2, y: 10, width: 128, height: 80 } },
+  { edge: 'e', start: [130, 50], end: [157, 22], expected: { x: 10, y: 10, width: 147, height: 80 } },
+]) {
+  test(`dragging the ${edge} edge re-captures only along its axis`, async () => {
+    const requests = [];
+    const overlay = page('overlay', { bridge: {
+      prepareSelection: async () => shot('original'),
+      prepareSelectionFast: async (region) => {
+        requests.push({ ...region });
+        return { ...shot('expanded'), width: region.width, height: region.height, rect: region };
+      },
+    } });
+    await select(overlay);
+    const grip = overlay.document.querySelector(`[data-resize="${edge}"]`);
+    assert.ok(grip, `missing ${edge} edge grip`);
+    const pointer = { pointerId: 1, button: 0 };
+    overlay.window.fire('pointerdown', { ...pointer, target: grip, clientX: start[0], clientY: start[1] });
+    overlay.window.fire('pointermove', { ...pointer, clientX: end[0], clientY: end[1] });
+    assert.equal(overlay.document.getElementById('overlayCanvas').hidden, true);
+    assert.deepEqual(requests, []);
+    overlay.window.fire('pointerup', { ...pointer, clientX: end[0], clientY: end[1] });
+    await settle();
+    assert.deepEqual(requests, [expected]);
+    assert.equal(overlay.document.getElementById('overlayCanvas').hidden, false);
+  });
+}
 
 const enlargedRect = { x: 10, y: 10, width: 180, height: 120 };
 const enlargedShot = { ...shot('resized'), width: 180, height: 120, rect: enlargedRect };

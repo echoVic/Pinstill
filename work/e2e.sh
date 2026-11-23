@@ -176,7 +176,7 @@ expect 'SELFTEST dblclick: checks=ok' "$run_dir/data-dblclick/artifacts/dblclick
 
 step "Selftest: resize the captured selection"
 run_selftest resize || fail=1
-expect 'SELFTEST resize: handles=4 before=[0-9][0-9]*x[0-9][0-9]* after=[0-9][0-9]*x[0-9][0-9]*' "$run_dir/data-resize/artifacts/resize.log"
+expect 'SELFTEST resize: handles=8 before=[0-9][0-9]*x[0-9][0-9]* after=[0-9][0-9]*x[0-9][0-9]*' "$run_dir/data-resize/artifacts/resize.log"
 expect 'SELFTEST resize: shrink before=[0-9][0-9]*x[0-9][0-9]* after=[0-9][0-9]*x[0-9][0-9]*' "$run_dir/data-resize/artifacts/resize.log"
 expect 'SELFTEST resize: checks=ok' "$run_dir/data-resize/artifacts/resize.log"
 

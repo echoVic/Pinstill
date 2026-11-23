@@ -1,6 +1,6 @@
 // The scrolling-capture control bar (R9, compact 380x64 window).
 //
-// Flow: the overlay starts a session with `Capture.StartScroll(rect, true)`.
+// Flow: the overlay starts a manual session with `Capture.StartScroll(rect)`.
 // Go hides the overlay and shows this control bar next to the selection. It
 // captures frames while the user (or automatic scrolling) moves the target:
 // - init and progress events carry a unique sessionId;
@@ -105,9 +105,8 @@ function render(): void {
   }
   const modeButton = actionButton("mode");
   if (modeButton) {
-    modeButton.textContent = auto ? "自动" : "手动";
     modeButton.setAttribute("aria-pressed", String(auto));
-    modeButton.title = auto ? "切换到手动滚动" : "切换到自动滚动";
+    modeButton.title = auto ? "关闭自动滚动" : "开启自动滚动";
   }
   const finishButton = actionButton("finish");
   if (finishButton) finishButton.disabled = busy || frames === 0;
@@ -335,7 +334,7 @@ window.addEventListener("keydown", (event) => {
 
 function startDemo(startDenied = false): void {
   if (hasNative) return;
-  applyInit({ sessionId: `demo-${sessionSequence + 1}`, auto: !startDenied, autoDenied: startDenied, accessibilityGranted: !startDenied });
+  applyInit({ sessionId: `demo-${sessionSequence + 1}`, auto: false, autoDenied: startDenied, accessibilityGranted: !startDenied });
   runDemo();
   if (startDenied) {
     showNotice("浏览器预览 · 无辅助功能权限，已降级为手动滚动", "warn");

@@ -186,9 +186,9 @@ export function finishAnnotated(
 
 // ------------------------------------------------- scrolling capture (R4.2)
 
-export function startScroll(rect: Rect, autoScroll: boolean): Promise<void> {
+export function startScroll(rect: Rect): Promise<void> {
   if (!hasNative) return Promise.resolve();
-  return Capture.startScroll(rect, autoScroll);
+  return Capture.startScroll(rect);
 }
 
 export function finishScroll(sessionId: string, action: ScrollFinishAction): Promise<void> {

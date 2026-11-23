@@ -57,32 +57,54 @@
      selection: hide the border and corner marks (the interior is transparent). */
   .selection.capturing { border-color: transparent; }
   .selection.capturing::before,
-  .selection.capturing::after { display: none; }
+  .selection.capturing::after,
+  .selection.resizable::before,
+  .selection.resizable::after { display: none; }
   .selection.window-preview {
     border: 2px solid var(--amber);
     box-shadow: inset 0 0 0 1px rgba(255, 250, 240, 0.55);
     pointer-events: none;
   }
 
-  /* Corner handles: after the capture lands in the selection the four
-     corners can be dragged to adjust the captured area (the overlay then
-     re-captures the adjusted region). */
   .resize-handle {
     position: absolute;
-    width: 12px;
-    height: 12px;
-    border-radius: 3px;
-    border: 2px solid var(--amber);
-    background: #f7f3ea;
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
     z-index: 4;
     display: none;
+    touch-action: none;
+  }
+  .resize-handle::after {
+    content: "";
+    position: absolute;
+    box-sizing: border-box;
+    left: 50%;
+    top: 50%;
+    width: 7px;
+    height: 7px;
+    border: 1px solid var(--amber);
+    border-radius: 50%;
+    background: #fffaf0;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+  }
+  .resize-corner {
+    width: 16px;
+    height: 16px;
+    z-index: 5;
   }
   .selection.resizable .resize-handle { display: block; }
-  .resize-handle[data-resize="nw"] { left: -6px; top: -6px; cursor: nwse-resize; }
-  .resize-handle[data-resize="ne"] { right: -6px; top: -6px; cursor: nesw-resize; }
-  .resize-handle[data-resize="sw"] { left: -6px; bottom: -6px; cursor: nesw-resize; }
-  .resize-handle[data-resize="se"] { right: -6px; bottom: -6px; cursor: nwse-resize; }
+  .resize-corner[data-resize="nw"] { left: -9px; top: -9px; cursor: nwse-resize; }
+  .resize-corner[data-resize="ne"] { right: -9px; top: -9px; cursor: nesw-resize; }
+  .resize-corner[data-resize="sw"] { left: -9px; bottom: -9px; cursor: nesw-resize; }
+  .resize-corner[data-resize="se"] { right: -9px; bottom: -9px; cursor: nwse-resize; }
+  .resize-handle[data-resize="n"],
+  .resize-handle[data-resize="s"] { left: 7px; right: 7px; height: 14px; cursor: ns-resize; }
+  .resize-handle[data-resize="w"],
+  .resize-handle[data-resize="e"] { top: 7px; bottom: 7px; width: 14px; cursor: ew-resize; }
+  .resize-handle[data-resize="n"] { top: -8px; }
+  .resize-handle[data-resize="s"] { bottom: -8px; }
+  .resize-handle[data-resize="w"] { left: -8px; }
+  .resize-handle[data-resize="e"] { right: -8px; }
   .selection.capturing .resize-handle { display: none; }
 
   #overlayCanvas {
@@ -497,10 +519,14 @@
   <div class="mask" id="maskRight" hidden></div>
   <div class="selection" id="selection" hidden>
     <canvas id="overlayCanvas" aria-label="截图标注画布" hidden></canvas>
-    <div class="resize-handle" data-resize="nw" aria-hidden="true"></div>
-    <div class="resize-handle" data-resize="ne" aria-hidden="true"></div>
-    <div class="resize-handle" data-resize="sw" aria-hidden="true"></div>
-    <div class="resize-handle" data-resize="se" aria-hidden="true"></div>
+    <div class="resize-handle" data-resize="n" aria-hidden="true"></div>
+    <div class="resize-handle" data-resize="s" aria-hidden="true"></div>
+    <div class="resize-handle" data-resize="w" aria-hidden="true"></div>
+    <div class="resize-handle" data-resize="e" aria-hidden="true"></div>
+    <div class="resize-handle resize-corner" data-resize="nw" aria-hidden="true"></div>
+    <div class="resize-handle resize-corner" data-resize="ne" aria-hidden="true"></div>
+    <div class="resize-handle resize-corner" data-resize="sw" aria-hidden="true"></div>
+    <div class="resize-handle resize-corner" data-resize="se" aria-hidden="true"></div>
     <div class="prepare-state" id="prepareState" hidden>
       <span class="prepare-spinner" aria-hidden="true"></span>
       <span>正在截取…</span>

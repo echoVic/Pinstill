@@ -65,12 +65,6 @@ const el = <T extends HTMLElement = HTMLElement>(id: string): T => {
   return element as T;
 };
 
-// The macOS title bar is hidden-inset, so the traffic lights float over the
-// page: leave room for them at the top of the rail (see .is-mac in index.html).
-if (/mac/i.test(navigator.platform) || /mac os x/i.test(navigator.userAgent)) {
-  document.documentElement.classList.add("is-mac");
-}
-
 type View = "history" | "settings";
 type ShortcutKey = (typeof SHORTCUT_KEYS)[number];
 

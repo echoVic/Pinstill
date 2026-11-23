@@ -49,9 +49,9 @@ func (s *CaptureService) FinishAnnotated(action string, dataBase64 string) (Capt
 	return s.app.finishAnnotated(action, dataBase64)
 }
 
-// StartScroll begins a scrolling capture for the current selection.
-func (s *CaptureService) StartScroll(rect Rect, autoScroll bool) error {
-	return s.app.startScroll(rect, autoScroll)
+// StartScroll begins a manual scrolling capture for the current selection.
+func (s *CaptureService) StartScroll(rect Rect) error {
+	return s.app.startScroll(rect, false)
 }
 
 // FinishScroll stops the scrolling capture and runs the chosen action.

@@ -2,11 +2,39 @@ package app
 
 import (
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/echoVic/Pinstill/internal/capture"
 	"github.com/echoVic/Pinstill/internal/stitch"
 	"github.com/egoist/mygo"
 )
+
+func TestManualScrollWaitsOnStaticContentWithoutUsingFrameBudget(test *testing.T) {
+	test.Setenv("PINSTILL_SELFTEST_FAKE_CAPTURE", "1")
+	test.Setenv("PINSTILL_SELFTEST_SCROLL_SIM", "")
+	synctest.Test(test, func(test *testing.T) {
+		session := &scrollSession{
+			region: capture.Rect{Width: 120, Height: 120},
+			acc:    stitch.New(stitch.Options{}),
+			stop:   make(chan struct{}),
+			done:   make(chan struct{}),
+		}
+		app := &App{scroll: session, capturing: true, settings: Settings{KeepHistory: true}}
+		go app.scrollLoop(session)
+		defer func() {
+			close(session.stop)
+			<-session.done
+		}()
+
+		time.Sleep(scrollInitialDelay + 4*scrollFrameInterval)
+		synctest.Wait()
+		frames, _, status, auto := session.snapshot()
+		if session.isFinalized() || auto || status != "running" || frames != 1 {
+			test.Fatalf("waiting on static content: finalized=%v, auto=%v, status=%q, frames=%d", session.isFinalized(), auto, status, frames)
+		}
+	})
+}
 
 func TestFinishScrollReleasesStoppedSession(t *testing.T) {
 	for _, action := range []string{"finish", "cancel"} {

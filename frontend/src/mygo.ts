@@ -365,9 +365,9 @@ export const Capture = {
   showMainWindow(): Promise<void> {
     return call("Capture.ShowMainWindow");
   },
-  /** StartScroll begins a scrolling capture for the current selection. */
-  startScroll(rect: Rect, autoScroll: boolean): Promise<void> {
-    return call("Capture.StartScroll", rect, autoScroll);
+  /** StartScroll begins a manual scrolling capture for the current selection. */
+  startScroll(rect: Rect): Promise<void> {
+    return call("Capture.StartScroll", rect);
   },
   /** UpdatePinState persists the size and opacity the page reports. */
   updatePinState(id: string, state: PinWindowState): Promise<void> {

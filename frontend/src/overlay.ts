@@ -270,7 +270,6 @@ let tooltipDelayMs =
     ? clamp(Math.round(storedPreferences.tooltipDelay), 0, 2000)
     : 120;
 let enterCopyEnabled = storedPreferences.enterCopy !== false;
-let scrollAutoDefault = storedPreferences.scrollAuto !== false;
 let entry = "重点说明";
 
 // Tiled watermark: a full-canvas layer (not a movable shape) with its own
@@ -779,7 +778,7 @@ async function startScrollFromToolbar(): Promise<void> {
   if (!hasNative) {
     setToolbarStatus("滚动截图 · 浏览器预览", "info");
     showTransient(
-      "浏览器预览 · 桌面应用中会默认自动滚动、自动完成并弹出长图预览窗口",
+      "浏览器预览 · 桌面应用中可以手动滚动，或在控制条里开启自动滚动",
       3400,
     );
     return;
@@ -788,10 +787,7 @@ async function startScrollFromToolbar(): Promise<void> {
   phase = "finishing";
   setToolbarPending(true, "正在进入滚动截图…");
   try {
-    // R9: automatic scrolling by default (the user's preference can switch the
-    // default); Go falls back to manual and reports autoDenied on the control
-    // bar when the Accessibility permission is missing.
-    await startScroll(committedRect, scrollAutoDefault);
+    await startScroll(committedRect);
     if (!currentAttempt(attempt)) return;
     detectedWindows = [];
     reset();
@@ -1039,10 +1035,11 @@ interface CanvasClickState {
 
 let lastCanvasClick: CanvasClickState | null = null;
 
-// After the capture lands in the selection the four corner handles can be
-// dragged to adjust the captured area; releasing re-captures the region.
+const RESIZE_DIRECTIONS = ["n", "s", "w", "e", "nw", "ne", "sw", "se"] as const;
+type ResizeDirection = (typeof RESIZE_DIRECTIONS)[number];
+
 interface SelectionResizeState {
-  corner: "nw" | "ne" | "sw" | "se";
+  direction: ResizeDirection;
   pointerId: number;
   startX: number;
   startY: number;
@@ -1163,7 +1160,6 @@ function reloadOverlayPreferences(): void {
   tooltipsEnabled = storedPreferences.tooltip;
   tooltipDelayMs = clamp(Math.round(storedPreferences.tooltipDelay), 0, 2000);
   enterCopyEnabled = storedPreferences.enterCopy;
-  scrollAutoDefault = storedPreferences.scrollAuto;
   watermarkText = storedPreferences.watermarkText || "Pinstill";
   watermarkOpacity = clamp(storedPreferences.watermarkOpacity, 10, 90);
   watermark = loadWatermarkSettings();
@@ -1588,7 +1584,8 @@ function reset(): void {
   positionMasks(null);
   pressWindow = null;
   dragMoved = false;
-  selection.classList.remove("capturing", "window-preview");
+  selectionResize = null;
+  selection.classList.remove("capturing", "window-preview", "resizing");
   if (transientTimer) window.clearTimeout(transientTimer);
   if (demoResetTimer) window.clearTimeout(demoResetTimer);
   transientTimer = undefined;
@@ -1665,14 +1662,14 @@ function cancelRegionFlow(): void {
 // Pointer & keyboard
 // ---------------------------------------------------------------------------
 
-function startSelectionResize(event: PointerEvent, corner: SelectionResizeState["corner"]): void {
-  if (phase !== "annotating" || !committedRect) return;
+function startSelectionResize(event: PointerEvent, direction: ResizeDirection): void {
+  if (phase !== "annotating" || !committedRect || selectionResize) return;
   if (inlineEditor) {
     inlineEditor.cancel();
     inlineEditor = null;
   }
   selectionResize = {
-    corner,
+    direction,
     pointerId: event.pointerId,
     startX: event.clientX,
     startY: event.clientY,
@@ -1686,6 +1683,11 @@ function startSelectionResize(event: PointerEvent, corner: SelectionResizeState[
   prepareState.hidden = true;
   positionMasks(null);
   selection.classList.add("resizing");
+  if (event.target instanceof HTMLElement) {
+    try {
+      event.target.setPointerCapture(event.pointerId);
+    } catch {}
+  }
   event.preventDefault();
   event.stopPropagation();
 }
@@ -1700,17 +1702,19 @@ function resizeRectFor(event: PointerEvent): Rect {
   let y1 = base.y;
   let x2 = base.x + base.width;
   let y2 = base.y + base.height;
-  if (drag.corner === "nw" || drag.corner === "sw") {
-    x1 = clamp(base.x + dx, 0, Math.max(0, x2 - MIN_RESIZE));
+  const minWidth = Math.min(base.width, MIN_RESIZE);
+  const minHeight = Math.min(base.height, MIN_RESIZE);
+  if (drag.direction.includes("w")) {
+    x1 = clamp(base.x + dx, 0, x2 - minWidth);
   }
-  if (drag.corner === "ne" || drag.corner === "se") {
-    x2 = clamp(base.x + base.width + dx, x1 + MIN_RESIZE, viewportWidth());
+  if (drag.direction.includes("e")) {
+    x2 = clamp(base.x + base.width + dx, x1 + minWidth, viewportWidth());
   }
-  if (drag.corner === "nw" || drag.corner === "ne") {
-    y1 = clamp(base.y + dy, 0, Math.max(0, y2 - MIN_RESIZE));
+  if (drag.direction.includes("n")) {
+    y1 = clamp(base.y + dy, 0, y2 - minHeight);
   }
-  if (drag.corner === "sw" || drag.corner === "se") {
-    y2 = clamp(base.y + base.height + dy, y1 + MIN_RESIZE, viewportHeight());
+  if (drag.direction.includes("s")) {
+    y2 = clamp(base.y + base.height + dy, y1 + minHeight, viewportHeight());
   }
   return { x: x1, y: y1, width: x2 - x1, height: y2 - y1 };
 }
@@ -1826,9 +1830,9 @@ window.addEventListener("pointerdown", (event) => {
   if (isInsidePalette(event.target)) return;
   if (phase === "annotating" && event.button === 0 && event.target instanceof Element) {
     const handle = event.target.closest<HTMLElement>("[data-resize]");
-    const corner = handle?.dataset.resize;
-    if (corner === "nw" || corner === "ne" || corner === "sw" || corner === "se") {
-      startSelectionResize(event, corner);
+    const direction = RESIZE_DIRECTIONS.find((value) => value === handle?.dataset.resize);
+    if (direction) {
+      startSelectionResize(event, direction);
       return;
     }
   }
@@ -1895,6 +1899,7 @@ window.addEventListener("pointerdown", (event) => {
 
 window.addEventListener("pointermove", (event) => {
   if (selectionResize) {
+    if (event.pointerId !== selectionResize.pointerId) return;
     event.preventDefault();
     const rect = resizeRectFor(event);
     committedRect = rect;
@@ -1942,6 +1947,7 @@ document.documentElement.addEventListener("pointerleave", () => {
 
 window.addEventListener("pointerup", (event) => {
   if (selectionResize) {
+    if (event.pointerId !== selectionResize.pointerId) return;
     const original = selectionResize.rect;
     const rect = { ...(committedRect ?? original) };
     selectionResize = null;
@@ -1986,6 +1992,17 @@ window.addEventListener("pointerup", (event) => {
     drawingPointer = null;
     updateToolbarState();
   }
+});
+
+window.addEventListener("pointercancel", (event) => {
+  if (selectionResize?.pointerId !== event.pointerId) return;
+  const original = selectionResize.rect;
+  selectionResize = null;
+  selection.classList.remove("resizing");
+  committedRect = original;
+  canvas.hidden = false;
+  positionSelection(original);
+  updateSizeBadge(original);
 });
 
 window.addEventListener("contextmenu", (event) => {

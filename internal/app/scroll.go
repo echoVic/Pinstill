@@ -277,9 +277,8 @@ func regionIntersects(x, y, w, h int, region capture.Rect) bool {
 
 // startScroll begins a scrolling capture for the current overlay selection.
 // It hides the overlay and shows the control bar; the frames are captured
-// behind it. Automatic scrolling is the default; when the platform or the
-// Accessibility permission cannot deliver it the session starts in manual
-// mode and the control bar offers the permission shortcut instead of failing.
+// behind it. The toolbar starts in manual mode. An automatic request falls
+// back to manual if the platform or Accessibility permission prevents it.
 func (a *App) startScroll(rect Rect, autoScroll bool) error {
 	a.scrollMu.Lock()
 	defer a.scrollMu.Unlock()
@@ -383,6 +382,7 @@ func (a *App) scrollLoop(session *scrollSession) {
 	defer close(session.done)
 	time.Sleep(scrollInitialDelay)
 	stable := 0
+	wasAuto := false
 	for {
 		if session.isStopped() {
 			return
@@ -407,32 +407,26 @@ func (a *App) scrollLoop(session *scrollSession) {
 			a.failScroll(session, "截图帧解码失败: "+err.Error())
 			return
 		}
-		static := false
-		if session.frames == 0 {
+		static := session.acc.SameAsPrevious(img)
+		auto := session.isAuto()
+		if !static || (auto && !wasAuto) {
+			stable = 0
+		} else {
+			stable++
+		}
+		wasAuto = auto
+		if !static {
 			if _, err := session.acc.Add(img); err != nil {
 				a.failScroll(session, "拼接失败: "+err.Error())
 				return
 			}
-		} else {
-			static = session.acc.SameAsPrevious(img)
-			if static {
-				stable++
-			} else {
-				stable = 0
-				if _, err := session.acc.Add(img); err != nil {
-					a.failScroll(session, "拼接失败: "+err.Error())
-					return
-				}
-			}
+			session.mu.Lock()
+			session.height, session.frames = session.acc.Size()
+			session.mu.Unlock()
+			a.emitScrollProgress(session)
 		}
-		session.mu.Lock()
-		session.frames++
-		session.height, _ = session.acc.Size()
-		session.mu.Unlock()
-		a.emitScrollProgress(session)
-		if static && stable >= scrollStableFrames-1 {
-			// The page ended (or the user paused long enough): finish like the
-			// mainstream tools do, and open the preview.
+		progressed := session.frames > 1
+		if (auto || progressed) && stable >= scrollStableFrames-1 {
 			a.finalizeScroll(session, "stalled")
 			return
 		}
@@ -440,7 +434,7 @@ func (a *App) scrollLoop(session *scrollSession) {
 			a.finalizeScroll(session, "max")
 			return
 		}
-		if session.isAuto() && capture.ScrollSupported() && os.Getenv("PINSTILL_SELFTEST_SCROLL_SIM") == "" {
+		if auto && capture.ScrollSupported() && os.Getenv("PINSTILL_SELFTEST_SCROLL_SIM") == "" {
 			center := capture.Point{X: session.region.X + session.region.Width/2, Y: session.region.Y + session.region.Height/2}
 			if err := capture.ScrollWheel(center, scrollDeltaPixels); err != nil {
 				a.failScroll(session, "滚动失败: "+err.Error())

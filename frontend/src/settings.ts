@@ -16,7 +16,6 @@ export interface Preferences {
   cursor: boolean;
   sound: boolean;
   afterCapture: "inplace" | "clipboard" | "pin";
-  scrollAuto: boolean;
   tooltip: boolean;
   tooltipDelay: number;
   // 快捷键
@@ -128,12 +127,6 @@ export const SETTINGS_SCHEMA: SettingsCategory[] = [
               { value: "clipboard", label: "复制到剪贴板" },
               { value: "pin", label: "固定到屏幕" },
             ],
-          },
-          {
-            key: "scrollAuto",
-            name: "滚动截图默认自动",
-            description: "选区里点「滚动截图」时默认自动滚动；关闭后默认手动，控制条里随时可切换。",
-            type: "toggle",
           },
         ],
       },
@@ -490,7 +483,6 @@ export const DEFAULT_PREFERENCES: Preferences = {
   cursor: false,
   sound: true,
   afterCapture: "inplace",
-  scrollAuto: true,
   tooltip: true,
   tooltipDelay: 120,
   captureKey: "CmdOrCtrl+Shift+1",

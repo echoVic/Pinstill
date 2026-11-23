@@ -1311,10 +1311,26 @@ func (a *App) selftestScrollFlow() {
 		selftestFail("SELFTEST scrollflow: drag error %v\n", err)
 	}
 	if err := a.waitOverlayAnnotating(10 * time.Second); err != nil {
-		selftestFail("SELFTEST scrollflow: prepare error %v\n", err)
+		selftestFail("SELFTEST scrollflow: prepare error %v (%v)\n", err, a.overlayEval(`document.getElementById('captureError')?.innerText || document.getElementById('overlay')?.innerText`))
 	}
 	time.Sleep(400 * time.Millisecond)
 	selftestRequire(selftestValue(a.overlay.Page().Eval(`(() => { const b = document.querySelector('[data-tool="scroll"]'); if (!b) return 'missing'; b.click(); return 'clicked'; })()`)) == "clicked", "scroll tool missing")
+	time.Sleep(500 * time.Millisecond)
+	a.mu.Lock()
+	session := a.scroll
+	a.mu.Unlock()
+	selftestRequire(session != nil && !session.isAuto(), "scrolling capture must start in manual mode")
+	if capture.AccessibilityGranted() && capture.ScrollSupported() {
+		selftestRequire(selftestValue(a.control.Page().Eval(`(() => {
+			const button = document.querySelector('[data-scroll-action="mode"]');
+			if (!button || button.disabled || button.getAttribute('aria-pressed') !== 'false') return false;
+			button.click();
+			return true;
+		})()`)) == true, "auto-scroll toggle was not available")
+		time.Sleep(300 * time.Millisecond)
+		selftestRequire(session.isAuto(), "auto-scroll did not start after the toggle was clicked")
+		fmt.Println("SELFTEST scrollflow: auto started after explicit toggle")
+	}
 	deadline := time.Now().Add(25 * time.Second)
 	var win *mygo.Window
 	for time.Now().Before(deadline) {
@@ -1873,8 +1889,7 @@ func (a *App) selftestDoubleClick() {
 	selftestExit(0)
 }
 
-// selftestResize proves the capture can be adjusted after it landed: dragging
-// a corner handle of the selection re-captures the adjusted region.
+// selftestResize verifies edge hit testing, re-capture, and corner cropping.
 func (a *App) selftestResize() {
 	if a.main != nil {
 		a.main.Show()
@@ -1894,7 +1909,7 @@ func (a *App) selftestResize() {
 			annotating = true
 			break
 		}
-		selftestFail("SELFTEST resize: annotating attempt %d failed\n", attempt)
+		fmt.Printf("SELFTEST resize: annotating attempt %d did not finish (%v)\n", attempt, a.overlayEval(`document.getElementById('captureError')?.innerText || document.getElementById('hint')?.innerText || ''`))
 		a.cancelRegion()
 		time.Sleep(800 * time.Millisecond)
 	}
@@ -1905,15 +1920,44 @@ func (a *App) selftestResize() {
 		return strings.TrimSpace(fmt.Sprint(a.overlayEval(js)))
 	}
 	handles := eval(`String(document.querySelectorAll('[data-resize]').length)`)
-	before := eval(`String((() => { const c = document.getElementById('overlayCanvas'); return c ? c.width + 'x' + c.height : 'missing'; })())`)
+	grips := eval(`(() => {
+		const bounds = document.getElementById('selection').getBoundingClientRect();
+		const edgeX = bounds.left + bounds.width / 4;
+		const edgeY = bounds.top + bounds.height / 4;
+		const targets = [
+			['n', edgeX, bounds.top, 'ns-resize'],
+			['s', edgeX, bounds.bottom - 1, 'ns-resize'],
+			['w', bounds.left, edgeY, 'ew-resize'],
+			['e', bounds.right - 1, edgeY, 'ew-resize'],
+		];
+		for (const [edge, x, y, cursor] of targets) {
+			const target = document.elementFromPoint(x, y)?.closest('[data-resize]');
+			if (target?.dataset.resize !== edge || getComputedStyle(target).cursor !== cursor) return 'missed ' + edge;
+		}
+		for (const grip of document.querySelectorAll('[data-resize]')) {
+			const dot = getComputedStyle(grip, '::after');
+			if (dot.width !== '7px' || dot.height !== '7px' || dot.borderRadius !== '50%') {
+				return 'unexpected grip ' + grip.dataset.resize;
+			}
+		}
+		return 'ok';
+	})()`)
+	selftestRequire(grips == "ok", "resize grip hit test: %s", grips)
+	selectionSize := func() string {
+		return eval(`(() => {
+			const bounds = document.getElementById('selection').getBoundingClientRect();
+			return Math.round(bounds.width) + 'x' + Math.round(bounds.height);
+		})()`)
+	}
+	before := selectionSize()
 	handlePoint := eval(`(() => {
-		const handle = document.querySelector('[data-resize="se"]');
+		const handle = document.querySelector('[data-resize="e"]');
 		if (!handle) return '';
 		const r = handle.getBoundingClientRect();
 		return (r.left + r.width / 2) + ',' + (r.top + r.height / 2);
 	})()`)
 	down := eval(`(() => {
-		const handle = document.querySelector('[data-resize="se"]');
+		const handle = document.querySelector('[data-resize="e"]');
 		if (!handle) return 'missing';
 		const r = handle.getBoundingClientRect();
 		handle.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, pointerId: 11, pointerType: 'mouse', button: 0 }));
@@ -1931,7 +1975,7 @@ func (a *App) selftestResize() {
 		}
 	}
 	dragged := eval(`(() => {
-		const handle = document.querySelector('[data-resize="se"]');
+		const handle = document.querySelector('[data-resize="e"]');
 		if (!handle) return 'missing';
 		const r = handle.getBoundingClientRect();
 		const cx = r.left + r.width / 2;
@@ -1942,13 +1986,15 @@ func (a *App) selftestResize() {
 	})()`)
 	dragDone := time.Now()
 	// The page re-captures the adjusted region through Go; wait for the new
-	// annotation state and read the canvas size again.
+	// annotation state and read the selection size again.
 	recaptured := false
 	deadline := time.Now().Add(12 * time.Second)
 	for time.Now().Before(deadline) {
 		if err := a.waitOverlayAnnotating(2 * time.Second); err == nil {
-			after := eval(`String((() => { const c = document.getElementById('overlayCanvas'); return c ? c.width + 'x' + c.height : 'missing'; })())`)
-			if after != before && after != "missing" {
+			after := selectionSize()
+			beforeWidth, beforeHeight, _ := strings.Cut(before, "x")
+			afterWidth, afterHeight, _ := strings.Cut(after, "x")
+			if afterWidth != beforeWidth && afterHeight == beforeHeight {
 				fmt.Printf("SELFTEST resize: handles=%s before=%s after=%s recapture_ms=%d dragged=%s\n", handles, before, after, time.Since(dragDone).Milliseconds(), dragged)
 				recaptured = true
 				break
@@ -1961,7 +2007,7 @@ func (a *App) selftestResize() {
 	}
 	// Now shrink the region (inside the current capture): the page crops
 	// locally instead of grabbing the screen again, so this should be fast.
-	beforeShrink := eval(`String((() => { const c = document.getElementById('overlayCanvas'); return c ? c.width + 'x' + c.height : 'missing'; })())`)
+	beforeShrink := selectionSize()
 	shrinkStart := time.Now()
 	shrinkDragged := eval(`(() => {
 		const handle = document.querySelector('[data-resize="nw"]');
@@ -1977,7 +2023,7 @@ func (a *App) selftestResize() {
 	afterShrink := beforeShrink
 	shrinkDeadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(shrinkDeadline) {
-		afterShrink = eval(`String((() => { const c = document.getElementById('overlayCanvas'); return c ? c.width + 'x' + c.height : 'missing'; })())`)
+		afterShrink = selectionSize()
 		if afterShrink != beforeShrink && afterShrink != "missing" {
 			break
 		}
@@ -1985,7 +2031,7 @@ func (a *App) selftestResize() {
 	}
 	shrinkMS := time.Since(shrinkStart).Milliseconds()
 	fmt.Printf("SELFTEST resize: shrink before=%s after=%s shrink_ms=%d dragged=%s\n", beforeShrink, afterShrink, shrinkMS, shrinkDragged)
-	if handles != "4" || before == "missing" || dragged != "dragged" || !recaptured || shrinkDragged != "dragged" || afterShrink == beforeShrink || afterShrink == "missing" || midHidden != "true" || midMask != "true" {
+	if handles != "8" || before == "missing" || dragged != "dragged" || !recaptured || shrinkDragged != "dragged" || afterShrink == beforeShrink || afterShrink == "missing" || midHidden != "true" || midMask != "true" {
 		selftestFail("SELFTEST resize: checks=FAILED\n")
 		a.cancelRegion()
 		selftestExit(1)
@@ -2272,6 +2318,7 @@ func (a *App) selftestPerms() {
 	if a.main == nil {
 		selftestFail("SELFTEST perms: no main window\n")
 	}
+	a.main.SetSize(1120, 560)
 	a.showMain()
 	time.Sleep(1500 * time.Millisecond)
 	eval := func(js string) string {
@@ -2286,6 +2333,26 @@ func (a *App) selftestPerms() {
 	// the test proves wiring, not just markup).
 	eval(`document.querySelector('[data-view="settings"]')?.click(), 'ok'`)
 	time.Sleep(700 * time.Millisecond)
+	settingsScroll := eval(`(() => {
+		const history = document.querySelector('[data-view="history"]');
+		const classes = document.querySelector('#settingsNav button');
+		const footer = document.getElementById('resetSettings');
+		const controlsBottom = parseFloat(getComputedStyle(document.documentElement)
+			.getPropertyValue('--mygo-titlebar-controls-bottom')) || 0;
+		const navTop = history.getBoundingClientRect().top;
+		const footerTop = footer.getBoundingClientRect().top;
+		footer.scrollIntoView({block: 'end'});
+		if (footer.getBoundingClientRect().top >= footerTop || footer.getBoundingClientRect().bottom > innerHeight) {
+			return 'settings footer was not scrolled into view';
+		}
+		const scrolledNavTop = history.getBoundingClientRect().top;
+		if (Math.abs(scrolledNavTop - navTop) > 1 || scrolledNavTop < controlsBottom) {
+			return 'history moved with settings: ' + navTop + ' → ' + scrolledNavTop + ' (controls end at ' + controlsBottom + ')';
+		}
+		if (classes.getBoundingClientRect().top < controlsBottom) return 'settings categories crossed the title bar';
+		return 'ok';
+	})()`)
+	selftestRequire(settingsScroll == "ok", "settings scroll: %s", settingsScroll)
 	eval(`document.querySelector('#settingsNav button[data-settings-cat="permissions"]')?.click(), 'ok'`)
 	time.Sleep(900 * time.Millisecond)
 
