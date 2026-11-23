@@ -456,6 +456,7 @@ function subscribe<T>(event: { on: (listener: (payload: T) => void) => () => voi
 export const onCaptureCancelled = (cb: (payload: Native.CaptureCancelledPayload) => void) => subscribe(events.captureCancelled, cb);
 export const onCaptureFailed = (cb: (payload: Native.CaptureFailedPayload) => void) => subscribe(events.captureFailed, cb);
 export const onOverlayShown = (cb: (payload: OverlayInfo) => void) => subscribe(events.overlayShown, cb);
+export const onOverlayHidden = (cb: (session: number) => void) => subscribe(events.overlayHidden, cb);
 export const onOverlayPreview = (cb: (payload: OverlayPreview) => void) => subscribe(events.overlayPreview, cb);
 
 export function previewOverlaySelection(session: number, rect: Rect | null): Promise<void> {

@@ -31,6 +31,7 @@ func (s *CaptureService) SampleOverlayPixels(ctx context.Context, localX, localY
 	app := s.app
 	app.mu.Lock()
 	generation := app.captureGeneration
+	desktop := app.overlayDesktop
 	active := app.capturing && !app.quitting && app.scroll == nil
 	app.mu.Unlock()
 	surface, ok := app.overlaySurfaceFor(mygo.CallerWindow(ctx))
@@ -46,16 +47,22 @@ func (s *CaptureService) SampleOverlayPixels(ctx context.Context, localX, localY
 	if region.Empty() || !app.selectionIsCurrent(generation) {
 		return PixelSample{}, errors.New("取色点不在可截取的显示器上")
 	}
-	data, err := app.captureRegion(region, capture.CaptureOptions{BackingScale: scale})
+	var frame image.Image
+	var err error
+	if desktop != nil {
+		frame, err = desktop.Crop(ctx, region)
+	} else {
+		var data []byte
+		data, err = app.captureRegion(region, capture.CaptureOptions{BackingScale: scale})
+		if err == nil {
+			frame, err = imagebudget.DecodePNG(data)
+		}
+	}
 	if err != nil {
 		return PixelSample{}, err
 	}
 	if !app.selectionIsCurrent(generation) {
 		return PixelSample{}, errors.New("截图请求已结束")
-	}
-	frame, err := imagebudget.DecodePNG(data)
-	if err != nil {
-		return PixelSample{}, err
 	}
 	return makePixelSample(frame, region, point)
 }

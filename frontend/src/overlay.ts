@@ -22,6 +22,7 @@ import {
   cancelRegion,
   finishAnnotated,
   hasNative,
+  onOverlayHidden,
   onOverlayPreview,
   onOverlayShown,
   openPermissionSettings,
@@ -160,6 +161,7 @@ const el = <T extends HTMLElement = HTMLElement>(id: string): T => {
   return element as T;
 };
 
+const backdrop = el<HTMLImageElement>("overlayBackdrop");
 const dim = el("dim");
 const maskTop = el("maskTop");
 const maskBottom = el("maskBottom");
@@ -848,6 +850,7 @@ async function startScrollFromToolbar(): Promise<void> {
   try {
     await startScroll(committedRect);
     if (!currentAttempt(attempt)) return;
+    clearBackdrop();
     detectedWindows = [];
     reset();
   } catch (error) {
@@ -1161,6 +1164,24 @@ interface CanvasClickState {
 }
 
 let lastCanvasClick: CanvasClickState | null = null;
+const DOUBLE_CLICK_MS = 350;
+const DOUBLE_CLICK_DISTANCE = 8;
+let quickClick: { x: number; y: number; timer: number; resolve: (copy: boolean) => void } | null = null;
+
+function settleQuickClick(copy: boolean): void {
+  if (!quickClick) return;
+  const pending = quickClick;
+  quickClick = null;
+  window.clearTimeout(pending.timer);
+  pending.resolve(copy);
+}
+
+function waitForQuickClick(x: number, y: number): Promise<boolean> {
+  settleQuickClick(false);
+  return new Promise((resolve) => {
+    quickClick = { x, y, resolve, timer: window.setTimeout(() => settleQuickClick(false), DOUBLE_CLICK_MS) };
+  });
+}
 
 const RESIZE_DIRECTIONS = ["n", "s", "w", "e", "nw", "ne", "sw", "se"] as const;
 type ResizeDirection = (typeof RESIZE_DIRECTIONS)[number];
@@ -1401,16 +1422,13 @@ function openInlineText(point: Point, shape?: Readonly<Shape>): void {
   });
 }
 
-async function beginAnnotation(payload: OverlayCapture, attempt: number, signal: AbortSignal): Promise<Blob | undefined> {
+async function beginAnnotation(payload: OverlayCapture, blob: Blob, attempt: number): Promise<Blob | undefined> {
   await settingsReady;
   if (!currentAttempt(attempt)) return;
   const rect = payload.rect ?? committedRect ?? selectionRect();
   const width = Math.round(payload.width ?? rect.width);
   const height = Math.round(payload.height ?? rect.height);
   checkImageDimensions(width, height);
-  const blob = await fetchCaptureBlob(payload.url, signal);
-  if (!currentAttempt(attempt)) return;
-
   const image = await decodeImageBlob(blob);
   if (!currentAttempt(attempt)) {
     if ("close" in image) image.close();
@@ -1495,6 +1513,7 @@ async function prepareSelectionFor(
   rect: Rect,
   fast = false,
   onFailure?: (error: unknown) => void,
+  quickCopy?: Promise<boolean>,
 ): Promise<void> {
   const attempt = ++captureAttempt;
   selectionPreparation?.abort();
@@ -1521,7 +1540,7 @@ async function prepareSelectionFor(
   sizeBadge.hidden = true;
   demoToast.hidden = true;
   try {
-    if (fast) {
+    if (fast && !displayInfo?.backdropUrl) {
       // Let the browser paint the chrome-free frame before Go grabs the screen;
       // the timer fallback means rAF throttling can never stall the capture.
       await new Promise<void>((resolve) => {
@@ -1536,18 +1555,22 @@ async function prepareSelectionFor(
       });
       if (!currentAttempt(attempt)) return;
     }
+    let copyDirectly = false;
     const preparation = (async () => {
       const payload = fast
         ? await prepareSelectionFast(rect, controller.signal)
         : await prepareSelection(rect, controller.signal);
       if (!currentAttempt(attempt)) return;
       if (!payload?.url) throw new Error("截图数据无效");
-      return beginAnnotation(payload, attempt, controller.signal);
+      const blob = await fetchCaptureBlob(payload.url, controller.signal);
+      copyDirectly = quickCopy ? await quickCopy : false;
+      if (!currentAttempt(attempt)) return;
+      return copyDirectly ? blob : beginAnnotation(payload, blob, attempt);
     })();
     const blob = await withPreparationTimeout(preparation, controller, fast ? 4000 : 10000, fast ? "重新截取超时" : "截取超时");
     if (!blob || !currentAttempt(attempt)) return;
     selectionPreparation = null;
-    const autoAction = mappedAfterCapture();
+    const autoAction = copyDirectly ? { go: "copy", ui: "copy" } as const : mappedAfterCapture();
     if (autoAction) {
       const rawBase64 = await blobToBase64(blob);
       if (!currentAttempt(attempt)) return;
@@ -1665,6 +1688,7 @@ async function finishWith(
     const result = await finishAnnotated(action, base64);
     if (!currentAttempt(attempt)) return;
     if (result.completed || (action === "cancel" && result.cancelled)) {
+      clearBackdrop();
       detectedWindows = [];
       reset();
       return;
@@ -1733,6 +1757,7 @@ hookHost.__pinstillDemoCapture = async (dataUrl: string): Promise<void> => {
 
 function reset(): void {
   ++captureAttempt;
+  settleQuickClick(false);
   selectionPreparation?.abort();
   selectionPreparation = null;
   precision.reset();
@@ -2059,6 +2084,12 @@ function handlePrecisionKey(event: KeyboardEvent): boolean {
 }
 
 window.addEventListener("pointerdown", (event) => {
+  if (phase === "preparing" && quickClick && event.button === 0) {
+    const nearby = Math.hypot(event.clientX - quickClick.x, event.clientY - quickClick.y) <= DOUBLE_CLICK_DISTANCE;
+    settleQuickClick(nearby);
+    if (nearby) event.preventDefault();
+    return;
+  }
   if (isInsideTextEditor(event.target)) return;
   if (isInsidePalette(event.target)) return;
   if (keyboardAdjustment && !isInsideToolbar(event.target)) {
@@ -2082,8 +2113,8 @@ window.addEventListener("pointerdown", (event) => {
     const previousClick = lastCanvasClick;
     const isDoubleClick =
       previousClick !== null &&
-      now - previousClick.time <= 350 &&
-      Math.hypot(event.clientX - previousClick.x, event.clientY - previousClick.y) <= 8;
+      now - previousClick.time <= DOUBLE_CLICK_MS &&
+      Math.hypot(event.clientX - previousClick.x, event.clientY - previousClick.y) <= DOUBLE_CLICK_DISTANCE;
     lastCanvasClick = { time: now, x: event.clientX, y: event.clientY };
     if (isDoubleClick && currentTool !== "select") {
       // A double-click on the image means "done": commit any pending inline
@@ -2230,7 +2261,7 @@ window.addEventListener("pointerup", (event) => {
       }
       committedRect = finalRect;
       positionSelection(finalRect);
-      void prepareSelectionFor(finalRect);
+      void prepareSelectionFor(finalRect, false, undefined, waitForQuickClick(event.clientX, event.clientY));
       return;
     }
     const rect = selectionRect();
@@ -2345,8 +2376,25 @@ captureErrorSettings.addEventListener("click", () => {
 });
 captureErrorRetry.addEventListener("click", () => void retryCapture());
 captureErrorCancel.addEventListener("click", () => dismissCaptureFailure());
-function notifyOverlayReady(session: number | undefined, attempt: number): void {
+let backdropGeneration = 0;
+
+function clearBackdrop(): void {
+  ++backdropGeneration;
+  backdrop.hidden = true;
+  backdrop.removeAttribute("src");
+}
+
+async function notifyOverlayReady(info: OverlayInfo | null | undefined, attempt: number): Promise<void> {
+  clearBackdrop();
+  const session = info?.session;
   if (typeof session !== "number" || !Number.isFinite(session) || session <= 0) return;
+  if (info?.backdropUrl) {
+    const generation = backdropGeneration;
+    backdrop.src = info.backdropUrl;
+    const loaded = await backdrop.decode().then(() => true, () => false);
+    if (generation !== backdropGeneration || !currentAttempt(attempt)) return;
+    backdrop.hidden = !loaded;
+  }
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       if (!currentAttempt(attempt)) return;
@@ -2363,7 +2411,11 @@ onOverlayShown((payload) => {
   reloadOverlayPreferences();
   applyOverlayInfo(payload);
   settingsReady = loadSettings();
-  notifyOverlayReady(payload?.session, captureAttempt);
+  void notifyOverlayReady(payload, captureAttempt);
+});
+
+onOverlayHidden((session) => {
+  if (session === displayInfo?.session) clearBackdrop();
 });
 
 onOverlayPreview(({ session, rect }) => {
@@ -2390,7 +2442,7 @@ void overlayInfo()
   .then((info) => {
     if (!overlayShownHandled && phase === "idle") {
       applyOverlayInfo(info);
-      notifyOverlayReady(info?.session, captureAttempt);
+      void notifyOverlayReady(info, captureAttempt);
     }
   })
   .catch(() => {

@@ -28,33 +28,15 @@ func captureDisplays(ctx context.Context, region Rect, opts CaptureOptions, disp
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	left, top, width, height := pointRect(region)
-	if width == 0 || height == 0 {
-		return nil, errors.New("capture: invalid selection")
-	}
-	region = Rect{X: float64(left), Y: float64(top), Width: float64(width), Height: float64(height)}
-	var pieces []DisplaySurface
-	scale := 1.0
-	for _, display := range displays {
-		part := region.Intersect(display.Bounds)
-		if part.Empty() {
-			continue
-		}
-		if part == region {
-			opts.BackingScale = display.Scale
-			return grab(ctx, region, opts)
-		}
-		pieces = append(pieces, DisplaySurface{Bounds: part, Scale: display.Scale})
-		scale = max(scale, display.Scale)
-	}
-	if len(pieces) == 0 {
-		return nil, errors.New("capture: selection does not cover a display")
-	}
-	if err := checkScaledCapturePixels(width, height, scale); err != nil {
+	region, pieces, err := displayCapturePieces(region, displays)
+	if err != nil {
 		return nil, err
 	}
-	canvas := image.NewNRGBA(image.Rect(0, 0, int(math.Round(float64(width)*scale)), int(math.Round(float64(height)*scale))))
-	for _, piece := range pieces {
+	if len(pieces) == 1 && pieces[0].Bounds == region {
+		opts.BackingScale = pieces[0].Scale
+		return grab(ctx, region, opts)
+	}
+	frame, err := composeDisplayPieces(ctx, region, pieces, func(piece DisplaySurface) (image.Image, error) {
 		opts.BackingScale = piece.Scale
 		data, err := grab(ctx, piece.Bounds, opts)
 		if err != nil {
@@ -64,7 +46,56 @@ func captureDisplays(ctx context.Context, region Rect, opts CaptureOptions, disp
 			return nil, err
 		}
 		opts.DelayMillis = 0
-		frame, err := imagebudget.DecodePNG(data)
+		return imagebudget.DecodePNG(data)
+	})
+	if err != nil {
+		return nil, err
+	}
+	data, err := imagebudget.EncodePNG(frame)
+	if err != nil {
+		return nil, err
+	}
+	return data, ctx.Err()
+}
+
+func displayCapturePieces(region Rect, displays []DisplaySurface) (Rect, []DisplaySurface, error) {
+	left, top, width, height := pointRect(region)
+	if width == 0 || height == 0 {
+		return Rect{}, nil, errors.New("capture: invalid selection")
+	}
+	region = Rect{X: float64(left), Y: float64(top), Width: float64(width), Height: float64(height)}
+	var pieces []DisplaySurface
+	for _, display := range displays {
+		part := region.Intersect(display.Bounds)
+		if part.Empty() {
+			continue
+		}
+		if part == region {
+			return region, []DisplaySurface{{Bounds: part, Scale: display.Scale}}, nil
+		}
+		pieces = append(pieces, DisplaySurface{Bounds: part, Scale: display.Scale})
+	}
+	if len(pieces) == 0 {
+		return Rect{}, nil, errors.New("capture: selection does not cover a display")
+	}
+	return region, pieces, nil
+}
+
+func composeDisplayPieces(ctx context.Context, region Rect, pieces []DisplaySurface, read func(DisplaySurface) (image.Image, error)) (image.Image, error) {
+	scale := 1.0
+	for _, piece := range pieces {
+		scale = max(scale, piece.Scale)
+	}
+	width, height := int(region.Width), int(region.Height)
+	if err := checkScaledCapturePixels(width, height, scale); err != nil {
+		return nil, err
+	}
+	canvas := image.NewNRGBA(image.Rect(0, 0, int(math.Round(float64(width)*scale)), int(math.Round(float64(height)*scale))))
+	for _, piece := range pieces {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		frame, err := read(piece)
 		if err != nil {
 			return nil, err
 		}
@@ -77,14 +108,7 @@ func captureDisplays(ctx context.Context, region Rect, opts CaptureOptions, disp
 			xdraw.NearestNeighbor.Scale(canvas, bounds, frame, frame.Bounds(), draw.Src, nil)
 		}
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	data, err := imagebudget.EncodePNG(canvas)
-	if err != nil {
-		return nil, err
-	}
-	return data, ctx.Err()
+	return canvas, ctx.Err()
 }
 
 func checkScaledCapturePixels(width, height int, scale float64) error {

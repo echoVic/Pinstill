@@ -26,6 +26,8 @@ Builds with automatic updates check in the background, or you can choose “检�
 4. Copy or save from the toolbar, choose Pin for an always-on-top window, or choose Hang to add the image to the desktop clothesline.
 5. From the menu bar, open Pin Manager to organize pins, toggle the desktop clothesline, or open History & Settings for captures and preferences.
 
+The screenshot shortcut freezes the desktop. To capture a Chrome extension popup, open it first, then press the shortcut and draw a selection. Double-click a highlighted window to copy it straight to the clipboard, or single-click to annotate it.
+
 Hotkeys and what happens after a capture (annotate / copy / pin) are configurable in Settings.
 
 While selecting, use the arrow keys to fine-tune the endpoint and hold Shift for steps of 10 points. Press Z for the pixel loupe, C to copy the displayed color, or M to measure from the pointer. After capturing an area on one display, use Option + arrows to move the region or add Shift to adjust its size.

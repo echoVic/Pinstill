@@ -53,6 +53,8 @@ type App struct {
 	overlayPool        []*mygo.Window
 	overlaySurfaces    []overlaySurface
 	overlayInteraction uint64
+	overlayDesktop     *capture.DesktopSnapshot
+	overlayFreeze      context.CancelFunc
 	overlaySource      *mygo.Window
 	overlayCommitted   bool
 	setOverlayOpacity  func(float64)
@@ -135,7 +137,7 @@ func (a *App) Start() {
 	a.createMainWindow()
 	mygo.Screen.OnDisplaysChanged(func() {
 		a.mu.Lock()
-		active := a.overlayInteraction != 0
+		active := a.overlayInteraction != 0 || a.overlayFreeze != nil
 		a.mu.Unlock()
 		if active {
 			a.cancelRegion()
@@ -183,6 +185,7 @@ func (a *App) prepareQuit(snapshot func() error) error {
 	a.mu.Lock()
 	session := a.scroll
 	a.captureGeneration++
+	a.clearOverlayFreezeLocked()
 	a.clearOverlayRevealLocked()
 	a.mu.Unlock()
 	if session != nil {
@@ -263,6 +266,7 @@ func (a *App) registerProtocol() {
 		mux.Handle("/h/", http.StripPrefix("/h/", imagesOnly(mygo.FileServer(os.DirFS(a.store.Dir())))))
 	}
 	mux.Handle("/s/", http.StripPrefix("/s/", imagesOnly(mygo.FileServer(os.DirFS(a.sessionDir)))))
+	mux.HandleFunc("/d/", a.serveOverlayBackdrop)
 	if a.pinStore != nil {
 		mux.Handle("/p/", http.StripPrefix("/p/", imagesOnly(mygo.FileServer(os.DirFS(a.pinStore.Dir())))))
 	}
@@ -470,7 +474,17 @@ func (a *App) beginRegion() error {
 	a.capturing = true
 	a.captureGeneration++
 	session := a.captureGeneration
+	ctx, cancel := context.WithCancel(context.Background())
+	a.overlayFreeze = cancel
 	a.mu.Unlock()
+	defer func() {
+		cancel()
+		a.mu.Lock()
+		if a.captureGeneration == session {
+			a.overlayFreeze = nil
+		}
+		a.mu.Unlock()
+	}()
 
 	if !capture.Supported() {
 		a.mu.Lock()
@@ -483,6 +497,7 @@ func (a *App) beginRegion() error {
 	displays := activeOverlayDisplays(mygo.Screen.Displays(), cursor)
 	rawWindows := a.listVisibleWindows()
 	var showErr error
+	var hidMain bool
 	a.runOverlayUI(func() {
 		if !a.selectionIsCurrent(session) {
 			return
@@ -498,8 +513,21 @@ func (a *App) beginRegion() error {
 		a.mu.Unlock()
 
 		if mainWin != nil {
-			hideForCapture(mainWin)
+			hidMain = hideForCapture(mainWin)
 		}
+	})
+	if showErr != nil || ctx.Err() != nil {
+		return showErr
+	}
+	desktop := a.freezeOverlayDesktop(ctx, displays, hidMain)
+	a.runOverlayUI(func() {
+		if !a.selectionIsCurrent(session) {
+			return
+		}
+		a.mu.Lock()
+		a.overlayFreeze = nil
+		a.overlayDesktop = desktop
+		a.mu.Unlock()
 		a.openOverlaySurfaces(displays, rawWindows, cursor, session)
 	})
 	return showErr
@@ -671,14 +699,14 @@ func (a *App) cancelRegion() bool {
 			return
 		}
 		windows := a.overlayPanesLocked()
+		session := a.overlayInteraction
 		a.restoreMainAfterCapture = false
 		a.capturing = false
 		a.captureGeneration++
 		reportCacheCleanup(a.releaseOverlayCacheLocked())
 		a.mu.Unlock()
 		for _, window := range windows {
-			window.SetOpacity(0)
-			window.Hide()
+			hideOverlayPane(window, session)
 		}
 		emitToMain(a, EventCaptureCancelled, CaptureCancelledPayload{Reason: "user"})
 		completed = true
@@ -720,11 +748,7 @@ func (a *App) captureRegionOnDisplays(ctx context.Context, region capture.Rect, 
 	return capture.CaptureRegionContext(ctx, region, opts)
 }
 
-// prepareSelection captures the user's selection and hands the image back to
-// the overlay, which then annotates it in place on the desktop. The overlay
-// stays on screen: the page hides the selection chrome and the selection's
-// interior is transparent, so the capture sees the screen behind it. This
-// keeps the flow flicker-free.
+// prepareSelection hands back the selected pixels for in-place annotation.
 func (a *App) prepareSelection(rect Rect) (OverlayCapturePayload, error) {
 	return a.prepareSelectionWithDelay(rect, 90*time.Millisecond)
 }
@@ -760,6 +784,7 @@ func (a *App) prepareSelectionFrom(ctx context.Context, caller *mygo.Window, rec
 	origin := a.overlayRect
 	overlay := a.overlay
 	displays := a.captureDisplaysLocked()
+	desktop := a.overlayDesktop
 	a.captureGeneration++
 	generation := a.captureGeneration
 	a.mu.Unlock()
@@ -782,20 +807,7 @@ func (a *App) prepareSelectionFrom(ctx context.Context, caller *mygo.Window, rec
 	if region.Empty() || region.Width < 2 || region.Height < 2 {
 		return OverlayCapturePayload{}, errors.New("选区太小")
 	}
-	// Give the page a moment to hide its selection border and badges so they
-	// are not part of the capture.
-	timer := time.NewTimer(chromeDelay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return OverlayCapturePayload{}, ctx.Err()
-	case <-timer.C:
-	}
-	if !a.selectionIsCurrent(generation) {
-		return OverlayCapturePayload{}, errors.New("截图请求已取消")
-	}
-	s := a.settingsSnapshot()
-	pngBytes, err := a.captureRegionOnDisplays(ctx, region, capture.CaptureOptions{IncludeCursor: s.IncludeCursor}, displays)
+	img, pngBytes, err := a.selectionImage(ctx, desktop, region, displays, generation, chromeDelay)
 	if err := ctx.Err(); err != nil {
 		return OverlayCapturePayload{}, err
 	}
@@ -803,18 +815,6 @@ func (a *App) prepareSelectionFrom(ctx context.Context, caller *mygo.Window, rec
 		return OverlayCapturePayload{}, errors.New("截图请求已取消")
 	}
 	if err != nil {
-		a.failSelection(err, false)
-		return OverlayCapturePayload{}, err
-	}
-	img, err := imagebudget.DecodePNG(pngBytes)
-	if err := ctx.Err(); err != nil {
-		return OverlayCapturePayload{}, err
-	}
-	if !a.selectionIsCurrent(generation) {
-		return OverlayCapturePayload{}, errors.New("截图请求已取消")
-	}
-	if err != nil {
-		err = fmt.Errorf("截图数据无效: %w", err)
 		a.failSelection(err, false)
 		return OverlayCapturePayload{}, err
 	}

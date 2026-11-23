@@ -112,6 +112,7 @@ export interface OverlayInfo {
   windows?: OverlayWindow[];
   desktop?: Rect;
   displays?: OverlayDisplay[];
+  backdropUrl?: string;
 }
 
 export interface OverlayPreviewPayload {
@@ -417,6 +418,7 @@ export const events = {
   /** EventOverlayShown is emitted to the overlay window before it appears. */
   overlayShown: event<OverlayInfo>("overlay:shown"),
   overlayPreview: event<OverlayPreviewPayload>("overlay:preview"),
+  overlayHidden: event<number>("overlay:hidden"),
   /**
    * EventScrollInit is emitted to the scroll control window when a session
    * starts.

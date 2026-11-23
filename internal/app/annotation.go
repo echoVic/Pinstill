@@ -21,6 +21,8 @@ func (a *App) releaseOverlayCacheLocked() error {
 	a.overlayHasCursor = false
 	a.overlaySurfaces = nil
 	a.overlayInteraction = 0
+	a.overlayDesktop = nil
+	a.clearOverlayFreezeLocked()
 	a.overlaySource = nil
 	a.overlayCommitted = false
 	a.clearOverlayRevealLocked()

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { page, settle } from './harness.mjs';
+import { deferred, page, settle } from './harness.mjs';
 
 const frontWindow = { x: 100, y: 100, width: 400, height: 300, owner: 'Safari', title: 'Docs' };
 const lowerWindow = { x: 300, y: 200, width: 500, height: 400, owner: 'Code', title: 'main.go' };
@@ -91,6 +91,8 @@ test('single click on a highlighted window captures its exact rectangle and ente
 
   assert.equal(captured.length, 1);
   assert.deepEqual({ ...captured[0] }, { x: 300, y: 200, width: 500, height: 400 });
+  assert.equal(p.document.getElementById('annotationToolbar').hidden, true);
+  await p.tick(350);
   assert.equal(p.run('phase'), 'annotating');
   assert.equal(p.document.getElementById('selection').classList.contains('window-preview'), false);
 });
@@ -227,4 +229,30 @@ test('startScrollFromToolbar clears the overlay surface once scroll starts', asy
   assert.equal(canvas.width, 0);
   assert.equal(canvas.height, 0);
   assert.equal(canvas.hidden, true);
+});
+test('a second click during window capture copies without ever showing the toolbar', async () => {
+  const pending = deferred();
+  const captures = [];
+  const finishes = [];
+  const overlay = page('overlay', { bridge: {
+    prepareSelection: async rect => { captures.push({ ...rect }); return pending.promise; },
+    finishAnnotated: async (action, data) => { finishes.push({ action, data }); return { completed: true }; },
+  }, globals: { FileReader: class {
+    readAsDataURL() { this.result = 'data:image/png;base64,YQ=='; this.onload(); }
+  } } });
+  const rect = { x: 40, y: 60, width: 300, height: 220 };
+  overlay.emit('onOverlayShown', { session: 15, width: 1200, height: 800, windows: [rect] });
+  const toolbar = overlay.document.getElementById('annotationToolbar');
+  const pointer = { pointerId: 1, button: 0, clientX: 75, clientY: 100 };
+  overlay.window.fire('pointerdown', pointer);
+  overlay.window.fire('pointerup', pointer);
+  overlay.window.fire('pointerdown', pointer);
+  overlay.window.fire('pointerup', pointer);
+  pending.resolve({ id: 'popup', url: 'shot://popup', width: 300, height: 220, rect });
+  await settle();
+
+  assert.deepEqual(captures, [rect]);
+  assert.deepEqual(finishes, [{ action: 'copy', data: 'YQ==' }]);
+  assert.equal(toolbar.hidden, true);
+  assert.equal(overlay.document.getElementById('overlayCanvas').width, 0);
 });

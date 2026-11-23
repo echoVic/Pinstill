@@ -26,6 +26,7 @@
   }
   [hidden] { display: none !important; }
 
+  #overlayBackdrop { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   .dim { position: fixed; inset: 0; background: var(--mask); }
 
   /* The selection: during annotation it holds the captured image canvas. */
@@ -575,6 +576,7 @@
 </style>
 </head>
 <body>
+  <img id="overlayBackdrop" alt="" draggable="false" hidden />
   <div class="dim" id="dim"></div>
   <div class="mask" id="maskTop" hidden></div>
   <div class="mask" id="maskBottom" hidden></div>

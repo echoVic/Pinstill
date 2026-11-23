@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"slices"
 	"time"
@@ -17,6 +18,7 @@ type overlaySurface struct {
 	windows []OverlayWindow
 	cursor  mygo.Point
 	session uint64
+	index   int
 	ready   bool
 }
 
@@ -36,7 +38,7 @@ func (a *App) openOverlaySurfaces(ordered []mygo.Display, rawWindows []capture.W
 			actual = area
 		}
 		surfaces = append(surfaces, overlaySurface{
-			window: window, display: display, bounds: actual, cursor: cursor, session: session,
+			window: window, display: display, bounds: actual, cursor: cursor, session: session, index: index,
 			windows: projectOverlayWindows(rawWindows, asCaptureRect(actual)),
 		})
 	}
@@ -51,7 +53,11 @@ func (a *App) openOverlaySurfaces(ordered []mygo.Display, rawWindows []capture.W
 	a.overlaySource = nil
 	a.overlayCommitted = false
 	a.overlaySession = session
-	a.overlayRevealTimer = time.AfterFunc(120*time.Millisecond, func() {
+	revealDelay := 120 * time.Millisecond
+	if a.overlayDesktop != nil {
+		revealDelay = 600 * time.Millisecond
+	}
+	a.overlayRevealTimer = time.AfterFunc(revealDelay, func() {
 		a.revealOverlay(session)
 	})
 	a.mu.Unlock()
@@ -147,6 +153,9 @@ func (a *App) overlayInfoOnSurfaceLocked(surface overlaySurface) OverlayInfo {
 	info.CursorX, info.CursorY = float64(surface.cursor.X-area.X), float64(surface.cursor.Y-area.Y)
 	info.HasCursor = info.CursorX >= 0 && info.CursorY >= 0 && info.CursorX < float64(area.Width) && info.CursorY < float64(area.Height)
 	info.Windows = slices.Clone(surface.windows)
+	if a.overlayDesktop != nil {
+		info.BackdropURL = a.shotURL(fmt.Sprintf("/d/%d/%d.png", surface.session, surface.index))
+	}
 	if len(a.overlaySurfaces) > 1 {
 		displays := a.captureDisplaysLocked()
 		desktop := relativeOverlayRect(asCaptureRect(displayUnion(displays)), area)
@@ -175,6 +184,14 @@ func (a *App) overlayPanesLocked() []*mygo.Window {
 		windows = append(windows, a.overlay)
 	}
 	return windows
+}
+
+func hideOverlayPane(window *mygo.Window, session uint64) {
+	window.SetOpacity(0)
+	window.Hide()
+	if session != 0 {
+		_ = EventOverlayHidden.Emit(window, session)
+	}
 }
 
 func (a *App) previewOverlaySelection(caller *mygo.Window, session uint64, rect *Rect) {
@@ -243,12 +260,12 @@ func (a *App) commitOverlaySurface(ctx context.Context, caller *mygo.Window) boo
 		a.overlayCommitted = true
 		a.clearOverlayRevealLocked()
 		windows := a.overlayPanesLocked()
+		session := a.overlayInteraction
 		a.mu.Unlock()
 		caller.SetOpacity(1)
 		for _, window := range windows {
 			if window != caller && window.IsVisible() {
-				window.SetOpacity(0)
-				window.Hide()
+				hideOverlayPane(window, session)
 			}
 		}
 		if !caller.IsFocused() {

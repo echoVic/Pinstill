@@ -47,18 +47,19 @@ type OverlayDisplay struct {
 
 // OverlayInfo tells the overlay page where the selection surface is.
 type OverlayInfo struct {
-	Session   uint64           `json:"session,omitempty"`
-	DisplayX  int              `json:"displayX"`
-	DisplayY  int              `json:"displayY"`
-	Width     int              `json:"width"`
-	Height    int              `json:"height"`
-	Scale     float64          `json:"scale"`
-	CursorX   float64          `json:"cursorX"`
-	CursorY   float64          `json:"cursorY"`
-	HasCursor bool             `json:"hasCursor,omitempty"`
-	Windows   []OverlayWindow  `json:"windows,omitempty"`
-	Desktop   *Rect            `json:"desktop,omitempty"`
-	Displays  []OverlayDisplay `json:"displays,omitempty"`
+	Session     uint64           `json:"session,omitempty"`
+	DisplayX    int              `json:"displayX"`
+	DisplayY    int              `json:"displayY"`
+	Width       int              `json:"width"`
+	Height      int              `json:"height"`
+	Scale       float64          `json:"scale"`
+	CursorX     float64          `json:"cursorX"`
+	CursorY     float64          `json:"cursorY"`
+	HasCursor   bool             `json:"hasCursor,omitempty"`
+	Windows     []OverlayWindow  `json:"windows,omitempty"`
+	Desktop     *Rect            `json:"desktop,omitempty"`
+	Displays    []OverlayDisplay `json:"displays,omitempty"`
+	BackdropURL string           `json:"backdropUrl,omitempty"`
 }
 
 type OverlayPreviewPayload struct {
@@ -240,6 +241,7 @@ var (
 	// EventOverlayShown is emitted to the overlay window before it appears.
 	EventOverlayShown   = mygo.NewEvent[OverlayInfo]("overlay:shown")
 	EventOverlayPreview = mygo.NewEvent[OverlayPreviewPayload]("overlay:preview")
+	EventOverlayHidden  = mygo.NewEvent[uint64]("overlay:hidden")
 	// EventScrollInit is emitted to the scroll control window when a session
 	// starts.
 	EventScrollInit = mygo.NewEvent[ScrollInitPayload]("scroll:init")

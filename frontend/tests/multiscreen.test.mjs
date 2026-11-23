@@ -1,12 +1,45 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { page, settle } from './harness.mjs';
+import { deferred, page, settle } from './harness.mjs';
 
 const rightPane = {
   session: 12,
   displayX: 0, displayY: 0, width: 1000, height: 600, scale: 2,
   desktop: { x: -640, y: -200, width: 1640, height: 800 },
 };
+
+test('the overlay waits for the current frozen desktop image to decode before revealing', async () => {
+  const ready = [];
+  const first = deferred();
+  const second = deferred();
+  const overlay = page('overlay', { bridge: { overlayReady: async session => ready.push(session) } });
+  const backdrop = overlay.document.getElementById('overlayBackdrop');
+  assert.ok(backdrop);
+  backdrop.decode = () => backdrop.src.endsWith('/0.png') && backdrop.src.includes('/12/') ? first.promise : second.promise;
+
+  overlay.emit('onOverlayShown', { ...rightPane, backdropUrl: 'shot://localhost/d/12/0.png' });
+  assert.deepEqual(ready, []);
+  overlay.emit('onOverlayShown', { ...rightPane, session: 13, backdropUrl: 'shot://localhost/d/13/0.png' });
+  first.resolve();
+  await settle();
+  assert.deepEqual(ready, []);
+
+  second.resolve();
+  await settle();
+  assert.equal(backdrop.hidden, false);
+  assert.equal(backdrop.src, 'shot://localhost/d/13/0.png');
+  assert.deepEqual(ready, [13]);
+
+  overlay.emit('onOverlayHidden', 12);
+  assert.equal(backdrop.hidden, false);
+  overlay.emit('onOverlayHidden', 13);
+  assert.equal(backdrop.hidden, true);
+
+  overlay.emit('onOverlayShown', { ...rightPane, session: 14 });
+  await settle();
+  assert.equal(backdrop.hidden, true);
+  assert.deepEqual(ready, [13, 14]);
+});
 
 test('desktop selection retains negative panel coordinates and displays the complete capture', async () => {
   const previews = [];
