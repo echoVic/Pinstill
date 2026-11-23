@@ -237,34 +237,30 @@ test('pin pointer release does not repeat an unchanged in-flight resize', async 
   request.resolve(); await settle(); assert.equal(calls, 1);
 });
 
-test('pin persistence waits for resizing and saves accepted dimensions when the newer resize fails', async () => {
-  const calls = [], states = [];
-  const p = loadedPin({ resizePin: (...args) => { const d = deferred(); calls.push({ args, ...d }); return d.promise; },
-    updatePinState: async (id, state) => states.push(JSON.parse(JSON.stringify(state))) });
+test('a rejected native resize restores the last persisted dimensions', async () => {
+  const calls = [];
+  const p = loadedPin({ resizePin: (...args) => { const d = deferred(); calls.push({ args, ...d }); return d.promise; } });
   p.run('applyResize(300, 200)'); await p.tick(70);
   p.run('applyResize(360, 240)'); await p.tick(70);
-  calls[0].resolve(); await settle(); await p.tick(420);
-  assert.equal(states.length, 0, 'persistence cannot overlap a pending native mutation');
-  calls[1].reject(new Error('resize rejected')); await settle(); await p.tick(420);
-  assert.ok(states.length > 0);
-  assert.ok(states.every(s => s.width === 300 && s.height === 200 && s.opacity === 100), 'never persist optimistic dimensions');
+  calls[0].resolve(); await settle();
+  assert.deepEqual(calls.map(request => request.args), [['pin', 300, 200], ['pin', 360, 240]]);
+  assert.equal(p.run('acceptedWidth'), 300); assert.equal(p.run('acceptedHeight'), 200);
+  calls[1].reject(new Error('resize rejected')); await settle();
   assert.equal(p.run('currentWidth'), 300); assert.equal(p.run('currentHeight'), 200);
   assert.match(p.document.getElementById('pinToast').textContent, /resize rejected/);
 });
 
 test('pin opacity is serialized and failures restore the last accepted value', async () => {
-  const calls = [], states = [];
-  const p = loadedPin({ setPinOpacity: (...args) => { const d = deferred(); calls.push({ args, ...d }); return d.promise; },
-    updatePinState: async (id, state) => states.push(JSON.parse(JSON.stringify(state))) });
+  const calls = [];
+  const p = loadedPin({ setPinOpacity: (...args) => { const d = deferred(); calls.push({ args, ...d }); return d.promise; } });
   const first = p.run('adjustOpacity(-10)'); await settle();
   const second = p.run('adjustOpacity(-10)'); await settle();
   assert.equal(calls.length, 1, 'opacity mutations cannot overlap');
   calls[0].resolve(); await first; await settle();
   assert.deepEqual(calls[1].args, ['pin', 80]);
-  await p.tick(420); assert.equal(states.length, 0);
-  calls[1].reject(new Error('opacity rejected')); await second; await settle(); await p.tick(420);
+  assert.equal(p.run('acceptedOpacity'), 90);
+  calls[1].reject(new Error('opacity rejected')); await second; await settle();
   assert.equal(p.run('opacity'), 90);
-  assert.ok(states.length > 0); assert.ok(states.every(s => s.opacity === 90));
   assert.match(p.document.getElementById('pinToast').textContent, /opacity rejected/);
 });
 
@@ -292,22 +288,16 @@ test('returning to an earlier opacity value still invalidates that earlier failu
   assert.equal(p.run('opacity'), 90);
 });
 
-test('pending pin persistence finishes before later size and opacity mutations', async () => {
-  const persisted = deferred(), resized = deferred(), opacity = deferred(), calls = [];
-  const p = loadedPin({ updatePinState: (id, state) => { calls.push(['persist', JSON.parse(JSON.stringify(state))]); return calls.length === 1 ? persisted.promise : Promise.resolve(); },
-    resizePin: (...args) => { calls.push(['resize', ...args]); return resized.promise; },
+test('pin resize and opacity wait for the same native mutation queue', async () => {
+  const resized = deferred(), opacity = deferred(), calls = [];
+  const p = loadedPin({ resizePin: (...args) => { calls.push(['resize', ...args]); return resized.promise; },
     setPinOpacity: (...args) => { calls.push(['opacity', ...args]); return opacity.promise; } });
-  const saving = p.run('persistState()'); await settle();
   p.run('applyResize(300, 200)'); await p.tick(70);
   const changing = p.run('adjustOpacity(-10)'); await settle();
-  assert.equal(calls.length, 1, 'later mutations must wait for an older state write');
-  assert.deepEqual(calls[0], ['persist', { width: 240, height: 160, opacity: 100 }]);
-  persisted.resolve(); await saving; await settle();
-  assert.deepEqual(calls[1], ['resize', 'pin', 300, 200]);
+  assert.deepEqual(calls, [['resize', 'pin', 300, 200]]);
   resized.resolve(); await settle();
-  assert.deepEqual(calls[2], ['opacity', 'pin', 90]);
-  opacity.resolve(); await changing; await p.tick(420);
-  assert.deepEqual(calls.at(-1), ['persist', { width: 300, height: 200, opacity: 90 }]);
+  assert.deepEqual(calls[1], ['opacity', 'pin', 90]);
+  opacity.resolve(); await changing;
 });
 
 test('pin fit never rounds extremely thin images down to a zero dimension', () => {
@@ -324,8 +314,8 @@ test('failed pin reset keeps the error visible instead of reporting success', as
 });
 
 test('failed pin state persistence is visible', async () => {
-  const p = loadedPin({ updatePinState: async () => { throw new Error('store unavailable'); } });
-  await p.run('persistState()');
+  const p = loadedPin({ setPinOpacity: async () => { throw new Error('store unavailable'); } });
+  await p.run('adjustOpacity(-10)');
   assert.equal(p.document.getElementById('pinToast').hidden, false);
   assert.match(p.document.getElementById('pinToast').textContent, /store unavailable/);
 });

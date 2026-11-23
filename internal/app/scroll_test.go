@@ -36,6 +36,59 @@ func TestManualScrollWaitsOnStaticContentWithoutUsingFrameBudget(test *testing.T
 	})
 }
 
+func TestManualScrollStaysOpenAfterMovementStops(test *testing.T) {
+	test.Setenv("PINSTILL_SELFTEST_SCROLL_SIM", "1")
+	simulatedScrollCounter.Store(0)
+	synctest.Test(test, func(test *testing.T) {
+		session := &scrollSession{
+			region: capture.Rect{Width: 520, Height: 420},
+			acc:    stitch.New(stitch.Options{}),
+			stop:   make(chan struct{}),
+			done:   make(chan struct{}),
+		}
+		app := &App{scroll: session, capturing: true, settings: Settings{KeepHistory: true}}
+		go app.scrollLoop(session)
+		defer func() {
+			close(session.stop)
+			<-session.done
+		}()
+
+		time.Sleep(6 * time.Second)
+		synctest.Wait()
+		frames, height, status, auto := session.snapshot()
+		if session.isFinalized() || auto || status != "stalled" || frames != 7 || height != 2600 {
+			test.Fatalf("manual capture after the pause: finalized=%v auto=%v status=%q frames=%d height=%d", session.isFinalized(), auto, status, frames, height)
+		}
+	})
+}
+
+func TestAutomaticScrollWithoutProgressLeavesCaptureOpen(test *testing.T) {
+	test.Setenv("PINSTILL_SELFTEST_SCROLL_SIM", "1")
+	simulatedScrollCounter.Store(100)
+	synctest.Test(test, func(test *testing.T) {
+		session := &scrollSession{
+			region: capture.Rect{Width: 520, Height: 420},
+			auto:   true,
+			acc:    stitch.New(stitch.Options{}),
+			stop:   make(chan struct{}),
+			done:   make(chan struct{}),
+		}
+		app := &App{scroll: session, capturing: true, settings: Settings{KeepHistory: true}}
+		go app.scrollLoop(session)
+		defer func() {
+			close(session.stop)
+			<-session.done
+		}()
+
+		time.Sleep(6 * time.Second)
+		synctest.Wait()
+		frames, _, status, auto := session.snapshot()
+		if session.isFinalized() || auto || status != "stalled" || frames != 1 {
+			test.Fatalf("automatic capture without movement: finalized=%v auto=%v status=%q frames=%d", session.isFinalized(), auto, status, frames)
+		}
+	})
+}
+
 func TestFinishScrollReleasesStoppedSession(t *testing.T) {
 	for _, action := range []string{"finish", "cancel"} {
 		t.Run(action, func(t *testing.T) {
@@ -64,7 +117,7 @@ func TestOldScrollFinalizerDoesNotClearNewSession(t *testing.T) {
 	old := &scrollSession{acc: stitch.New(stitch.Options{})}
 	current := &scrollSession{}
 	a := &App{scroll: current, capturing: true}
-	a.finalizeScroll(old, "stalled")
+	a.finalizeScroll(old, "stalled", 0)
 	if a.scroll != current || !a.capturing {
 		t.Fatal("an old scroll completion cleared the newer capture")
 	}
@@ -73,9 +126,18 @@ func TestOldScrollFinalizerDoesNotClearNewSession(t *testing.T) {
 func TestCancelledScrollDoesNotAutoFinalize(t *testing.T) {
 	session := &scrollSession{stopped: true, acc: stitch.New(stitch.Options{})}
 	a := &App{scroll: session, capturing: true}
-	a.finalizeScroll(session, "stalled")
+	a.finalizeScroll(session, "stalled", 0)
 	if session.isFinalized() {
 		t.Fatal("cancelled scrolling capture was finalized by the capture loop")
+	}
+}
+
+func TestAutoEndCannotFinishAfterReturningToManual(t *testing.T) {
+	session := &scrollSession{auto: false, mode: 2, acc: stitch.New(stitch.Options{})}
+	app := &App{scroll: session, capturing: true}
+	app.finalizeScroll(session, "stalled", 1)
+	if session.isFinalized() || app.scroll != session {
+		t.Fatal("an automatic end replaced the manual capture")
 	}
 }
 

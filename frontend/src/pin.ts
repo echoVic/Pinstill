@@ -10,8 +10,7 @@
 //   window keeping the aspect ratio, Esc closes;
 // - opacity is owned by Go in native mode (`SetPinOpacity` → Window.SetOpacity);
 //   the page never stacks CSS opacity on top;
-// - size/opacity changes are applied through ResizePin / SetPinOpacity and
-//   persisted with a debounced UpdatePinState.
+// - ResizePin and SetPinOpacity persist each change before applying it.
 //
 // The page also accepts the same fields as query parameters and simulates the
 // behavior with toasts in a plain browser (hasNative === false), so the static
@@ -21,10 +20,13 @@ import {
   closePin,
   copyPin,
   hasNative,
+  managePin,
+  onPinPresentation,
   resizePin,
   savePin,
   setPinOpacity,
-  updatePinState,
+  showPinManager,
+  type PinPresentation,
 } from "./bridge";
 import { currentWindow, isMyGo } from "mygo-runtime";
 import { events } from "./mygo";
@@ -35,7 +37,6 @@ type PinInit = Partial<PinInitPayload>;
 const MIN_WIDTH = 96;
 const SCREEN_RATIO = 0.9;
 const RESIZE_DEBOUNCE = 70;
-const PERSIST_DEBOUNCE = 420;
 
 const el = <T extends HTMLElement = HTMLElement>(id: string): T => {
   const element = document.getElementById(id);
@@ -56,6 +57,10 @@ let pinId = "";
 let closing = false;
 let imageLoaded = false;
 let menuOpen = false;
+let presentationBusy = false;
+let rotation = 0;
+let flipX = false;
+let flipY = false;
 
 /** Tracked opacity (10..100); Go applies it in native mode. */
 let opacity = 100;
@@ -65,7 +70,7 @@ let initialHeight = 0;
 /** Tracked window size in DIP (updated by wheel/grip/resizes). */
 let currentWidth = 0;
 let currentHeight = 0;
-// Persist only values acknowledged by native operations.
+// Keep the last successful native values for rollback.
 let acceptedWidth = 0;
 let acceptedHeight = 0;
 let acceptedOpacity = 100;
@@ -74,7 +79,6 @@ let opacitySequence = 0;
 let aspect = 1;
 
 let resizeTimer: number | undefined;
-let persistTimer: number | undefined;
 let toastTimer: number | undefined;
 type ResizeTarget = { width: number; height: number };
 let pendingResize: ResizeTarget | null = null;
@@ -142,47 +146,10 @@ function fitToScreen(width: number): { width: number; height: number } {
 function originalSize(): { width: number; height: number } | null {
   if (!imageLoaded || !image.naturalWidth || !image.naturalHeight) return null;
   const dpr = window.devicePixelRatio || 1;
-  const width = image.naturalWidth / dpr;
-  const height = image.naturalHeight / dpr;
+  const width = (rotation % 2 ? image.naturalHeight : image.naturalWidth) / dpr;
+  const height = (rotation % 2 ? image.naturalWidth : image.naturalHeight) / dpr;
   aspect = width / height;
   return fitToScreen(width);
-}
-
-// ---------------------------------------------------------------------------
-// Persistence
-// ---------------------------------------------------------------------------
-
-function schedulePersist(): void {
-  if (!hasNative || !pinId) return;
-  if (persistTimer) window.clearTimeout(persistTimer);
-  persistTimer = window.setTimeout(() => {
-    persistTimer = undefined;
-    void persistState();
-  }, PERSIST_DEBOUNCE);
-}
-
-async function persistState(): Promise<void> {
-  if (!hasNative || !pinId) return;
-  await enqueuePinMutation(async () => {
-    const state = {
-      width: Math.round(acceptedWidth || initialWidth),
-      height: Math.round(acceptedHeight || initialHeight),
-      opacity: Math.round(acceptedOpacity),
-    };
-    try {
-      await updatePinState(pinId, state);
-    } catch (error) {
-      toast(`保存贴图状态失败：${errorMessage(error)}`);
-    }
-  });
-}
-
-function flushPersist(): void {
-  if (persistTimer) {
-    window.clearTimeout(persistTimer);
-    persistTimer = undefined;
-  }
-  void persistState();
 }
 
 // ---------------------------------------------------------------------------
@@ -223,7 +190,6 @@ function applyNativeResize(width: number, height: number): Promise<boolean> {
             await resizePin(pinId, next.width, next.height);
             acceptedWidth = next.width;
             acceptedHeight = next.height;
-            schedulePersist();
             succeeded = true;
           } catch (error) {
             succeeded = false;
@@ -251,13 +217,11 @@ async function flushResize(): Promise<void> {
     resizeTimer = undefined;
   }
   if (hasNative && pinId) {
-    const resized = await applyNativeResize(
+    await applyNativeResize(
       currentWidth || initialWidth,
       currentHeight || initialHeight,
     );
-    if (!resized) return;
   }
-  flushPersist();
 }
 
 async function closeWindow(): Promise<void> {
@@ -336,7 +300,6 @@ async function adjustOpacity(delta: number): Promise<void> {
       await setPinOpacity(pinId, next);
       acceptedOpacity = next;
       if (sequence === opacitySequence) toast(`不透明度 ${next}%`);
-      schedulePersist();
     } catch (error) {
       if (sequence === opacitySequence) {
         opacity = acceptedOpacity;
@@ -373,6 +336,55 @@ async function resetSize(): Promise<void> {
 
 function updateMenuState(): void {
   menuState.textContent = `桌面贴图 · 不透明度 ${Math.round(opacity)}%`;
+}
+
+function renderOrientation(): void {
+  const sideways = rotation % 2 === 1;
+  windowEl.classList.toggle("sideways", sideways);
+  image.style.transform = `translate(-50%, -50%) rotate(${rotation * 90}deg) scale(${flipX ? -1 : 1}, ${flipY ? -1 : 1})`;
+  if (imageLoaded && image.naturalWidth && image.naturalHeight) {
+    aspect = sideways ? image.naturalHeight / image.naturalWidth : image.naturalWidth / image.naturalHeight;
+  }
+}
+
+function applyPresentation(state: PinPresentation): void {
+  if (state.id !== pinId) return;
+  if (state.rotation !== rotation && state.width > 0 && state.height > 0) {
+    currentWidth = acceptedWidth = state.width;
+    currentHeight = acceptedHeight = state.height;
+    aspect = state.width / state.height;
+  }
+  rotation = state.rotation;
+  flipX = state.flipX;
+  flipY = state.flipY;
+  renderOrientation();
+}
+
+async function runPresentationAction(action: string): Promise<void> {
+  if (closing || presentationBusy) return;
+  if (!hasNative) {
+    if (action === "rotate-right" || action === "rotate-left") {
+      rotation = (rotation + (action === "rotate-right" ? 1 : 3)) % 4;
+    } else if (action === "flip-horizontal" || action === "flip-vertical") {
+      if ((action === "flip-horizontal") === (rotation % 2 === 0)) flipX = !flipX;
+      else flipY = !flipY;
+    } else {
+      toast("请在桌面应用的贴图管理中操作");
+      return;
+    }
+    renderOrientation();
+    return;
+  }
+  presentationBusy = true;
+  try {
+    if (resizeTimer !== undefined) await flushResize();
+    const state = await enqueuePinMutation(() => managePin(pinId, action));
+    applyPresentation(state);
+  } catch (error) {
+    toast(`无法更新贴图：${errorMessage(error)}`);
+  } finally {
+    presentationBusy = false;
+  }
 }
 
 function closeMenu(): void {
@@ -442,6 +454,17 @@ menu.addEventListener("click", (event) => {
     case "reset-size":
       void resetSize();
       return;
+    case "rotate-left":
+    case "rotate-right":
+    case "flip-horizontal":
+    case "flip-vertical":
+    case "lock":
+    case "hide":
+      void runPresentationAction(action);
+      return;
+    case "manage":
+      void showPinManager().catch((error) => toast(`无法打开贴图管理：${errorMessage(error)}`));
+      return;
     case "close":
       void closeWindow();
       return;
@@ -459,7 +482,7 @@ closeButton.addEventListener("click", () => void closeWindow());
 window.addEventListener(
   "wheel",
   (event) => {
-    if (!imageLoaded || closing) return;
+    if (!imageLoaded || closing || presentationBusy) return;
     event.preventDefault();
     const now = performance.now();
     if (event.ctrlKey || event.metaKey) {
@@ -492,7 +515,7 @@ window.addEventListener(
 // ---------------------------------------------------------------------------
 
 resizeHandle.addEventListener("pointerdown", (event) => {
-  if (closing || !imageLoaded || event.button !== 0) return;
+  if (closing || presentationBusy || !imageLoaded || event.button !== 0) return;
   event.preventDefault();
   event.stopPropagation();
   closeMenu();
@@ -558,6 +581,7 @@ function applyPin(init: PinInit): void {
     aspect = initialWidth / initialHeight;
     document.title = `Pinstill — 贴图 ${initialWidth} × ${initialHeight}`;
   }
+  if (init.presentation) applyPresentation(init.presentation);
   updateMenuState();
   if (!init.url) {
     showError("贴图缺少图片地址");
@@ -576,7 +600,7 @@ function applyPin(init: PinInit): void {
       acceptedWidth = initialWidth;
       acceptedHeight = initialHeight;
     }
-    if (image.naturalWidth && image.naturalHeight) aspect = image.naturalWidth / image.naturalHeight;
+    renderOrientation();
     errorEl.hidden = true;
     updateMenuState();
   };
@@ -615,6 +639,7 @@ if (isMyGo()) {
     // Never let a missing runtime break the page.
   }
 }
+onPinPresentation(applyPresentation);
 
 // Debug/fallback: /pin.html?id=…&url=…&width=…&height=…&opacity=…&border=1
 const params = new URLSearchParams(window.location.search);

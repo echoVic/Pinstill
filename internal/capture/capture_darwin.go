@@ -42,7 +42,7 @@ func CaptureRegion(rect Rect, opts CaptureOptions) ([]byte, error) {
 	if err := imagebudget.CheckDimensions(width, height); err != nil {
 		return nil, err
 	}
-	if err := checkDarwinCapturePixels(width, height); err != nil {
+	if err := checkDarwinCapturePixels(width, height, opts.BackingScale); err != nil {
 		return nil, err
 	}
 	sleepBeforeCapture(opts)

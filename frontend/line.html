@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pinstill 桌面晾绳</title>
+  <style>
+    :root { color-scheme: dark; font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body { margin: 0; color: #f7f0e5; background: transparent; overflow: hidden; }
+    main { height: 100vh; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) 37px; gap: 6px; padding: 5px 8px 4px; }
+    header, .line-controls { align-items: center; display: flex; gap: 4px; width: fit-content; max-width: 100%; border-radius: 9px; background: #25221d; border: 1px solid #f7f0e540; padding: 3px; }
+    header { margin-inline: auto; }
+    h1 { font-size: 13px; line-height: 1; font-weight: 650; white-space: nowrap; margin: 0 7px; }
+    button { color: inherit; font: inherit; cursor: pointer; }
+    header button, .line-controls button { border: 0; border-radius: 5px; background: transparent; padding: 4px 8px; white-space: nowrap; }
+    header button:hover:not(:disabled), .line-controls button:hover:not(:disabled) { background: #4d4233; }
+    button:focus-visible { outline: 2px solid #f4b76c; outline-offset: 2px; }
+    button:disabled { color: #9a9082; cursor: default; }
+    #lineImport { color: #ffe2bf; background: #463728; }
+    .rig { position: relative; display: grid; min-height: 0; isolation: isolate; }
+    .rope { position: absolute; top: 0; inset-inline: 4px; height: 13px; border-bottom: 2px solid #e6ca9f; border-radius: 0 0 50% 50%; filter: drop-shadow(0 1px 1px #201611); pointer-events: none; }
+    .rope::before, .rope::after { content: ""; position: absolute; top: 4px; width: 7px; height: 7px; border: 1px solid #d6b28b; border-radius: 50%; background: #684a32; }
+    .rope::before { left: 0; }
+    .rope::after { right: 0; }
+    .line-photos { display: flex; justify-content: safe center; align-items: flex-start; gap: 17px; padding: 18px 14px 9px; overflow: auto hidden; scrollbar-width: thin; }
+    .line-photo { flex: 0 0 130px; position: relative; height: 111px; padding: 6px 6px 3px; border: 1px solid #d4c7ae; border-radius: 3px; color: #3a3025; background: #f4eee0; box-shadow: 0 4px 8px #120d0a60; display: grid; grid-template-rows: minmax(0, 1fr) 17px; gap: 3px; cursor: grab; }
+    .line-photo::before { content: ""; position: absolute; top: -15px; left: calc(50% - 4px); width: 8px; height: 22px; border-radius: 2px; background: #a77c52; border: 1px solid #715032; box-shadow: 0 1px 2px #19100770; }
+    .line-photo img { width: 100%; height: 100%; object-fit: contain; background: #e5ddcd; pointer-events: none; }
+    .line-photo span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
+    .line-photo[aria-pressed="true"] { border-color: #b16e35; outline: 2px solid #f4b76c; outline-offset: 2px; }
+    .line-photo.drop-target { outline: 2px dashed #f4b76c; outline-offset: 4px; }
+    .line-photo:active { cursor: grabbing; }
+    .line-empty { justify-self: center; align-self: center; margin: 0 10px; padding: 7px 12px; border-radius: 7px; color: #eee1ce; background: #25221d; text-align: center; }
+    footer { display: flex; align-items: center; justify-content: center; gap: 8px; min-width: 0; }
+    .line-controls button { font-size: 12px; }
+    #lineRemove { color: #ffc1b5; }
+    #lineStatus:not(:empty) { padding: 3px 8px; min-width: 0; border-radius: 5px; background: #25221d; font-size: 12px; }
+    #lineStatus[data-kind="error"] { color: #ffc1b5; }
+    @media (max-width: 500px) { footer { flex-wrap: wrap; align-content: center; gap: 2px; } .line-controls button { padding-inline: 4px; } }
+  </style>
+</head>
+<body>
+  <main aria-labelledby="lineTitle">
+    <header>
+      <h1 id="lineTitle">桌面晾绳</h1>
+      <button type="button" id="lineImport">选图</button>
+      <button type="button" id="lineClipboard">挂剪贴板图片</button>
+      <button type="button" id="lineHide">隐藏</button>
+    </header>
+    <div class="rig">
+      <div class="rope" aria-hidden="true"></div>
+      <div class="line-photos" id="linePhotos" aria-label="晾绳上的图片" hidden></div>
+      <p class="line-empty" id="lineEmpty">正在读取晾绳…</p>
+    </div>
+    <footer>
+      <div class="line-controls" id="lineControls" role="group" aria-label="所选图片操作" hidden>
+        <button type="button" id="lineMoveLeft">左移</button>
+        <button type="button" id="lineMoveRight">右移</button>
+        <button type="button" id="lineCopy">复制</button>
+        <button type="button" id="lineSave">保存</button>
+        <button type="button" id="linePin">置顶贴图</button>
+        <button type="button" id="lineRemove" title="从晾绳取下这张图片">取下</button>
+      </div>
+      <output id="lineStatus" aria-live="polite"></output>
+    </footer>
+  </main>
+  <script type="module" src="/src/line.ts"></script>
+</body>
+</html>

@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/echoVic/Pinstill/internal/diskio"
 	"github.com/echoVic/Pinstill/internal/imagebudget"
@@ -72,7 +73,13 @@ type State struct {
 	// CreatedAt is the creation time, used to keep a stable restore order.
 	CreatedAt time.Time `json:"createdAt"`
 	// Archived pins retain their image and state but never reopen automatically.
-	Archived bool `json:"archived,omitempty"`
+	Archived     bool   `json:"archived,omitempty"`
+	Group        string `json:"group,omitempty"`
+	Hidden       bool   `json:"hidden,omitempty"`
+	ClickThrough bool   `json:"clickThrough,omitempty"`
+	Rotation     int    `json:"rotation,omitempty"`
+	FlipX        bool   `json:"flipX,omitempty"`
+	FlipY        bool   `json:"flipY,omitempty"`
 }
 
 // Store persists pin images and their state in one directory.
@@ -265,6 +272,7 @@ func (s *Store) Upsert(st State) (State, error) {
 	st.Width = max(st.Width, minPinSize)
 	st.Height = max(st.Height, minPinSize)
 	st.Opacity = normalizeOpacity(st.Opacity)
+	st = normalizePresentation(st)
 	if st.CreatedAt.IsZero() {
 		if found {
 			st.CreatedAt = existing.CreatedAt
@@ -501,8 +509,74 @@ func normalizeState(st State) (State, error) {
 	st.Width = max(st.Width, minPinSize)
 	st.Height = max(st.Height, minPinSize)
 	st.Opacity = normalizeOpacity(st.Opacity)
+	st = normalizePresentation(st)
 	st.CreatedAt = st.CreatedAt.Round(0)
 	return st, nil
+}
+
+func NormalizeGroup(label string) string {
+	label = strings.Join(strings.FieldsFunc(label, func(character rune) bool {
+		return unicode.IsSpace(character) || unicode.IsControl(character)
+	}), " ")
+	characters := []rune(label)
+	return strings.TrimSpace(string(characters[:min(40, len(characters))]))
+}
+
+func normalizePresentation(state State) State {
+	state.Group = NormalizeGroup(state.Group)
+	state.Rotation = (state.Rotation%4 + 4) % 4
+	return state
+}
+
+func (s *Store) UpdateExisting(ids []string, change func(*State)) ([]State, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	wanted := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if _, err := validateID(id); err != nil {
+			return nil, err
+		}
+		wanted[id] = true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockAndRefresh()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	states := slices.Clone(s.states)
+	updated := make([]State, 0, len(wanted))
+	changed := false
+	for index, state := range states {
+		if !wanted[state.ID] || state.Archived {
+			continue
+		}
+		previous := state
+		change(&state)
+		state.ID, state.File, state.CreatedAt, state.Archived = previous.ID, previous.File, previous.CreatedAt, previous.Archived
+		state, err = normalizeState(state)
+		if err != nil {
+			return nil, err
+		}
+		changed = changed || state != previous
+		states[index] = state
+		updated = append(updated, state)
+	}
+	if len(wanted) != len(updated) {
+		return nil, errors.New("pin: selected active pins were removed")
+	}
+	if changed {
+		if err := s.writeIndex(states); err != nil {
+			if diskio.Committed(err) {
+				return updated, err
+			}
+			return nil, err
+		}
+		s.states = states
+	}
+	return updated, nil
 }
 
 // normalizeOpacity clamps a percentage to 10..100. Zero, negatives and NaN mean

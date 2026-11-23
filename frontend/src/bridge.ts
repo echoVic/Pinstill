@@ -20,6 +20,7 @@ export type Rect = Native.Rect;
 
 /** Display geometry the overlay page runs on. */
 export type OverlayInfo = Native.OverlayInfo;
+export type OverlayPreview = Native.OverlayPreviewPayload;
 
 /** Visible desktop window projected into overlay-local CSS pixels. */
 export type OverlayWindow = Native.OverlayWindow;
@@ -50,7 +51,7 @@ export interface ScrollProgress {
   frames: number;
   /** Total stitched height in image pixels. */
   height: number;
-  status: "running" | "paused" | "stalled" | "max";
+  status: "running" | "paused" | "stalled" | "unaligned" | "max";
   /** Current automatic-scrolling state, when Go reports it. */
   auto?: boolean;
 }
@@ -65,7 +66,7 @@ export type ScrollFinishAction = "finish" | "cancel";
 export type OverlayCapture = Native.OverlayCapturePayload;
 
 /** What `Capture.FinishAnnotated` does with the composited PNG. */
-export type FinishAnnotatedAction = "copy" | "pin" | "save" | "cancel";
+export type FinishAnnotatedAction = "copy" | "pin" | "hang" | "save" | "cancel";
 
 export type CaptureActionResult = Native.CaptureActionResult;
 
@@ -128,11 +129,84 @@ export function pinClipboard(): Promise<string> {
   return Capture.pinClipboard();
 }
 
+export type QuickCaptureInfo = Native.QuickCaptureInfo;
+
+export function quickCapture(): Promise<QuickCaptureInfo> {
+  return Capture.quickCapture();
+}
+
+export function showQuickCapture(id: string): Promise<void> {
+  return Capture.showQuickCapture(id);
+}
+
+export function quickAction(id: string, action: string): Promise<CaptureActionResult> {
+  return Capture.quickAction(id, action);
+}
+
+export function dismissQuickCapture(id: string): Promise<void> {
+  return Capture.dismissQuickCapture(id);
+}
+
 export function closePin(id: string): Promise<void> {
   if (!hasNative) return Promise.resolve();
   return Capture.closePin(id);
 }
 
+export type ManagedPin = Native.ManagedPin;
+export type PinPresentation = Native.PinPresentation;
+
+export function listManagedPins(): Promise<ManagedPin[]> {
+  return hasNative ? Capture.listManagedPins() : Promise.resolve([]);
+}
+
+export function managePin(id: string, action: string, value = ""): Promise<PinPresentation> {
+  return Capture.managePin(id, action, value);
+}
+
+export function managePinGroup(group: string, action: string, value = ""): Promise<void> {
+  return Capture.managePinGroup(group, action, value);
+}
+
+export function showPinManager(): Promise<void> {
+  return hasNative ? Capture.showPinManager() : Promise.resolve();
+}
+
+export const onPinPresentation = (callback: (payload: PinPresentation) => void) =>
+  subscribe(events.pinPresentation, callback);
+export const onManagedPinsChanged = (callback: () => void) =>
+  subscribe(events.pinManaged, callback);
+
+export type LineView = Native.LineView;
+
+export function listClothesline(): Promise<LineView> {
+  return hasNative ? Capture.listClothesline() : Promise.resolve({ revision: 0, entries: [] });
+}
+
+export const onLineChanged = (callback: (view: LineView) => void) => subscribe(events.lineChanged, callback);
+
+export function hideClothesline(): Promise<void> {
+  return hasNative ? Capture.hideClothesline() : Promise.resolve();
+}
+
+export function importClotheslineImage(): Promise<boolean> {
+  return hasNative ? Capture.importClotheslineImage() : Promise.resolve(false);
+}
+
+export function hangClipboard(): Promise<void> {
+  return hasNative ? Capture.hangClipboard() : Promise.reject(new Error("桌面应用才能读取剪贴板图片"));
+}
+
+export function moveClotheslineImage(id: string, before: string): Promise<void> {
+  return hasNative ? Capture.moveClotheslineImage(id, before) : Promise.resolve();
+}
+
+export function removeClotheslineImage(id: string): Promise<void> {
+  return hasNative ? Capture.removeClotheslineImage(id) : Promise.resolve();
+}
+
+export function useClotheslineImage(id: string, action: "copy" | "pin" | "save"): Promise<boolean> {
+  return hasNative ? Capture.useClotheslineImage(id, action) : Promise.resolve(false);
+}
 
 export function resizePin(id: string, width: number, height: number): Promise<void> {
   if (!hasNative) return Promise.resolve();
@@ -174,6 +248,18 @@ export function prepareSelection(rect: Rect): Promise<OverlayCapture> {
 export function prepareSelectionFast(rect: Rect): Promise<OverlayCapture> {
   if (!hasNative) return Promise.resolve(browserCapture(rect));
   return Capture.prepareSelectionFast(rect);
+}
+
+export type PixelSample = Native.PixelSample;
+
+export function sampleOverlayPixels(x: number, y: number): Promise<PixelSample> {
+  if (!hasNative) return Promise.reject(new Error("桌面应用才能读取屏幕像素"));
+  return Capture.sampleOverlayPixels(x, y);
+}
+
+export async function copyPixelColor(hex: string): Promise<void> {
+  if (hasNative) return Capture.copyPixelColor(hex);
+  await navigator.clipboard.writeText(hex);
 }
 
 export function finishAnnotated(
@@ -229,6 +315,11 @@ export async function pinScrollResult(id: string): Promise<string> {
   requireScrollResultID(id);
   if (!hasNative) return "browser-preview-pin";
   return Capture.pinScrollResult(id);
+}
+
+export async function hangScrollResult(id: string): Promise<void> {
+  requireScrollResultID(id);
+  if (hasNative) await Capture.hangScrollResult(id);
 }
 
 export async function closeScrollResult(id: string): Promise<void> {
@@ -352,6 +443,10 @@ export function historyPin(id: string): Promise<string> {
   return History.pin(id);
 }
 
+export function historyHang(id: string): Promise<void> {
+  return hasNative ? History.hang(id) : Promise.resolve();
+}
+
 export function historyRemove(id: string): Promise<void> {
   if (!hasNative) {
     mockEntries = mockHistory().filter((entry) => entry.id !== id);
@@ -379,6 +474,12 @@ function subscribe<T>(event: { on: (listener: (payload: T) => void) => () => voi
 export const onCaptureCancelled = (cb: (payload: Native.CaptureCancelledPayload) => void) => subscribe(events.captureCancelled, cb);
 export const onCaptureFailed = (cb: (payload: Native.CaptureFailedPayload) => void) => subscribe(events.captureFailed, cb);
 export const onOverlayShown = (cb: (payload: OverlayInfo) => void) => subscribe(events.overlayShown, cb);
+export const onOverlayPreview = (cb: (payload: OverlayPreview) => void) => subscribe(events.overlayPreview, cb);
+
+export function previewOverlaySelection(session: number, rect: Rect | null): Promise<void> {
+  if (!hasNative) return Promise.resolve();
+  return Capture.previewOverlaySelection(session, rect);
+}
 export const onScrollInit = (cb: (payload: ScrollInit) => void) => subscribe(events.scrollInit, cb);
 export const onScrollProgress = (cb: (payload: ScrollProgress) => void) => subscribe(events.scrollProgress, (value) => cb({ ...value, status: value.status as ScrollProgress["status"] }));
 export const onScrollResult = (cb: (payload: ScrollResult) => void) => subscribe(events.scrollResult, cb);

@@ -168,14 +168,20 @@ func (a *App) publishScrollResult(pngBytes []byte, meta ScrollResultPayload) {
 	_ = EventScrollResult.Emit(win, meta)
 }
 
-// scrollResultPNG returns the stitched image the preview window shows.
-func (a *App) scrollResultPNG(id string) ([]byte, *mygo.Window, error) {
+type scrollResultSnapshot struct {
+	png        []byte
+	window     *mygo.Window
+	meta       ScrollResultPayload
+	generation uint64
+}
+
+func (a *App) scrollResultSnapshot(id string) (scrollResultSnapshot, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if id == "" || id != a.resultMeta.ID || len(a.resultPNG) == 0 {
-		return nil, nil, errors.New("没有可用的滚动截图结果")
+		return scrollResultSnapshot{}, errors.New("没有可用的滚动截图结果")
 	}
-	return a.resultPNG, a.result, nil
+	return scrollResultSnapshot{png: a.resultPNG, window: a.result, meta: a.resultMeta, generation: a.captureGeneration}, nil
 }
 
 // scrollResultMeta returns the preview metadata (empty when no preview is up).
@@ -192,15 +198,15 @@ func (a *App) copyScrollResult() error {
 }
 
 func (a *App) copyScrollResultFor(id string) error {
-	pngBytes, win, err := a.scrollResultPNG(id)
+	result, err := a.scrollResultSnapshot(id)
 	if err != nil {
 		return err
 	}
-	if err := a.copyImagePNG(pngBytes); err != nil {
+	if err := a.copyImagePNG(result.png); err != nil {
 		return err
 	}
 	a.toast("长图已复制到剪贴板", "success")
-	a.closeScrollResultSoon(win)
+	a.completeScrollResultQuick(result, "copy")
 	return nil
 }
 
@@ -211,19 +217,29 @@ func (a *App) saveScrollResult() (string, error) {
 }
 
 func (a *App) saveScrollResultFor(id string) (string, error) {
-	pngBytes, win, err := a.scrollResultPNG(id)
+	result, err := a.scrollResultSnapshot(id)
 	if err != nil {
 		return "", err
 	}
-	path, err := a.savePNGBytes(pngBytes)
+	path, err := a.savePNGBytes(result.png)
 	if err != nil {
 		return "", err
 	}
 	if path != "" {
 		a.toast("长图已保存到 "+path, "success")
-		a.closeScrollResultSoon(win)
+		a.completeScrollResultQuick(result, "save")
 	}
 	return path, nil
+}
+
+func (a *App) completeScrollResultQuick(result scrollResultSnapshot, action string) {
+	a.closeScrollResultSoon(result.window)
+	if a.scrollResultMeta().ID != result.meta.ID {
+		return
+	}
+	a.postQuickCapture(result.generation, action, result.png, capturePayload{
+		Width: result.meta.Width, Height: result.meta.Height, HistoryID: result.meta.HistoryID,
+	})
 }
 
 // pinScrollResult opens the stitched image as a desktop pin.
@@ -232,17 +248,17 @@ func (a *App) pinScrollResult() (string, error) {
 }
 
 func (a *App) pinScrollResultFor(id string) (string, error) {
-	pngBytes, win, err := a.scrollResultPNG(id)
+	result, err := a.scrollResultSnapshot(id)
 	if err != nil {
 		return "", err
 	}
-	width, height := imageDimensions(pngBytes)
-	pinID, err := a.pinPNG(pngBytes, width, height)
+	width, height := imageDimensions(result.png)
+	pinID, err := a.pinPNG(result.png, width, height)
 	if err != nil {
 		return "", err
 	}
 	a.toast("长图已贴到桌面", "success")
-	a.closeScrollResultSoon(win)
+	a.closeScrollResultSoon(result.window)
 	return pinID, nil
 }
 
@@ -253,12 +269,12 @@ func (a *App) closeScrollResult() {
 }
 
 func (a *App) closeScrollResultFor(id string) error {
-	_, win, err := a.scrollResultPNG(id)
+	result, err := a.scrollResultSnapshot(id)
 	if err != nil {
 		return err
 	}
-	if win != nil && !win.IsDestroyed() {
-		win.Close()
+	if result.window != nil && !result.window.IsDestroyed() {
+		result.window.Close()
 	}
 	return nil
 }

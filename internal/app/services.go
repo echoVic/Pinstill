@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -27,20 +28,24 @@ func (s *CaptureService) CancelRegion() { s.app.cancelRegion() }
 
 // OverlayReady notifies Go that the overlay page has painted its clean
 // initial state for session and may be revealed without stale-frame flash.
-func (s *CaptureService) OverlayReady(session uint64) {
-	s.app.revealOverlay(session)
+func (s *CaptureService) OverlayReady(ctx context.Context, session uint64) {
+	s.app.revealOverlayFor(mygo.CallerWindow(ctx), session)
+}
+
+func (s *CaptureService) PreviewOverlaySelection(ctx context.Context, session uint64, rect *Rect) {
+	s.app.previewOverlaySelection(mygo.CallerWindow(ctx), session, rect)
 }
 
 // PrepareSelection captures the region the user selected and hands it back
 // to the overlay, so it can annotate the capture in place on the desktop.
-func (s *CaptureService) PrepareSelection(rect Rect) (OverlayCapturePayload, error) {
-	return s.app.prepareSelection(rect)
+func (s *CaptureService) PrepareSelection(ctx context.Context, rect Rect) (OverlayCapturePayload, error) {
+	return s.app.prepareSelectionFrom(mygo.CallerWindow(ctx), rect, 90*time.Millisecond)
 }
 
 // PrepareSelectionFast re-captures a region the page has already prepared
 // (chrome hidden, one frame awaited): used when adjusting the selection.
-func (s *CaptureService) PrepareSelectionFast(rect Rect) (OverlayCapturePayload, error) {
-	return s.app.prepareSelectionFast(rect)
+func (s *CaptureService) PrepareSelectionFast(ctx context.Context, rect Rect) (OverlayCapturePayload, error) {
+	return s.app.prepareSelectionFrom(mygo.CallerWindow(ctx), rect, 20*time.Millisecond)
 }
 
 // FinishAnnotated completes an in-place annotation: it stores the composited
@@ -202,7 +207,9 @@ func (s *CaptureService) LaunchAtLogin() bool { return mygo.App.OpenAtLogin() }
 func (s *CaptureService) OpenLoginItemsSettings() error { return openLoginItemsSettings() }
 
 // OverlayInfo describes the display the overlay covers.
-func (s *CaptureService) OverlayInfo() OverlayInfo { return s.app.overlayInfo() }
+func (s *CaptureService) OverlayInfo(ctx context.Context) OverlayInfo {
+	return s.app.overlayInfoFor(mygo.CallerWindow(ctx))
+}
 
 // ShowMainWindow reveals and focuses the main window.
 func (s *CaptureService) ShowMainWindow() { s.app.showMain() }

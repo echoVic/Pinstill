@@ -127,7 +127,7 @@ func TestStitchRejectsOversizedOrMalformedFrameBeforeMutation(t *testing.T) {
 }
 
 func BenchmarkMatchSmallScroll(b *testing.B) {
-	source := tallImage(640, 1203)
+	source := uniqueRowImage(640, 1203)
 	prev, next := frame(source, 0, 1200), frame(source, 3, 1200)
 	opts := (Options{}).withDefaults(1200)
 	b.ReportAllocs()

@@ -20,6 +20,10 @@ func (a *App) releaseOverlayCacheLocked() error {
 	a.overlayCursorX = 0
 	a.overlayCursorY = 0
 	a.overlayHasCursor = false
+	a.overlaySurfaces = nil
+	a.overlayInteraction = 0
+	a.overlaySource = nil
+	a.overlayCommitted = false
 	a.clearOverlayRevealLocked()
 	return a.releaseCacheFileLocked(&a.overlaySessionFile)
 }
@@ -102,7 +106,7 @@ func (a *App) finishAnnotation(action, dataBase64 string) (CaptureActionResult, 
 		}
 		return CaptureActionResult{Completed: true}, nil
 	}
-	if action != "copy" && action != "pin" && action != "save" {
+	if action != "copy" && action != "pin" && action != "save" && action != "hang" {
 		return CaptureActionResult{}, fmt.Errorf("未知的标注动作 %q", action)
 	}
 	a.mu.Lock()
@@ -158,6 +162,9 @@ func (a *App) finishAnnotation(action, dataBase64 string) (CaptureActionResult, 
 		reportCacheCleanup(a.releaseOverlayCacheLocked())
 	}
 	a.mu.Unlock()
+	if current && err == nil && result.Completed {
+		a.postQuickCapture(generation, action, raw, payload)
+	}
 	if current && (err != nil || !result.Completed) && overlay != nil {
 		overlay.SetOpacity(1)
 		overlay.Show()

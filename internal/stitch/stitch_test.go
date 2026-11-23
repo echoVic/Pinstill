@@ -1,6 +1,7 @@
 package stitch
 
 import (
+	"errors"
 	"image"
 	"image/color"
 	"testing"
@@ -73,7 +74,7 @@ func TestStitchReconstructsScrolledFrames(t *testing.T) {
 	}
 }
 
-func TestStitchNoOverlapAppendsWholeFrame(t *testing.T) {
+func TestStitchRejectsUnrelatedFrame(t *testing.T) {
 	acc := New(Options{})
 	first := tallImage(80, 200)
 	second := tallImage(80, 200)
@@ -84,12 +85,12 @@ func TestStitchNoOverlapAppendsWholeFrame(t *testing.T) {
 	if _, err := acc.Add(first); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := acc.Add(second); err != nil {
-		t.Fatal(err)
+	if _, err := acc.Add(second); !errors.Is(err, ErrUnaligned) {
+		t.Fatalf("Add(unrelated frame) error = %v", err)
 	}
 	height, _ := acc.Size()
-	if height != 400 {
-		t.Fatalf("height = %d, want 400", height)
+	if height != 200 {
+		t.Fatalf("height = %d, want 200", height)
 	}
 }
 

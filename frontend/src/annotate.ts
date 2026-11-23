@@ -5,6 +5,10 @@
 // (a real capture drawn from a Blob-decoded ImageBitmap, so the canvas stays
 // origin-clean for mosaic sampling and PNG export) and the toolbar UI.
 
+import { annotationTextFont, arrowHead, hitsShape, shapeBounds, DEFAULT_TEXT_FONT, type ShapeBounds } from "./annotation-geometry";
+
+export { DEFAULT_TEXT_FONT } from "./annotation-geometry";
+
 export interface Point {
   x: number;
   y: number;
@@ -28,8 +32,17 @@ export interface Shape {
   /** CSS font-family stack for text shapes. */
   fontFamily?: string;
   points?: Point[];
-  _origin?: Point;
 }
+
+type ShapeStyleChange = Partial<Pick<Shape, "color" | "width" | "text" | "fontSize" | "fontFamily" | "bold" | "italic">>;
+
+interface ShapeEdit {
+  index: number;
+  before: Shape | null;
+  after: Shape | null;
+}
+
+const ANNOTATION_HISTORY_LIMIT = 200;
 
 export interface ShapeRenderStyle {
   /** Canvas pixels per logical design pixel (line widths, fonts, mosaic cells). */
@@ -40,10 +53,6 @@ export interface ShapeRenderStyle {
   /** True while the shape is the in-progress draft (cheap mosaic preview). */
   preview?: boolean;
 }
-
-/** Default stack for annotation text: system UI font with a Chinese fallback. */
-export const DEFAULT_TEXT_FONT =
-  '-apple-system, "PingFang SC", "Helvetica Neue", "Segoe UI", sans-serif';
 
 /** A tiled watermark laid over the whole capture (not a movable shape). */
 export interface WatermarkLayer {
@@ -224,21 +233,7 @@ export function drawShape(
       { x: shape.x, y: shape.y },
       { x: shape.x2, y: shape.y2 },
     ]);
-    if (shape.kind === "arrow") {
-      const angle = Math.atan2(shape.y2 - shape.y, shape.x2 - shape.x);
-      const length = (16 + shape.width) * scale;
-      strokePath(ctx, [
-        {
-          x: shape.x2 - length * Math.cos(angle - 0.45),
-          y: shape.y2 - length * Math.sin(angle - 0.45),
-        },
-        { x: shape.x2, y: shape.y2 },
-        {
-          x: shape.x2 - length * Math.cos(angle + 0.45),
-          y: shape.y2 - length * Math.sin(angle + 0.45),
-        },
-      ]);
-    }
+    if (shape.kind === "arrow") strokePath(ctx, arrowHead(shape, scale));
   }
   if (shape.kind === "brush" && shape.points) strokePath(ctx, shape.points);
   if (shape.kind === "highlight") {
@@ -248,9 +243,7 @@ export function drawShape(
   }
   if (shape.kind === "text") {
     const fontSize = (shape.fontSize ?? 14) * scale;
-    const weight = shape.bold ? "700" : "400";
-    const styleAttr = shape.italic ? "italic " : "";
-    ctx.font = `${styleAttr}${weight} ${fontSize}px ${shape.fontFamily ?? DEFAULT_TEXT_FONT}`;
+    ctx.font = annotationTextFont(shape, fontSize);
     const lines = (shape.text ?? "").split("\n");
     const lineHeight = fontSize * 1.3;
     lines.forEach((line, index) => {
@@ -273,7 +266,10 @@ export function drawShape(
     ctx.fillText(shape.text ?? "", shape.x, shape.y);
     ctx.globalAlpha = 1;
   }
-  if (shape.kind === "mosaic") drawMosaic(ctx, shape, x, y, w, h, style);
+  if (shape.kind === "mosaic") {
+    ctx.translate(-(shape.dx ?? 0), -(shape.dy ?? 0));
+    drawMosaic(ctx, shape, x + (shape.dx ?? 0), y + (shape.dy ?? 0), w, h, style);
+  }
   ctx.restore();
 }
 
@@ -296,8 +292,8 @@ export interface AnnotationEngineOptions {
 /**
  * A reusable interactive annotation surface: draws shapes over a base image the
  * caller renders through `setBaseRenderer`. Text/tag/watermark shapes place on
- * click; brush/rect/ellipse/line/arrow/mosaic/highlight drag; `drag` moves the
- * most recent shape.
+ * click; brush/rect/ellipse/line/arrow/mosaic/highlight drag; `select` picks
+ * an existing shape for editing.
  */
 export class AnnotationEngine {
   readonly canvas: HTMLCanvasElement;
@@ -305,9 +301,12 @@ export class AnnotationEngine {
   private readonly ctx: CanvasRenderingContext2D;
   private readonly options: AnnotationEngineOptions;
   private shapes: Shape[] = [];
+  private past: ShapeEdit[] = [];
+  private future: ShapeEdit[] = [];
+  private selectedIndex = -1;
   private draft: Shape | null = null;
   private start: Point | null = null;
-  private dragged: Shape | null = null;
+  private movePreview: Shape | null = null;
   private tool = "rect";
   private scale = 1;
   private labelNumber = 1;
@@ -347,7 +346,10 @@ export class AnnotationEngine {
   }
 
   setTool(tool: string): void {
+    if (tool === this.tool) return;
     this.tool = tool;
+    this.selectedIndex = -1;
+    this.cancelDraw();
   }
 
   getTool(): string {
@@ -359,28 +361,91 @@ export class AnnotationEngine {
   }
 
   canUndo(): boolean {
-    return this.shapes.length > 0;
+    return this.past.length > 0;
+  }
+
+  canRedo(): boolean {
+    return this.future.length > 0;
+  }
+
+  getSelectedShape(): Readonly<Shape> | null {
+    return this.shapes[this.selectedIndex] ?? null;
+  }
+
+  getSelectionBounds(): ShapeBounds | null {
+    const shape = this.movePreview ?? this.getSelectedShape();
+    if (!shape) return null;
+    const bounds = shapeBounds(this.ctx, shape, this.scale);
+    const margin = (3 + shape.width / 2) * this.scale;
+    return {
+      x: bounds.x + (shape.dx ?? 0) - margin,
+      y: bounds.y + (shape.dy ?? 0) - margin,
+      width: bounds.width + 2 * margin,
+      height: bounds.height + 2 * margin,
+    };
+  }
+
+  editSelectedShape(update: ShapeStyleChange): boolean {
+    const shape = this.shapes[this.selectedIndex];
+    if (!shape || this.start) return false;
+    const keys = Object.keys(update) as (keyof ShapeStyleChange)[];
+    if (!keys.some((key) => update[key] !== shape[key])) return false;
+    this.commit({ index: this.selectedIndex, before: shape, after: { ...shape, ...update } });
+    return true;
+  }
+
+  deleteSelectedShape(): boolean {
+    const shape = this.shapes[this.selectedIndex];
+    if (!shape || this.start) return false;
+    this.commit({ index: this.selectedIndex, before: shape, after: null });
+    return true;
   }
 
   reset(): void {
     this.shapes = [];
+    this.past = [];
+    this.future = [];
+    this.selectedIndex = -1;
     this.draft = null;
     this.start = null;
-    this.dragged = null;
+    this.movePreview = null;
     this.labelNumber = 1;
   }
 
   /** Adds a shape created outside the pointer flow (e.g. inline text input). */
   addShape(shape: Shape): void {
-    this.shapes.push(shape);
-    this.redraw();
+    this.commit({ index: this.shapes.length, before: null, after: shape });
   }
 
   undo(): boolean {
-    if (this.shapes.length === 0) return false;
-    this.shapes.pop();
-    this.redraw();
+    if (this.start) return false;
+    const edit = this.past.pop();
+    if (!edit) return false;
+    this.future.push(edit);
+    this.applyEdit(edit.index, edit.after, edit.before);
     return true;
+  }
+
+  redo(): boolean {
+    if (this.start) return false;
+    const edit = this.future.pop();
+    if (!edit) return false;
+    this.past.push(edit);
+    this.applyEdit(edit.index, edit.before, edit.after);
+    return true;
+  }
+
+  private applyEdit(index: number, oldShape: Shape | null, newShape: Shape | null): void {
+    this.shapes.splice(index, oldShape ? 1 : 0, ...(newShape ? [newShape] : []));
+    this.selectedIndex = this.tool === "select" && newShape ? index : -1;
+    this.redraw();
+  }
+
+  private commit(edit: ShapeEdit): void {
+    this.past.push(edit);
+    if (this.past.length > ANNOTATION_HISTORY_LIMIT) this.past.shift();
+    this.future = [];
+    this.applyEdit(edit.index, edit.before, edit.after);
   }
 
   redraw(): void {
@@ -390,13 +455,15 @@ export class AnnotationEngine {
     if (this.watermark) {
       drawTiledWatermark(this.ctx, this.watermark, this.scale, this.canvas);
     }
-    for (const shape of this.shapes) {
-      drawShape(this.ctx, shape, {
+    this.shapes.forEach((shape, index) => {
+      const preview = index === this.selectedIndex && this.movePreview;
+      drawShape(this.ctx, preview || shape, {
         scale: this.scale,
         watermarkOpacity: this.options.getWatermarkOpacity(),
         canvas: this.canvas,
+        preview: Boolean(preview),
       });
-    }
+    });
     if (this.draft) {
       drawShape(this.ctx, this.draft, {
         scale: this.scale,
@@ -410,12 +477,16 @@ export class AnnotationEngine {
 
   /** Starts a drag/draw at a canvas-space point. Returns whether it did. */
   beginDraw(point: Point): boolean {
-    if (this.tool === "drag") {
-      this.dragged = this.shapes.at(-1) ?? null;
-      if (!this.dragged) return false;
-      this.start = point;
-      this.dragged._origin = { x: this.dragged.dx ?? 0, y: this.dragged.dy ?? 0 };
-      return true;
+    if (this.tool === "select") {
+      this.selectedIndex = -1;
+      for (let index = this.shapes.length - 1; index >= 0; index--) {
+        if (!hitsShape(this.ctx, this.shapes[index]!, this.scale, point)) continue;
+        this.selectedIndex = index;
+        break;
+      }
+      this.start = this.selectedIndex >= 0 ? point : null;
+      this.redraw();
+      return this.start !== null;
     }
     if (!this.isDrawingTool(this.tool)) return false;
     const style = this.options.getStyle();
@@ -431,19 +502,25 @@ export class AnnotationEngine {
       points: [point],
       text: this.tool === "tag" ? String(this.labelNumber++) : style.entry,
     };
-    if (this.tool === "text" || this.tool === "tag" || this.tool === "watermark") {
-      this.shapes.push(this.draft);
+    if (this.tool === "text" || this.tool === "tag") {
+      const placed = this.draft;
       this.draft = null;
       this.start = null;
-      this.redraw();
+      this.addShape(placed);
     }
     return true;
   }
 
   moveDraw(point: Point): void {
-    if (this.dragged && this.start) {
-      this.dragged.dx = (this.dragged._origin?.x ?? 0) + point.x - this.start.x;
-      this.dragged.dy = (this.dragged._origin?.y ?? 0) + point.y - this.start.y;
+    const selected = this.shapes[this.selectedIndex];
+    if (selected && this.start) {
+      const dx = point.x - this.start.x;
+      const dy = point.y - this.start.y;
+      this.movePreview = Math.hypot(dx, dy) < this.scale ? null : {
+        ...selected,
+        dx: (selected.dx ?? 0) + dx,
+        dy: (selected.dy ?? 0) + dy,
+      };
       this.redraw();
       return;
     }
@@ -455,16 +532,30 @@ export class AnnotationEngine {
   }
 
   endDraw(): void {
-    if (this.draft) {
-      const draft = this.draft;
+    const selected = this.shapes[this.selectedIndex];
+    const moved = this.movePreview;
+    const draft = this.draft;
+    this.movePreview = null;
+    this.draft = null;
+    this.start = null;
+    if (selected && moved) {
+      this.commit({ index: this.selectedIndex, before: selected, after: moved });
+      return;
+    }
+    if (draft) {
       const points = draft.kind === "brush" ? draft.points ?? [] : [{ x: draft.x2, y: draft.y2 }];
       if (points.some((point) => Math.abs(point.x - draft.x) + Math.abs(point.y - draft.y) > 3)) {
-        this.shapes.push(draft);
+        this.addShape(draft);
+        return;
       }
-      this.draft = null;
     }
+    this.redraw();
+  }
+
+  cancelDraw(): void {
+    this.draft = null;
     this.start = null;
-    this.dragged = null;
+    this.movePreview = null;
     this.redraw();
   }
 

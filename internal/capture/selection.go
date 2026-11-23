@@ -22,6 +22,18 @@ func (r Rect) Empty() bool {
 	return !finite(r.X) || !finite(r.Y) || !finite(r.Width) || !finite(r.Height) || r.Width <= 0 || r.Height <= 0
 }
 
+func (r Rect) Intersect(other Rect) Rect {
+	if r.Empty() || other.Empty() {
+		return Rect{}
+	}
+	left, top := max(r.X, other.X), max(r.Y, other.Y)
+	right, bottom := min(r.X+r.Width, other.X+other.Width), min(r.Y+r.Height, other.Y+other.Height)
+	if left >= right || top >= bottom {
+		return Rect{}
+	}
+	return Rect{X: left, Y: top, Width: right - left, Height: bottom - top}
+}
+
 func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
 
 // NormalizeSelection converts two drag endpoints into a top-left rectangle.

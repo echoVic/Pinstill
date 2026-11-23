@@ -11,6 +11,7 @@ import (
 	"log"
 	"math"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,32 +28,32 @@ const (
 	scrollInitialDelay  = 260 * time.Millisecond
 	scrollMaxFrames     = 120
 	scrollMaxHeight     = 30000
-	scrollDeltaPixels   = -220
-	// scrollStableFrames is how many captures in a row have to look identical
-	// before the scrolling capture finishes itself (the end of the page, or a
-	// pause long enough to mean "done").
-	scrollStableFrames  = 3
+	scrollDeltaPixels   = 220
+	scrollAutoIdle      = 2500 * time.Millisecond
+	scrollGapRetries    = 3
 	scrollControlWidth  = 380
 	scrollControlHeight = 64
 )
 
 // scrollSession is one in-progress scrolling capture.
 type scrollSession struct {
-	id        string
-	mu        sync.Mutex
-	rect      Rect
-	region    capture.Rect
-	auto      bool
-	paused    bool
-	acc       *stitch.Accumulator
-	frames    int
-	height    int
-	status    string
-	stop      chan struct{}
-	done      chan struct{}
-	stopped   bool
-	cancelled bool
-	finalized bool
+	id           string
+	mu           sync.Mutex
+	rect         Rect
+	region       capture.Rect
+	auto         bool
+	paused       bool
+	mode         uint64
+	backingScale float64
+	acc          *stitch.Accumulator
+	frames       int
+	height       int
+	status       string
+	stop         chan struct{}
+	done         chan struct{}
+	stopped      bool
+	cancelled    bool
+	finalized    bool
 }
 
 func (s *scrollSession) snapshot() (frames, height int, status string, auto bool) {
@@ -287,6 +288,7 @@ func (a *App) startScroll(rect Rect, autoScroll bool) error {
 	overlay := a.overlay
 	disp := a.overlayDisplay
 	origin := a.overlayRect
+	displays := a.captureDisplaysLocked()
 	active := a.scroll != nil
 	control := a.control
 	a.mu.Unlock()
@@ -309,7 +311,18 @@ func (a *App) startScroll(rect Rect, autoScroll bool) error {
 		Width:  rect.Width,
 		Height: rect.Height,
 	}
-	region = clampToDisplay(region, disp.Bounds)
+	backingScale := disp.ScaleFactor
+	if len(displays) > 1 {
+		displayIndex := slices.IndexFunc(displays, func(display capture.DisplaySurface) bool {
+			return region.Intersect(display.Bounds) == region
+		})
+		if displayIndex < 0 {
+			return errors.New("滚动截图需要在同一台显示器内进行")
+		}
+		backingScale = displays[displayIndex].Scale
+	} else {
+		region = clampToDisplay(region, disp.Bounds)
+	}
 	if region.Empty() || region.Width < 16 || region.Height < 16 {
 		return errors.New("滚动截图选区太小")
 	}
@@ -337,14 +350,15 @@ func (a *App) startScroll(rect Rect, autoScroll bool) error {
 	id := fmt.Sprintf("scroll-%d", a.scrollSequence)
 	a.mu.Unlock()
 	session := &scrollSession{
-		id:     id,
-		rect:   rect,
-		region: region,
-		auto:   effectiveAuto,
-		acc:    stitch.New(stitch.Options{MaxHeight: scrollMaxHeight}),
-		status: "running",
-		stop:   make(chan struct{}),
-		done:   make(chan struct{}),
+		id:           id,
+		rect:         rect,
+		region:       region,
+		auto:         effectiveAuto,
+		backingScale: backingScale,
+		acc:          stitch.New(stitch.Options{MaxHeight: scrollMaxHeight}),
+		status:       "running",
+		stop:         make(chan struct{}),
+		done:         make(chan struct{}),
 	}
 	var startErr error
 	a.runScrollUI(func() {
@@ -375,30 +389,39 @@ func (a *App) startScroll(rect Rect, autoScroll bool) error {
 	return nil
 }
 
-// scrollLoop captures frames and stitches them until the content stops moving,
-// a limit is reached or the user finishes/cancels. A natural end finalizes on
-// its own: the stitched image opens in the result preview window.
+// scrollLoop keeps manual sessions open across pauses. Automatic sessions
+// finalize after verified movement followed by a sustained stop.
 func (a *App) scrollLoop(session *scrollSession) {
 	defer close(session.done)
-	time.Sleep(scrollInitialDelay)
-	stable := 0
-	wasAuto := false
+	if !waitForScrollFrame(session, scrollInitialDelay) {
+		return
+	}
+	var idleSince time.Time
+	var gapCount int
+	var moved bool
+	var mode uint64
 	for {
-		if session.isStopped() {
+		session.mu.Lock()
+		stopped, paused := session.stopped, session.paused
+		if mode != session.mode {
+			mode = session.mode
+			idleSince, gapCount, moved = time.Time{}, 0, false
+		}
+		session.mu.Unlock()
+		if stopped {
 			return
 		}
-		if session.isPaused() {
-			session.setStatus("paused")
-			a.emitScrollProgress(session)
-			time.Sleep(150 * time.Millisecond)
+		if paused {
+			if !waitForScrollFrame(session, 150*time.Millisecond) {
+				return
+			}
 			continue
-		}
-		if _, _, status, _ := session.snapshot(); status != "running" {
-			session.setStatus("running")
-			a.emitScrollProgress(session)
 		}
 		frame, err := a.captureScrollFrame(session)
 		if err != nil {
+			if session.isStopped() {
+				return
+			}
 			a.failScroll(session, "截图失败: "+err.Error())
 			return
 		}
@@ -407,48 +430,93 @@ func (a *App) scrollLoop(session *scrollSession) {
 			a.failScroll(session, "截图帧解码失败: "+err.Error())
 			return
 		}
+		status := "running"
 		static := session.acc.SameAsPrevious(img)
-		auto := session.isAuto()
-		if !static || (auto && !wasAuto) {
-			stable = 0
-		} else {
-			stable++
-		}
-		wasAuto = auto
+		height, frames := session.acc.Size()
 		if !static {
-			if _, err := session.acc.Add(img); err != nil {
+			_, err = session.acc.Add(img)
+			if errors.Is(err, stitch.ErrUnaligned) {
+				gapCount++
+				status = "unaligned"
+			} else if err != nil {
 				a.failScroll(session, "拼接失败: "+err.Error())
 				return
+			} else {
+				moved = moved || frames > 0
+				height, frames = session.acc.Size()
+				gapCount = 0
 			}
-			session.mu.Lock()
-			session.height, session.frames = session.acc.Size()
-			session.mu.Unlock()
+			idleSince = time.Time{}
+		} else {
+			gapCount = 0
+			if idleSince.IsZero() {
+				idleSince = time.Now()
+			}
+		}
+
+		session.mu.Lock()
+		current := !session.stopped && !session.paused && session.mode == mode
+		idle := !idleSince.IsZero()
+		wasAuto := session.auto
+		autoIdle := current && session.auto && idle && time.Since(idleSince) >= scrollAutoIdle
+		if current && session.auto && (gapCount >= scrollGapRetries || autoIdle && !moved) {
+			session.auto = false
+		}
+		if idle && !session.auto && (frames > 1 || session.status == "stalled" || wasAuto) {
+			status = "stalled"
+		}
+		if !current {
+			status = session.status
+		}
+		changed := session.frames != frames || session.status != status || session.auto != wasAuto
+		session.frames, session.height, session.status = frames, height, status
+		auto := session.auto
+		session.mu.Unlock()
+		if changed {
 			a.emitScrollProgress(session)
 		}
-		progressed := session.frames > 1
-		if (auto || progressed) && stable >= scrollStableFrames-1 {
-			a.finalizeScroll(session, "stalled")
+		if autoIdle && moved && a.finalizeScroll(session, "stalled", mode) {
 			return
 		}
-		if scrollReachedLimit(session) {
-			a.finalizeScroll(session, "max")
+		if current && scrollReachedLimit(session) && a.finalizeScroll(session, "max", mode) {
 			return
 		}
-		if auto && capture.ScrollSupported() && os.Getenv("PINSTILL_SELFTEST_SCROLL_SIM") == "" {
-			center := capture.Point{X: session.region.X + session.region.Width/2, Y: session.region.Y + session.region.Height/2}
-			if err := capture.ScrollWheel(center, scrollDeltaPixels); err != nil {
+		interval := scrollFrameInterval
+		if current && auto && gapCount == 0 {
+			if err := session.advanceScroll(mode); err != nil {
 				a.failScroll(session, "滚动失败: "+err.Error())
 				return
 			}
-			time.Sleep(scrollAutoInterval)
-			continue
+			interval = scrollAutoInterval
 		}
-		select {
-		case <-session.stop:
+		if !waitForScrollFrame(session, interval) {
 			return
-		case <-time.After(scrollFrameInterval):
 		}
 	}
+}
+
+func waitForScrollFrame(session *scrollSession, delay time.Duration) bool {
+	select {
+	case <-session.stop:
+		return false
+	case <-time.After(delay):
+		return true
+	}
+}
+
+func (session *scrollSession) advanceScroll(mode uint64) error {
+	if !capture.ScrollSupported() || os.Getenv("PINSTILL_SELFTEST_SCROLL_SIM") != "" {
+		return nil
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if !session.auto || session.paused || session.stopped || session.mode != mode {
+		return nil
+	}
+	region := session.region
+	center := capture.Point{X: region.X + region.Width/2, Y: region.Y + region.Height/2}
+	step := min(scrollDeltaPixels, max(1, int(region.Height)/3))
+	return capture.ScrollWheel(center, -int32(step))
 }
 
 func scrollReachedLimit(session *scrollSession) bool {
@@ -472,19 +540,20 @@ func (a *App) failScroll(session *scrollSession, message string) {
 // finalizeScroll stitches, stores and previews a finished scrolling capture.
 // It runs at the end of the capture loop (never for a cancel); the session is
 // cleared once the preview window is up.
-func (a *App) finalizeScroll(session *scrollSession, status string) {
+func (a *App) finalizeScroll(session *scrollSession, status string, mode uint64) bool {
 	a.mu.Lock()
 	active := a.scroll == session
 	a.mu.Unlock()
 	if !active {
-		return
+		return false
 	}
 	session.mu.Lock()
 	// A manual finish first stops and joins the capture loop. That stop is
 	// not a cancellation; automatic finalization must still respect it.
-	if session.finalized || (session.stopped && status != "finish") {
+	staleAutoEnd := status == "stalled" && (!session.auto || session.paused || session.mode != mode)
+	if session.finalized || (session.stopped && status != "finish") || staleAutoEnd {
 		session.mu.Unlock()
-		return
+		return false
 	}
 	session.finalized = true
 	frames := session.frames
@@ -504,19 +573,20 @@ func (a *App) finalizeScroll(session *scrollSession, status string) {
 	if res.Image == nil || res.Image.Bounds().Dy() < 2 {
 		a.toast("滚动截图没有抓到有效画面", "error")
 		a.clearScrollSession(session)
-		return
+		return true
 	}
 	encoded, err := imagebudget.EncodePNG(res.Image)
 	if err != nil {
 		a.toast("长图编码失败: "+err.Error(), "error")
 		a.clearScrollSession(session)
-		return
+		return true
 	}
 	capped := status == "max"
 	if err := a.showScrollResultFor(session, encoded, frames, capped); err != nil && a.scrollResultIsCurrent(session) {
 		a.toast("滚动截图保存失败: "+err.Error(), "error")
 	}
 	a.clearScrollSession(session)
+	return true
 }
 
 // clearScrollSession releases the session and the capture state.
@@ -576,7 +646,13 @@ func (a *App) setScrollAuto(enabled bool) error {
 		return errors.New("当前平台暂不支持自动滚动")
 	}
 	session.mu.Lock()
-	session.auto = enabled
+	if session.auto != enabled {
+		session.auto = enabled
+		session.mode++
+		if !session.paused {
+			session.status = "running"
+		}
+	}
 	session.mu.Unlock()
 	a.emitScrollProgress(session)
 	return nil
@@ -591,6 +667,9 @@ func (a *App) setScrollPaused(paused bool) error {
 		return errors.New("没有进行中的滚动截图")
 	}
 	session.mu.Lock()
+	if session.paused != paused {
+		session.mode++
+	}
 	session.paused = paused
 	if paused {
 		session.status = "paused"
@@ -649,7 +728,7 @@ func (a *App) finishScrollIdentity(id, action string) error {
 		// The loop reached the end of the page and already opened the preview.
 		return nil
 	}
-	a.finalizeScroll(session, "finish")
+	a.finalizeScroll(session, "finish", 0)
 	return nil
 }
 
@@ -668,6 +747,11 @@ func (a *App) applyCaptureAction(action string, pngBytes []byte, payload capture
 		} else {
 			a.toast("已固定到屏幕", "success")
 		}
+	case "hang":
+		if err := a.hangPNG(pngBytes); err != nil {
+			return CaptureActionResult{}, fmt.Errorf("挂到晾绳失败: %w", err)
+		}
+		a.toast("已挂到桌面晾绳", "success")
 	case "save":
 		if path, err := a.savePNGBytes(pngBytes); err != nil {
 			return CaptureActionResult{}, fmt.Errorf("保存失败: %w", err)

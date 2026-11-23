@@ -314,6 +314,30 @@ test('a local selection crop uses the original pixels rather than baked annotati
   assert.equal(p.run('engine.getWatermark().text'), 'Pinstill');
 });
 
+test('a resize grip keeps the selection and dimming steady until the rectangle moves', async () => {
+  const overlay = page('overlay', { bridge: { prepareSelection: async () => shot('original') } });
+  await select(overlay);
+  const grip = overlay.document.querySelector('[data-resize="e"]');
+  const canvas = overlay.document.getElementById('overlayCanvas');
+  const masks = ['maskTop', 'maskBottom', 'maskLeft', 'maskRight'].map((id) => overlay.document.getElementById(id));
+  assert.ok(masks.every((mask) => !mask.hidden));
+
+  const pointer = { pointerId: 1, button: 0, clientX: 130, clientY: 50 };
+  overlay.window.fire('pointerdown', { ...pointer, target: grip });
+  assert.equal(canvas.hidden, false, 'pressing a grip should not swap the preview');
+  assert.ok(masks.every((mask) => !mask.hidden), 'pressing a grip should not brighten the desktop');
+
+  overlay.window.fire('pointermove', { ...pointer, clientY: 64 });
+  assert.equal(canvas.hidden, false, 'movement perpendicular to the grip axis should not swap the preview');
+  overlay.window.fire('pointermove', { ...pointer, clientX: 155 });
+  assert.equal(canvas.hidden, true, 'a real change previews the live pixels');
+  assert.ok(masks.every((mask) => !mask.hidden));
+
+  overlay.window.fire('pointercancel', pointer);
+  assert.equal(canvas.hidden, false);
+  assert.equal(overlay.document.getElementById('selection').style.width, '120px');
+});
+
 for (const { edge, start, end, expected } of [
   { edge: 'n', start: [70, 10], end: [110, -20], expected: { x: 10, y: 0, width: 120, height: 90 } },
   { edge: 's', start: [70, 90], end: [30, 115], expected: { x: 10, y: 10, width: 120, height: 105 } },

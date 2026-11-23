@@ -36,13 +36,18 @@
     --app-region: drag;
   }
   .pin-window img {
+    position: absolute;
+    left: 50%;
+    top: 50%;
     display: block;
     width: 100%;
     height: 100%;
-    object-fit: fill;
+    object-fit: contain;
+    transform: translate(-50%, -50%);
     pointer-events: none;
     -webkit-user-drag: none;
   }
+  .pin-window.sideways img { width: 100vh; height: 100vw; }
   .pin-window.bordered::after {
     content: "";
     position: absolute;
@@ -207,11 +212,11 @@
       <div class="pin-menu-state" id="pinMenuState">桌面贴图</div>
       <button type="button" role="menuitem" data-menu-action="copy">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-        <span>复制</span><span class="pin-menu-hint">双击</span>
+        <span>复制原图</span><span class="pin-menu-hint">双击</span>
       </button>
       <button type="button" role="menuitem" data-menu-action="save">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
-        <span>保存</span>
+        <span>保存原图</span>
       </button>
       <span class="pin-menu-sep" aria-hidden="true"></span>
       <button type="button" role="menuitem" data-menu-action="opacity-up">
@@ -226,6 +231,15 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7V3h4"/><path d="M21 7V3h-4"/><path d="M3 17v4h4"/><path d="M21 17v4h-4"/><path d="M7 12h10"/></svg>
         <span>原始大小</span>
       </button>
+      <span class="pin-menu-sep" aria-hidden="true"></span>
+      <button type="button" role="menuitem" data-menu-action="rotate-left">向左旋转 90°</button>
+      <button type="button" role="menuitem" data-menu-action="rotate-right">向右旋转 90°</button>
+      <button type="button" role="menuitem" data-menu-action="flip-horizontal">水平翻转</button>
+      <button type="button" role="menuitem" data-menu-action="flip-vertical">垂直翻转</button>
+      <span class="pin-menu-sep" aria-hidden="true"></span>
+      <button type="button" role="menuitem" data-menu-action="hide">隐藏贴图</button>
+      <button type="button" role="menuitem" data-menu-action="lock" title="可从菜单栏的贴图管理解锁">开启鼠标穿透</button>
+      <button type="button" role="menuitem" data-menu-action="manage">贴图管理…</button>
       <span class="pin-menu-sep" aria-hidden="true"></span>
       <button type="button" role="menuitem" data-menu-action="close">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>

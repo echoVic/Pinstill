@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/echoVic/Pinstill/internal/capture"
+	"github.com/echoVic/Pinstill/internal/clothesline"
 	"github.com/echoVic/Pinstill/internal/imagebudget"
 	"github.com/echoVic/Pinstill/internal/pin"
 	"github.com/echoVic/Pinstill/internal/store"
@@ -47,6 +48,11 @@ type App struct {
 	overlayHasCursor   bool
 	overlaySession     uint64
 	overlayRevealTimer *time.Timer
+	overlayPool        []*mygo.Window
+	overlaySurfaces    []overlaySurface
+	overlayInteraction uint64
+	overlaySource      *mygo.Window
+	overlayCommitted   bool
 	setOverlayOpacity  func(float64)
 	overlayUI          func(func())
 	visibleWindows     func(excludePID int) []capture.WindowInfo
@@ -60,11 +66,19 @@ type App struct {
 	annotationDigest    [32]byte
 	annotationPayload   capturePayload
 	captureAction       func(string, []byte, capturePayload) (CaptureActionResult, error)
+	quick               *quickSession
+	quickAction         *quickSession
 
-	pins      map[string]*mygo.Window
-	pinStates map[string]pin.State
-	pinTimers map[string]*time.Timer
-	pinSeq    int
+	pins       map[string]*mygo.Window
+	pinStates  map[string]pin.State
+	pinTimers  map[string]*time.Timer
+	pinSeq     int
+	pinManager *mygo.Window
+
+	lineStore  *clothesline.Store
+	lineWindow *mygo.Window
+	lineReady  bool
+	lineState  clothesline.State
 
 	scroll         *scrollSession
 	scrollMu       sync.Mutex
@@ -80,8 +94,7 @@ type App struct {
 	// Invalidates delayed selection work when its request or session ends.
 	captureGeneration uint64
 
-	// restoreMainAfterCapture is true when the history/settings window was
-	// visible before the capture: only then may cancel/failure reopen it.
+	// restoreMainAfterCapture tracks whether a whole-screen capture hid the workbench.
 	restoreMainAfterCapture bool
 }
 
@@ -120,6 +133,17 @@ func (a *App) Start() {
 	a.registerProtocol()
 	a.createOverlay()
 	a.createMainWindow()
+	mygo.Screen.OnDisplaysChanged(func() {
+		a.mu.Lock()
+		active := a.overlayInteraction != 0
+		a.mu.Unlock()
+		if active {
+			a.cancelRegion()
+		}
+		if a.lineWindow != nil && !a.lineWindow.IsDestroyed() {
+			a.lineWindow.SetBounds(lineBounds(mygo.Screen.PrimaryDisplay()))
+		}
+	})
 	a.createScrollControl()
 	a.createScrollFrame()
 	a.setMenu()
@@ -128,6 +152,7 @@ func (a *App) Start() {
 		log.Printf("pinstill: default shortcuts: %v", errs)
 	}
 	a.restorePins()
+	a.restoreClothesline()
 	// History pruning waits for ApplySettings: the page owns the user's
 	// retention settings, and pruning with the defaults first could delete
 	// captures the user asked to keep.
@@ -216,6 +241,11 @@ func (a *App) initStorage() error {
 	} else {
 		a.pinStore = pinStore
 	}
+	if lineStore, err := clothesline.Open(filepath.Join(userData, "clothesline")); err != nil {
+		log.Printf("pinstill: clothesline: %v", err)
+	} else {
+		a.lineStore = lineStore
+	}
 	return nil
 }
 
@@ -235,6 +265,9 @@ func (a *App) registerProtocol() {
 	mux.Handle("/s/", http.StripPrefix("/s/", imagesOnly(mygo.FileServer(os.DirFS(a.sessionDir)))))
 	if a.pinStore != nil {
 		mux.Handle("/p/", http.StripPrefix("/p/", imagesOnly(mygo.FileServer(os.DirFS(a.pinStore.Dir())))))
+	}
+	if a.lineStore != nil {
+		mux.Handle("/l/", http.StripPrefix("/l/", imagesOnly(mygo.FileServer(os.DirFS(a.lineStore.Dir())))))
 	}
 	if err := mygo.Protocol.Handle("shot", mux); err != nil {
 		log.Printf("pinstill: protocol: %v", err)
@@ -284,6 +317,11 @@ func (a *App) createMainWindow() {
 }
 
 func (a *App) createOverlay() {
+	a.overlay = a.newOverlayWindow()
+	a.overlayPool = []*mygo.Window{a.overlay}
+}
+
+func (a *App) newOverlayWindow() *mygo.Window {
 	win := mygo.NewWindow(mygo.WindowOptions{
 		Page:              mygo.PageOptions{Session: a.pageSession},
 		Title:             "Pinstill 选区",
@@ -312,9 +350,10 @@ func (a *App) createOverlay() {
 		e.PreventDefault()
 		go a.cancelRegion()
 	})
+	configureCaptureOverlay(win)
 	win.SetContentProtection(true)
 	win.SetHasShadow(false)
-	a.overlay = win
+	return win
 }
 
 func (a *App) createTray() {
@@ -329,6 +368,8 @@ func (a *App) createTray() {
 			}()
 		}},
 		{Type: mygo.MenuItemSeparator},
+		{Label: "贴图管理…", Click: func(*mygo.MenuItem, *mygo.Window) { go a.showPinManager() }},
+		{Label: "显示 / 隐藏桌面晾绳", Click: func(*mygo.MenuItem, *mygo.Window) { go a.toggleClothesline() }},
 		{Label: "历史与设置", Click: func(*mygo.MenuItem, *mygo.Window) { go a.showMain() }},
 	}
 	if item := updateMenuItem(); item != nil {
@@ -415,8 +456,7 @@ func (a *App) applySettings(s Settings) map[string]string {
 	return a.applyEffectiveSettings(s)
 }
 
-// beginRegion hides the main window and shows the selection overlay on the
-// display under the pointer.
+// beginRegion hides the main window and shows the selection overlays.
 func (a *App) beginRegion() error {
 	a.mu.Lock()
 	if a.quitting {
@@ -431,6 +471,7 @@ func (a *App) beginRegion() error {
 	a.captureGeneration++
 	session := a.captureGeneration
 	a.mu.Unlock()
+	a.hideQuickCapture()
 
 	if !capture.Supported() {
 		a.mu.Lock()
@@ -440,7 +481,7 @@ func (a *App) beginRegion() error {
 		return capture.ErrUnsupported
 	}
 	cursor := mygo.Screen.CursorScreenPoint()
-	disp := mygo.Screen.DisplayNearestPoint(cursor)
+	displays := activeOverlayDisplays(mygo.Screen.Displays(), cursor)
 	rawWindows := a.listVisibleWindows()
 	var showErr error
 	a.runOverlayUI(func() {
@@ -448,8 +489,8 @@ func (a *App) beginRegion() error {
 			return
 		}
 		a.mu.Lock()
-		mainWin, overlay := a.main, a.overlay
-		if overlay == nil {
+		mainWin := a.main
+		if a.overlay == nil || len(displays) == 0 {
 			a.capturing = false
 			a.mu.Unlock()
 			showErr = errors.New("选区窗口不可用")
@@ -457,44 +498,10 @@ func (a *App) beginRegion() error {
 		}
 		a.mu.Unlock()
 
-		// Reopen the main window on cancel only if it had been visible.
-		restoreMain := mainWin != nil && hideForCapture(mainWin)
-		// AppKit keeps panel frames inside the work area. Read back the
-		// actual frame so the selection maps to the right pixels.
-		area := disp.WorkArea
-		if area.Width <= 0 || area.Height <= 0 {
-			area = disp.Bounds
+		if mainWin != nil {
+			hideForCapture(mainWin)
 		}
-		// Wake the WebView without flashing pixels from the previous shot.
-		overlay.SetOpacity(0)
-		overlay.SetBounds(area)
-		overlay.Show()
-		actual := overlay.ContentBounds()
-		if actual.Width <= 0 || actual.Height <= 0 {
-			actual = area
-		}
-		surface := capture.Rect{
-			X:      float64(actual.X),
-			Y:      float64(actual.Y),
-			Width:  float64(actual.Width),
-			Height: float64(actual.Height),
-		}
-		projected := projectOverlayWindows(rawWindows, surface)
-		a.mu.Lock()
-		a.clearOverlayRevealLocked()
-		a.restoreMainAfterCapture = restoreMain
-		a.overlayDisplay = disp
-		a.overlayRect = actual
-		a.overlayWindows = projected
-		a.overlayCursorX = float64(cursor.X - actual.X)
-		a.overlayCursorY = float64(cursor.Y - actual.Y)
-		a.overlayHasCursor = true
-		a.overlaySession = session
-		a.overlayRevealTimer = time.AfterFunc(120*time.Millisecond, func() {
-			a.revealOverlay(session)
-		})
-		a.mu.Unlock()
-		_ = EventOverlayShown.Emit(overlay, a.overlayInfo())
+		a.openOverlaySurfaces(displays, rawWindows, cursor, session)
 	})
 	return showErr
 }
@@ -525,6 +532,10 @@ func (a *App) clearOverlayRevealLocked() {
 }
 
 func (a *App) revealOverlay(session uint64) {
+	a.revealOverlayFor(nil, session)
+}
+
+func (a *App) revealOverlayFor(caller *mygo.Window, session uint64) {
 	if session == 0 {
 		return
 	}
@@ -532,6 +543,26 @@ func (a *App) revealOverlay(session uint64) {
 		a.mu.Lock()
 		if !a.capturing || a.quitting || a.scroll != nil || a.overlaySession != session {
 			a.mu.Unlock()
+			return
+		}
+		if len(a.overlaySurfaces) > 0 {
+			var windows []*mygo.Window
+			allReady := true
+			for index := range a.overlaySurfaces {
+				surface := &a.overlaySurfaces[index]
+				if !surface.ready && (caller == nil || caller == surface.window) {
+					surface.ready = true
+					windows = append(windows, surface.window)
+				}
+				allReady = allReady && surface.ready
+			}
+			if allReady {
+				a.clearOverlayRevealLocked()
+			}
+			a.mu.Unlock()
+			for _, window := range windows {
+				window.SetOpacity(1)
+			}
 			return
 		}
 		a.clearOverlayRevealLocked()
@@ -579,7 +610,21 @@ func projectOverlayWindows(raw []capture.WindowInfo, surface capture.Rect) []Ove
 
 // overlayInfo describes the display the overlay currently covers.
 func (a *App) overlayInfo() OverlayInfo {
+	return a.overlayInfoFor(nil)
+}
+
+func (a *App) overlayInfoFor(caller *mygo.Window) OverlayInfo {
 	a.mu.Lock()
+	if caller == nil {
+		caller = a.overlay
+	}
+	for _, surface := range a.overlaySurfaces {
+		if surface.window == caller {
+			info := a.overlayInfoOnSurfaceLocked(surface)
+			a.mu.Unlock()
+			return info
+		}
+	}
 	disp := a.overlayDisplay
 	rect := a.overlayRect
 	overlay := a.overlay
@@ -617,7 +662,7 @@ func (a *App) overlayInfo() OverlayInfo {
 	}
 }
 
-// cancelRegion hides the overlay and brings the main window back.
+// cancelRegion closes the overlay and ends the active capture.
 func (a *App) cancelRegion() bool {
 	completed := false
 	a.runOverlayUI(func() {
@@ -626,19 +671,15 @@ func (a *App) cancelRegion() bool {
 			a.mu.Unlock()
 			return
 		}
-		overlay := a.overlay
-		restoreMain := a.restoreMainAfterCapture
+		windows := a.overlayPanesLocked()
 		a.restoreMainAfterCapture = false
 		a.capturing = false
 		a.captureGeneration++
 		reportCacheCleanup(a.releaseOverlayCacheLocked())
 		a.mu.Unlock()
-		if overlay != nil {
-			overlay.SetOpacity(0)
-			overlay.Hide()
-		}
-		if restoreMain {
-			a.showMain()
+		for _, window := range windows {
+			window.SetOpacity(0)
+			window.Hide()
 		}
 		emitToMain(a, EventCaptureCancelled, CaptureCancelledPayload{Reason: "user"})
 		completed = true
@@ -649,6 +690,18 @@ func (a *App) cancelRegion() bool {
 // captureRegion wraps the native capture. Selftests can run without the
 // screen recording permission by asking for a generated image instead.
 func (a *App) captureRegion(region capture.Rect, opts capture.CaptureOptions) ([]byte, error) {
+	if runtime.GOOS == "darwin" && opts.BackingScale == 0 && mygo.App.IsReady() {
+		for _, display := range mygo.Screen.Displays() {
+			if region.Intersect(asCaptureRect(display.Bounds)) == region {
+				opts.BackingScale = display.ScaleFactor
+				break
+			}
+		}
+	}
+	return a.captureRegionOnDisplays(region, opts, nil)
+}
+
+func (a *App) captureRegionOnDisplays(region capture.Rect, opts capture.CaptureOptions, displays []capture.DisplaySurface) ([]byte, error) {
 	if os.Getenv("PINSTILL_SELFTEST_SCROLL_SIM") != "" {
 		if pngBytes := simulatedScrollFrame(); len(pngBytes) > 0 {
 			return pngBytes, nil
@@ -658,6 +711,9 @@ func (a *App) captureRegion(region capture.Rect, opts capture.CaptureOptions) ([
 		if pngBytes := syntheticScreenshot(); len(pngBytes) > 0 {
 			return pngBytes, nil
 		}
+	}
+	if runtime.GOOS == "darwin" && len(displays) > 0 {
+		return capture.CaptureDisplays(region, opts, displays)
 	}
 	return capture.CaptureRegion(region, opts)
 }
@@ -679,10 +735,18 @@ func (a *App) prepareSelectionFast(rect Rect) (OverlayCapturePayload, error) {
 }
 
 func (a *App) prepareSelectionWithDelay(rect Rect, chromeDelay time.Duration) (OverlayCapturePayload, error) {
+	return a.prepareSelectionFrom(nil, rect, chromeDelay)
+}
+
+func (a *App) prepareSelectionFrom(caller *mygo.Window, rect Rect, chromeDelay time.Duration) (OverlayCapturePayload, error) {
+	if caller != nil && !a.commitOverlaySurface(caller) {
+		return OverlayCapturePayload{}, errors.New("截图请求已取消")
+	}
 	a.mu.Lock()
 	disp := a.overlayDisplay
 	origin := a.overlayRect
 	overlay := a.overlay
+	displays := a.captureDisplaysLocked()
 	if !a.capturing || a.scroll != nil {
 		a.mu.Unlock()
 		return OverlayCapturePayload{}, errors.New("没有进行中的截图")
@@ -701,7 +765,11 @@ func (a *App) prepareSelectionWithDelay(rect Rect, chromeDelay time.Duration) (O
 		Width:  rect.Width,
 		Height: rect.Height,
 	}
-	region = clampToDisplay(region, disp.Bounds)
+	if len(displays) > 0 {
+		region = clampToDisplay(region, displayUnion(displays))
+	} else {
+		region = clampToDisplay(region, disp.Bounds)
+	}
 	if region.Empty() || region.Width < 2 || region.Height < 2 {
 		return OverlayCapturePayload{}, errors.New("选区太小")
 	}
@@ -712,7 +780,7 @@ func (a *App) prepareSelectionWithDelay(rect Rect, chromeDelay time.Duration) (O
 		return OverlayCapturePayload{}, errors.New("截图请求已取消")
 	}
 	s := a.settingsSnapshot()
-	pngBytes, err := a.captureRegion(region, capture.CaptureOptions{IncludeCursor: s.IncludeCursor})
+	pngBytes, err := a.captureRegionOnDisplays(region, capture.CaptureOptions{IncludeCursor: s.IncludeCursor}, displays)
 	if !a.selectionIsCurrent(generation) {
 		return OverlayCapturePayload{}, errors.New("截图请求已取消")
 	}
@@ -802,6 +870,7 @@ func (a *App) captureFullScreen() {
 	generation := a.captureGeneration
 	mainWin := a.main
 	a.mu.Unlock()
+	a.hideQuickCapture()
 	if !capture.Supported() {
 		a.failCapture(capture.ErrUnsupported, false)
 		return
@@ -860,7 +929,8 @@ func (a *App) captureFullScreenAction(region capture.Rect, restoreMain bool, gen
 	if actionFn == nil {
 		actionFn = a.applyCaptureAction
 	}
-	if _, err := actionFn(action, pngBytes, payload); err != nil {
+	result, err := actionFn(action, pngBytes, payload)
+	if err != nil {
 		a.toast(err.Error(), "error")
 	}
 	a.mu.Lock()
@@ -868,6 +938,9 @@ func (a *App) captureFullScreenAction(region capture.Rect, restoreMain bool, gen
 		a.capturing = false
 	}
 	a.mu.Unlock()
+	if err == nil && result.Completed {
+		a.postQuickCapture(generation, action, pngBytes, payload)
+	}
 }
 
 // storeCapture validates a capture and, when the user keeps history, writes

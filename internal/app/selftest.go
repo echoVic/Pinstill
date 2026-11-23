@@ -191,6 +191,12 @@ func (a *App) runSelfTest(mode string) {
 			a.selftestDoubleClick()
 		case "resize":
 			a.selftestResize()
+		case "precision":
+			a.selftestPrecision()
+		case "quick":
+			a.selftestQuick()
+		case "multiscreen":
+			a.selftestMultiscreen()
 		case "watermark":
 			a.selftestWatermark()
 		case "resizestress":
@@ -227,6 +233,10 @@ func (a *App) runSelfTest(mode string) {
 			a.selftestPinPersistCheck()
 		case "pinui":
 			a.selftestPinUI()
+		case "pinmanager":
+			a.selftestPinManager()
+		case "clothesline":
+			a.selftestClothesline()
 		case "hold":
 			a.selftestHold()
 		default:
@@ -527,55 +537,27 @@ func (a *App) selftestDrag() {
 	selftestExit(0)
 }
 
-// selftestEscape shows the overlay and has System Events press Escape, then
-// checks that the overlay hid and the main window came back.
+// selftestEscape sends Escape to the capture overlay with the workbench both
+// visible and hidden at the start.
 func (a *App) selftestEscape() {
-	if err := a.beginRegion(); err != nil {
-		selftestFail("SELFTEST esc: begin error %v\n", err)
-	}
-	time.Sleep(900 * time.Millisecond)
-	// System Events types into the frontmost app, and earlier selftest steps
-	// may have left another app in front on a busy machine. Activate Pinstill
-	// first so the synthetic Escape lands on the overlay.
-	activate := exec.Command("/usr/bin/osascript", "-e",
-		`tell application "System Events" to set frontmost of process "Pinstill" to true`)
-	selftestCheckError(activate.Run())
-	time.Sleep(400 * time.Millisecond)
-	// System Events occasionally misses a synthesized key while the system
-	// is busy; press Escape a few times before calling it a failure.
-	for attempt := 1; attempt <= 3; attempt++ {
-		cmd := exec.Command("/usr/bin/osascript", "-e", "tell application \"System Events\" to key code 53")
-		out, err := cmd.CombinedOutput()
-		fmt.Printf("SELFTEST esc: attempt=%d osascript err=%v out=%s\n", attempt, err, strings.TrimSpace(string(out)))
-		selftestCheckError(err)
-		time.Sleep(900 * time.Millisecond)
-		if a.overlay == nil || !a.overlay.IsVisible() {
-			break
+	selftestRequire(a.main != nil && a.overlay != nil, "capture windows are missing")
+	for _, workspaceVisible := range []bool{true, false} {
+		if workspaceVisible {
+			a.showMain()
+		} else {
+			a.main.Hide()
 		}
-	}
-	if a.overlay != nil {
-		fmt.Printf("SELFTEST esc: overlay visible=%v\n", a.overlay.IsVisible())
-	}
-	if a.main != nil {
-		fmt.Printf("SELFTEST esc: main visible=%v\n", a.main.IsVisible())
-	}
-	selftestRequire(!a.overlayVisible() && a.main != nil && a.main.IsVisible(), "Escape did not restore main and hide overlay")
-	// Second capture with the history/settings window closed: cancelling must
-	// leave it closed (it used to be reopened by cancel/failure paths).
-	if a.main != nil {
-		a.main.Hide()
-	}
-	time.Sleep(400 * time.Millisecond)
-	if err := a.beginRegion(); err != nil {
-		selftestFail("SELFTEST esc: second begin error %v\n", err)
-	}
-	time.Sleep(900 * time.Millisecond)
-	a.cancelRegion()
-	time.Sleep(600 * time.Millisecond)
-	mainAfterHiddenCancel := a.main != nil && a.main.IsVisible()
-	fmt.Printf("SELFTEST esc: main_after_hidden_cancel=%v\n", mainAfterHiddenCancel)
-	if mainAfterHiddenCancel {
-		selftestFail("SELFTEST esc: checks=FAILED\n")
+		selftestRequire(a.main.IsVisible() == workspaceVisible, "workbench did not enter expected initial state")
+		selftestCheckError(a.beginRegion())
+		time.Sleep(900 * time.Millisecond)
+		selftestRequire(a.overlayVisible() && !a.main.IsVisible(), "capture overlay did not hide the workbench")
+		selftestValue(a.overlay.Page().Eval(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))`))
+		deadline := time.Now().Add(3 * time.Second)
+		for a.overlayVisible() && time.Now().Before(deadline) {
+			time.Sleep(50 * time.Millisecond)
+		}
+		fmt.Printf("SELFTEST esc: before=%v overlay_visible=%v main_visible=%v\n", workspaceVisible, a.overlayVisible(), a.main.IsVisible())
+		selftestRequire(!a.overlayVisible() && !a.main.IsVisible(), "Escape must close the overlay and leave the workbench hidden")
 	}
 	selftestExit(0)
 }
@@ -1330,6 +1312,8 @@ func (a *App) selftestScrollFlow() {
 		time.Sleep(300 * time.Millisecond)
 		selftestRequire(session.isAuto(), "auto-scroll did not start after the toggle was clicked")
 		fmt.Println("SELFTEST scrollflow: auto started after explicit toggle")
+	} else {
+		a.selftestFinishManualScroll()
 	}
 	deadline := time.Now().Add(25 * time.Second)
 	var win *mygo.Window
@@ -1401,6 +1385,9 @@ func (a *App) selftestScroll() {
 	frameVisible := a.scrollFrameVisible()
 	frameW, frameH := a.scrollFrameSize()
 	fmt.Printf("SELFTEST scroll: frame_visible=%v frame_size=%dx%d\n", frameVisible, frameW, frameH)
+	if !accessibility || !capture.ScrollSupported() {
+		a.selftestFinishManualScroll()
+	}
 	deadline := time.Now().Add(25 * time.Second)
 	var win *mygo.Window
 	for time.Now().Before(deadline) {
@@ -1441,8 +1428,7 @@ func (a *App) selftestScroll() {
 	selftestExit(0)
 }
 
-// selftestScrollManual starts a manual scrolling session: the simulated frames
-// stop changing, so the session must finish by itself and open the preview.
+// selftestScrollManual waits for simulated motion to stop and then finishes.
 func (a *App) selftestScrollManual() {
 	if a.main != nil {
 		a.main.Hide()
@@ -1459,6 +1445,7 @@ func (a *App) selftestScrollManual() {
 	frameVisible := a.scrollFrameVisible()
 	frameW, frameH := a.scrollFrameSize()
 	fmt.Printf("SELFTEST scrollmanual: frame_visible=%v frame_size=%dx%d\n", frameVisible, frameW, frameH)
+	a.selftestFinishManualScroll()
 	deadline := time.Now().Add(25 * time.Second)
 	var win *mygo.Window
 	for time.Now().Before(deadline) {
@@ -1485,6 +1472,29 @@ func (a *App) selftestScrollManual() {
 		selftestFail("SELFTEST scrollmanual: checks=FAILED\n")
 	}
 	selftestExit(0)
+}
+
+func (a *App) selftestFinishManualScroll() {
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		a.mu.Lock()
+		session, control, result := a.scroll, a.control, a.result
+		a.mu.Unlock()
+		selftestRequire(session != nil && control != nil && result == nil, "manual session ended before Finish")
+		frames, _, status, auto := session.snapshot()
+		if frames > 1 && status == "stalled" && !auto {
+			clicked := selftestValue(control.Page().Eval(`(() => {
+				const button = document.querySelector('[data-scroll-action="finish"]');
+				if (!button || button.disabled) return false;
+				button.click();
+				return true;
+			})()`))
+			selftestRequire(clicked == true, "Finish button not ready for manual capture")
+			return
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	selftestFail("manual scroll did not wait for Finish after the content stopped")
 }
 
 // selftestShowcase produces the UI screenshots used by the README. Every
@@ -1825,6 +1835,33 @@ func (a *App) selftestTextStyle() {
 	if committed != "sent" || inputGone != "true" {
 		failCheck("text annotation did not commit (commit=%q gone=%q)", committed, inputGone)
 	}
+	edited := eval(`(() => {
+		const canvas = document.getElementById('overlayCanvas');
+		const bounds = canvas.getBoundingClientRect();
+		const original = canvas.toDataURL();
+		document.querySelector('[data-tool="select"]').click();
+		const pointer = {
+			bubbles: true, cancelable: true, pointerId: 11, pointerType: 'mouse', button: 0,
+			clientX: bounds.left + bounds.width * 0.2 + 8,
+			clientY: bounds.top + bounds.height * 0.3 - 5,
+		};
+		canvas.dispatchEvent(new PointerEvent('pointerdown', pointer));
+		canvas.dispatchEvent(new PointerEvent('pointerup', pointer));
+		if (document.getElementById('annotationSelection').hidden || canvas.toDataURL() !== original) return 'select';
+		document.getElementById('annotationEditText').click();
+		const editor = document.getElementById('textInputOverlay');
+		if (editor?.value !== 'Pinstill 标注') return 'edit';
+		editor.value = '修改后的文字';
+		editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+		const replacement = canvas.toDataURL();
+		if (replacement === original) return 'render';
+		document.querySelector('[data-tool="undo"]').click();
+		if (canvas.toDataURL() !== original) return 'undo';
+		document.querySelector('[data-tool="redo"]').click();
+		return canvas.toDataURL() === replacement ? 'ok' : 'redo';
+	})()`)
+	selftestRequire(edited == "ok", "editing an existing annotation failed at %s", edited)
+	fmt.Printf("SELFTEST textstyle: edit_undo_redo=%s\n", edited)
 	restoreStyle()
 	if ok {
 		selftestExit(0)
@@ -1950,12 +1987,6 @@ func (a *App) selftestResize() {
 		})()`)
 	}
 	before := selectionSize()
-	handlePoint := eval(`(() => {
-		const handle = document.querySelector('[data-resize="e"]');
-		if (!handle) return '';
-		const r = handle.getBoundingClientRect();
-		return (r.left + r.width / 2) + ',' + (r.top + r.height / 2);
-	})()`)
 	down := eval(`(() => {
 		const handle = document.querySelector('[data-resize="e"]');
 		if (!handle) return 'missing';
@@ -1964,24 +1995,27 @@ func (a *App) selftestResize() {
 		return 'down';
 	})()`)
 	time.Sleep(300 * time.Millisecond)
-	midHidden := eval(`String(document.getElementById('overlayCanvas')?.hidden ?? 'missing')`)
-	midMask := eval(`String(!!document.getElementById('maskTop')?.hidden)`)
-	fmt.Printf("SELFTEST resize: pressed=%s canvas_hidden_mid=%s masks_hidden_mid=%s point=%s\n", down, midHidden, midMask, handlePoint)
-	if a.overlay != nil {
-		if pagePNG, err := a.overlay.CapturePage(); err == nil {
-			selftestArtifact("pinstill-resize-mid.png", pagePNG)
-		} else {
-			selftestFail("resize capture: %v", err)
-		}
-	}
-	dragged := eval(`(() => {
+	canvasHidden := `String(document.getElementById('overlayCanvas')?.hidden)`
+	maskHidden := `String(document.getElementById('maskTop')?.hidden)`
+	selftestRequire(down == "down" && eval(canvasHidden) == "false" && eval(maskHidden) == "false", "pressing the grip changed the preview")
+	selftestRequire(eval(`(() => {
 		const handle = document.querySelector('[data-resize="e"]');
 		if (!handle) return 'missing';
 		const r = handle.getBoundingClientRect();
 		const cx = r.left + r.width / 2;
 		const cy = r.top + r.height / 2;
 		window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, cancelable: true, clientX: cx + 120, clientY: cy + 80, pointerId: 11, pointerType: 'mouse' }));
-		window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, clientX: cx + 120, clientY: cy + 80, pointerId: 11, pointerType: 'mouse', button: 0 }));
+		return 'moved';
+	})()`) == "moved", "resize grip did not move")
+	canvasDuringDrag, maskDuringDrag := eval(canvasHidden), eval(maskHidden)
+	selftestRequire(canvasDuringDrag == "true" && maskDuringDrag == "false", "dragging must show the live selection inside the dimmed desktop: canvas hidden=%s, mask hidden=%s, selection=%s → %s", canvasDuringDrag, maskDuringDrag, before, selectionSize())
+	if pagePNG, err := a.overlay.CapturePage(); err == nil {
+		selftestArtifact("pinstill-resize-mid.png", pagePNG)
+	} else {
+		selftestFail("resize capture: %v", err)
+	}
+	dragged := eval(`(() => {
+		window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, pointerId: 11, pointerType: 'mouse', button: 0 }));
 		return 'dragged';
 	})()`)
 	dragDone := time.Now()
@@ -2031,7 +2065,7 @@ func (a *App) selftestResize() {
 	}
 	shrinkMS := time.Since(shrinkStart).Milliseconds()
 	fmt.Printf("SELFTEST resize: shrink before=%s after=%s shrink_ms=%d dragged=%s\n", beforeShrink, afterShrink, shrinkMS, shrinkDragged)
-	if handles != "8" || before == "missing" || dragged != "dragged" || !recaptured || shrinkDragged != "dragged" || afterShrink == beforeShrink || afterShrink == "missing" || midHidden != "true" || midMask != "true" {
+	if handles != "8" || before == "missing" || dragged != "dragged" || !recaptured || shrinkDragged != "dragged" || afterShrink == beforeShrink || afterShrink == "missing" {
 		selftestFail("SELFTEST resize: checks=FAILED\n")
 		a.cancelRegion()
 		selftestExit(1)

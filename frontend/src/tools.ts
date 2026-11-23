@@ -4,6 +4,7 @@
 
 export type ToolId =
   | "drag"
+  | "select"
   | "rect"
   | "ellipse"
   | "line"
@@ -20,6 +21,7 @@ export type ToolId =
   | "qr"
   | "scroll"
   | "undo"
+  | "redo"
   | "download"
   | "cancel"
   | "clipboard";
@@ -42,6 +44,8 @@ export const TOOLS: ReadonlyArray<readonly [ToolId, string]> = [
   ["qr", "识别二维码"],
   ["scroll", "滚动截图"],
   ["undo", "撤销"],
+  ["redo", "重做"],
+  ["select", "选择标注"],
   ["download", "下载"],
   ["cancel", "取消"],
   ["clipboard", "保存到剪贴板"],
@@ -50,6 +54,7 @@ export const TOOLS: ReadonlyArray<readonly [ToolId, string]> = [
 /** Lucide icon names used by `refreshPinstillIcons`. */
 export const TOOL_ICONS: Record<string, string> = {
   drag: "move",
+  select: "mouse-pointer-2",
   rect: "square",
   ellipse: "circle",
   line: "minus",
@@ -66,6 +71,7 @@ export const TOOL_ICONS: Record<string, string> = {
   qr: "qr-code",
   scroll: "scroll-text",
   undo: "undo-2",
+  redo: "redo-2",
   download: "download",
   cancel: "x",
   clipboard: "copy",

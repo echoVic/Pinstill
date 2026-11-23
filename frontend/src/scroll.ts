@@ -85,6 +85,7 @@ function statusText(): string {
   if (status === "paused") return "已暂停";
   if (status === "max") return "已达上限";
   if (status === "stalled") return "等待滚动…";
+  if (status === "unaligned") return "接不上，往回滚一点";
   return auto ? "正在自动滚动…" : "手动滚动中…";
 }
 
@@ -129,8 +130,7 @@ function applyProgress(payload: ScrollProgress): void {
   frames = Math.max(0, payload.frames || 0);
   height = Math.max(0, payload.height || 0);
   status = payload.status;
-  if (payload.status === "paused") paused = true;
-  else if (payload.status === "running") paused = false;
+  paused = payload.status === "paused";
   if (typeof payload.auto === "boolean") auto = payload.auto;
   if (!busy) render();
 }

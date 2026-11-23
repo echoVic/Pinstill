@@ -154,9 +154,8 @@ expect 'same=true' "$run_dir/data-drag/artifacts/drag.log"
 
 step "Selftest: escape cancels the overlay"
 run_selftest esc || fail=1
-expect 'overlay visible=false' "$run_dir/data-esc/artifacts/esc.log"
-expect 'main visible=true' "$run_dir/data-esc/artifacts/esc.log"
-expect 'SELFTEST esc: main_after_hidden_cancel=false' "$run_dir/data-esc/artifacts/esc.log"
+expect 'SELFTEST esc: before=true overlay_visible=false main_visible=false' "$run_dir/data-esc/artifacts/esc.log"
+expect 'SELFTEST esc: before=false overlay_visible=false main_visible=false' "$run_dir/data-esc/artifacts/esc.log"
 expect 'SELFTEST esc: checks=ok' "$run_dir/data-esc/artifacts/esc.log"
 
 step "Selftest: desktop action flow (drag + toolbar)"
@@ -223,7 +222,7 @@ expect 'actions=.*pin' "$run_dir/data-scrollflow/artifacts/scrollflow.log"
 expect 'actions=.*close' "$run_dir/data-scrollflow/artifacts/scrollflow.log"
 expect 'SELFTEST scrollflow: closed=true' "$run_dir/data-scrollflow/artifacts/scrollflow.log"
 
-step "Selftest: scrolling capture (manual mode auto finish)"
+step "Selftest: scrolling capture (manual mode waits for Finish)"
 PINSTILL_SELFTEST_SCROLL_SIM=1 run_selftest scrollmanual || fail=1
 expect 'SELFTEST scrollmanual: result=[0-9][0-9]*x[0-9][0-9]*' "$run_dir/data-scrollmanual/artifacts/scrollmanual.log"
 expect 'result=.*window=true' "$run_dir/data-scrollmanual/artifacts/scrollmanual.log"

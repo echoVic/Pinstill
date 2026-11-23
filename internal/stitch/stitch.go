@@ -2,6 +2,7 @@
 package stitch
 
 import (
+	"bytes"
 	"errors"
 	"image"
 	"math"
@@ -11,6 +12,8 @@ import (
 
 // ErrNoFrames is returned when no frame was given.
 var ErrNoFrames = errors.New("stitch: no frames")
+
+var ErrUnaligned = errors.New("stitch: no reliable overlap")
 
 // Options configures stitching.
 type Options struct {
@@ -32,7 +35,7 @@ type Options struct {
 
 func (o Options) withDefaults(frameHeight int) Options {
 	if o.MinOverlap <= 0 {
-		o.MinOverlap = 24
+		o.MinOverlap = min(24, max(2, frameHeight/2))
 	}
 	if o.MaxOverlap <= 0 {
 		o.MaxOverlap = frameHeight - 1
@@ -75,8 +78,8 @@ type Accumulator struct {
 // New returns an empty accumulator. The first frame sets the width.
 func New(opts Options) *Accumulator { return &Accumulator{opts: opts} }
 
-// Add appends one frame and returns the overlap height used (0 for the first
-// frame or when no confident overlap was found).
+// Add appends a connected frame. ErrUnaligned leaves the last accepted frame
+// in place, so returning to overlapping content can resume the capture.
 func (a *Accumulator) Add(frame *image.RGBA) (int, error) {
 	if frame == nil || frame.Bounds().Empty() {
 		return 0, errors.New("stitch: empty frame")
@@ -87,7 +90,6 @@ func (a *Accumulator) Add(frame *image.RGBA) (int, error) {
 	if a.prev != nil && a.prev.Bounds().Size() != frame.Bounds().Size() {
 		return 0, errors.New("stitch: frame dimensions changed")
 	}
-	a.frames++
 	if a.canvas == nil {
 		a.opts = a.opts.withDefaults(frame.Bounds().Dy())
 		b := frame.Bounds()
@@ -99,38 +101,27 @@ func (a *Accumulator) Add(frame *image.RGBA) (int, error) {
 		a.merged = a.canvas.Bounds().Dy()
 		copyRows(a.canvas, 0, frame, a.merged)
 		a.prev = frame
+		a.frames++
 		return 0, nil
 	}
 	if a.merged >= a.opts.MaxHeight {
-		a.prev = frame
 		return 0, nil
 	}
-	match := findOverlapWithPrefix(a.prev, frame, a.opts)
-	overlap := match.overlap
-	if overlap <= 0 {
-		// No confident overlap: append the whole frame rather than lose
-		// content (a best-effort long screenshot).
-		overlap = 0
+	match := matchOverlap(a.prev, frame, a.opts)
+	if match.overlap == 0 {
+		return 0, ErrUnaligned
 	}
-	srcTop := match.prefix + overlap
-	if frame.Bounds().Dy()-srcTop > a.opts.MaxHeight-a.merged {
-		a.canvas = growCanvas(a.canvas, a.opts.MaxHeight, a.opts.MaxHeight)
-		appended := a.opts.MaxHeight - a.merged
-		if appended > 0 {
-			copyRowsFrom(a.canvas, a.merged, frame, srcTop, appended)
-			a.merged += appended
-		}
-		a.prev = frame
-		a.overlap = overlap
-		return overlap, nil
-	}
-	appendRows := frame.Bounds().Dy() - srcTop
-	a.canvas = growCanvas(a.canvas, a.merged+appendRows, a.opts.MaxHeight)
-	copyRowsFrom(a.canvas, a.merged, frame, srcTop, appendRows)
-	a.merged += appendRows
+	// A footer occupies the tail of the previous frame. Replace that tail
+	// along with the newly revealed rows, so it only appears at the end.
+	writeAt := a.merged - match.footer
+	writeRows := min(frame.Rect.Dy()-match.nextEnd, a.opts.MaxHeight-writeAt)
+	a.canvas = growCanvas(a.canvas, writeAt+writeRows, a.opts.MaxHeight)
+	copyRowsFrom(a.canvas, writeAt, frame, match.nextEnd, writeRows)
+	a.merged = writeAt + writeRows
 	a.prev = frame
-	a.overlap = overlap
-	return overlap, nil
+	a.overlap = match.overlap
+	a.frames++
+	return match.overlap, nil
 }
 
 // Result returns the stitched image so far.
@@ -150,8 +141,8 @@ func (a *Accumulator) Size() (height, frames int) {
 	return a.merged, a.frames
 }
 
-// SameAsPrevious reports whether frame is nearly identical to the previous
-// one, which means scrolling stopped or reached the end.
+// SameAsPrevious reports whether the viewport still shows the last accepted
+// content. Fixed chrome can change while the body stays in place.
 func (a *Accumulator) SameAsPrevious(frame *image.RGBA) bool {
 	if a.prev == nil || frame == nil || a.prev.Bounds().Size() != frame.Bounds().Size() {
 		return false
@@ -159,7 +150,34 @@ func (a *Accumulator) SameAsPrevious(frame *image.RGBA) bool {
 	if validateFrame(frame) != nil {
 		return false
 	}
-	return meanAbsDiff(a.prev, frame, 0, frame.Bounds().Dy(), 1, a.opts.SameFrameDelta) < a.opts.SameFrameDelta
+	height, width := frame.Rect.Dy(), frame.Rect.Dx()
+	edge := height / 5
+	changedRowsLimit := max(1, (height-2*edge)/8)
+	allowedDifference := float64(width*height*3) * a.opts.SameFrameDelta
+	var difference, changedRows int
+	for row := edge; row < height-edge; row++ {
+		before := a.prev.PixOffset(a.prev.Rect.Min.X, a.prev.Rect.Min.Y+row)
+		after := frame.PixOffset(frame.Rect.Min.X, frame.Rect.Min.Y+row)
+		if bytes.Equal(a.prev.Pix[before:before+width*4], frame.Pix[after:after+width*4]) {
+			continue
+		}
+		var strongest int
+		for column := 0; column < width; column++ {
+			priorPixel, nextPixel := before+column*4, after+column*4
+			pixelDiff := absInt(int(a.prev.Pix[priorPixel])-int(frame.Pix[nextPixel])) +
+				absInt(int(a.prev.Pix[priorPixel+1])-int(frame.Pix[nextPixel+1])) +
+				absInt(int(a.prev.Pix[priorPixel+2])-int(frame.Pix[nextPixel+2]))
+			difference += pixelDiff
+			strongest = max(strongest, pixelDiff)
+		}
+		if strongest >= 48 {
+			changedRows++
+		}
+		if float64(difference) >= allowedDifference || changedRows > changedRowsLimit {
+			return false
+		}
+	}
+	return true
 }
 
 func validateFrame(frame *image.RGBA) error {
@@ -210,104 +228,32 @@ func copyRowsFrom(dst *image.RGBA, dstTop int, src *image.RGBA, srcTop, n int) {
 	}
 }
 
-// findOverlap searches every permitted offset, with linear row-fingerprint
-// matching for unchanged content. Noisy matches use a bounded shortlist;
-// every accepted candidate is verified against every RGB pixel. Work is
-// O(width*height + height*probeRows*signatureSize + candidates*width*height),
-// rather than comparing all pixels for all overlap heights.
-type overlapMatch struct {
-	prefix  int
-	overlap int
-}
-
-func findOverlap(prev, next *image.RGBA, opts Options) int {
-	return findOverlapWithPrefix(prev, next, opts).overlap
-}
-
-func findOverlapWithPrefix(prev, next *image.RGBA, opts Options) overlapMatch {
-	h := prev.Bounds().Dy()
-	if h != next.Bounds().Dy() {
-		return overlapMatch{}
-	}
-	prevRows, nextRows := fingerprintRows(prev), fingerprintRows(next)
-	for _, prefix := range []int{commonPrefixRows(prevRows, nextRows, h/3), 0} {
-		bodyRows := len(nextRows) - prefix
-		maxOverlap := min(opts.MaxOverlap, min(h-1, bodyRows-1))
-		if maxOverlap < opts.MinOverlap {
-			continue
-		}
-		body := nextRows[prefix:]
-		if overlap := exactOverlap(prevRows, body, opts.MinOverlap, maxOverlap); overlap > 0 {
-			if meanAbsDiffAt(prev, next, h-overlap, prefix, overlap, 1, opts.Tolerance) == 0 {
-				return overlapMatch{prefix: prefix, overlap: overlap}
-			}
-		}
-		if overlap := noisyOverlap(prev, next, opts, maxOverlap, prefix); overlap > 0 {
-			return overlapMatch{prefix: prefix, overlap: overlap}
-		}
-	}
-	return overlapMatch{}
-}
-
-func commonPrefixRows(prev, next []uint64, max int) int {
-	if max < 2 {
-		return 0
-	}
-	if max > len(prev) || max > len(next) {
-		max = min(len(prev), len(next))
-	}
-	n := 0
-	for n < max && prev[n] == next[n] {
-		n++
-	}
-	if n < 2 {
-		return 0
-	}
-	return n
-}
-
-// meanAbsDiff compares n rows between two images: rows of prev starting at
-// prevTop against rows of next starting at 0. step samples every step-th
-// column. It gives up early only when the accumulated difference would exceed
-// stopAt even if all remaining samples matched exactly.
-func meanAbsDiff(prev, next *image.RGBA, prevTop, n, step int, stopAt float64) float64 {
-	return meanAbsDiffAt(prev, next, prevTop, 0, n, step, stopAt)
-}
-
-func meanAbsDiffAt(prev, next *image.RGBA, prevTop, nextTop, n, step int, stopAt float64) float64 {
+func meanAbsDiffAt(prev, next *image.RGBA, prevTop, nextTop, n int, stopAt float64) float64 {
 	if n <= 0 {
 		return 255
-	}
-	if step < 1 {
-		step = 1
 	}
 	b := prev.Bounds()
 	if next.Bounds().Size() != b.Size() || prevTop < 0 || nextTop < 0 || prevTop+n > b.Dy() || nextTop+n > b.Dy() {
 		return 255
 	}
 	w := b.Dx()
-	samples := float64((w-1)/step+1) * float64(n) * 3
+	samples := float64(w) * float64(n) * 3
 	var total float64
-	var count float64
 	for y := 0; y < n; y++ {
 		prevOff := prev.PixOffset(b.Min.X, b.Min.Y+prevTop+y)
 		nextOff := next.PixOffset(next.Rect.Min.X, next.Rect.Min.Y+nextTop+y)
-		for x := 0; x < w; x += step {
+		for x := 0; x < w; x++ {
 			pi := prevOff + x*4
 			ni := nextOff + x*4
 			total += float64(absInt(int(prev.Pix[pi])-int(next.Pix[ni])) +
 				absInt(int(prev.Pix[pi+1])-int(next.Pix[ni+1])) +
 				absInt(int(prev.Pix[pi+2])-int(next.Pix[ni+2])))
-			count += 3
 		}
 		if stopAt > 0 && total/samples > stopAt {
 			return total / samples
 		}
 	}
-	if count == 0 {
-		return 255
-	}
-	return total / count
+	return total / samples
 }
 
 func absInt(v int) int {

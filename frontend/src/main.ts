@@ -14,6 +14,7 @@ import {
   hasNative,
   historyClear,
   historyCopy,
+  historyHang,
   historyList,
   historyPin,
   historyRemove,
@@ -540,10 +541,15 @@ async function runPreviewAction(action: string, button: HTMLButtonElement): Prom
         hasNative ? "已固定到屏幕" : "浏览器预览 · 桌面应用中会创建置顶贴图窗口",
         "success",
       );
+    } else if (action === "hang") {
+      await historyHang(entry.id);
+      setButtonPending(button, false);
+      flashButtonSuccess(button);
+      showToast(hasNative ? "已挂到桌面晾绳" : "浏览器预览 · 桌面应用中可把截图挂到桌面晾绳", "success");
     }
   } catch (error) {
     setButtonPending(button, false);
-    const labels: Record<string, string> = { copy: "复制", save: "保存", pin: "贴图" };
+    const labels: Record<string, string> = { copy: "复制", save: "保存", pin: "贴图", hang: "晾图" };
     showToast(`${labels[action] ?? "操作"}失败：${errorMessage(error)}`, "error");
   }
 }

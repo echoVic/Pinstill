@@ -118,30 +118,31 @@ func TestResultReportsLastAppendedOverlap(t *testing.T) {
 }
 
 func TestStitchManyFramesHasBoundedAllocation(t *testing.T) {
-	const width, height, frames = 64, 32, 64
-	source := tallImage(width, height)
-	// Disable overlap search to measure canvas growth, without depending on
-	// timing or on the matcher's behavior for repetitive image content.
+	const width, height, step, frames = 320, 48, 16, 64
+	const resultHeight = height + step*(frames-1)
+	source := uniqueRowImage(width, resultHeight)
 	// A fixed 64-frame run keeps this regression bounded under -race too.
 	// No tests in this package run in parallel while allocation is sampled.
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
-	acc := New(Options{MinOverlap: height, MaxHeight: height * frames})
-	for j := 0; j < frames; j++ {
-		if _, err := acc.Add(source); err != nil {
+	acc := New(Options{MaxHeight: resultHeight})
+	for frame := 0; frame < frames; frame++ {
+		top := frame * step
+		if _, err := acc.Add(source.SubImage(image.Rect(0, top, width, top+height)).(*image.RGBA)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	runtime.ReadMemStats(&after)
-	if got := acc.Result(); got.Image.Rect.Dy() != height*frames || !got.ReachedMax {
+	if got := acc.Result(); got.Image.Rect.Dy() != resultHeight || !got.ReachedMax {
 		t.Fatal("canvas growth lost rows or missed the height cap")
 	}
 	// Copying the entire result on each append consumes over 30 times the
 	// final image size here. Allow four times, including allocation overhead.
-	const budget = 4 * width * height * frames * 4
+	const resultBytes = width * resultHeight * 4
+	const budget = 4 * resultBytes
 	allocated := after.TotalAlloc - before.TotalAlloc
 	if allocated > budget {
-		t.Fatalf("allocated %d bytes for a %d-byte result; budget %d", allocated, width*height*frames*4, budget)
+		t.Fatalf("allocated %d bytes for a %d-byte result; budget %d", allocated, resultBytes, budget)
 	}
-	t.Logf("allocated %d bytes for a %d-byte result", allocated, width*height*frames*4)
+	t.Logf("allocated %d bytes for a %d-byte result", allocated, resultBytes)
 }

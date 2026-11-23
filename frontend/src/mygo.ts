@@ -53,6 +53,31 @@ export interface HistoryEntry {
   thumbUrl: string;
 }
 
+export interface LineEntry {
+  id: string;
+  name: string;
+  thumbUrl: string;
+}
+
+export interface LineView {
+  revision: number;
+  entries: LineEntry[];
+}
+
+export interface ManagedPin {
+  id: string;
+  width: number;
+  height: number;
+  group: string;
+  hidden: boolean;
+  clickThrough: boolean;
+  rotation: number;
+  flipX: boolean;
+  flipY: boolean;
+  url: string;
+  createdAt: string;
+}
+
 /**
  * OverlayCapturePayload hands a freshly captured selection back to the
  * overlay page, which annotates it in place on the desktop.
@@ -63,6 +88,14 @@ export interface OverlayCapturePayload {
   width: number;
   height: number;
   rect: Rect;
+}
+
+export interface OverlayDisplay {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  scale: number;
 }
 
 /** OverlayInfo tells the overlay page where the selection surface is. */
@@ -77,6 +110,13 @@ export interface OverlayInfo {
   cursorY: number;
   hasCursor?: boolean;
   windows?: OverlayWindow[];
+  desktop?: Rect;
+  displays?: OverlayDisplay[];
+}
+
+export interface OverlayPreviewPayload {
+  session: number;
+  rect?: Rect;
 }
 
 /**
@@ -109,6 +149,19 @@ export interface PinInitPayload {
   height: number;
   opacity: number;
   border: boolean;
+  presentation?: PinPresentation;
+}
+
+export interface PinPresentation {
+  id: string;
+  width: number;
+  height: number;
+  group: string;
+  hidden: boolean;
+  clickThrough: boolean;
+  rotation: number;
+  flipX: boolean;
+  flipY: boolean;
 }
 
 /** PinWindowState is the size and opacity the page reports for a pin. */
@@ -116,6 +169,19 @@ export interface PinWindowState {
   width: number;
   height: number;
   opacity: number;
+}
+
+export interface PixelSample {
+  pngBase64: string;
+  hex: string;
+}
+
+export interface QuickCaptureInfo {
+  id: string;
+  thumbnail: string;
+  width: number;
+  height: number;
+  completion: string;
 }
 
 /**
@@ -232,9 +298,15 @@ export const Capture = {
   copyPin(id: string): Promise<void> {
     return call("Capture.CopyPin", id);
   },
+  copyPixelColor(value: string): Promise<void> {
+    return call("Capture.CopyPixelColor", value);
+  },
   /** CopyScrollResult puts the stitched long image on the clipboard. */
   copyScrollResult(id: string): Promise<void> {
     return call("Capture.CopyScrollResult", id);
+  },
+  dismissQuickCapture(id: string): Promise<void> {
+    return call("Capture.DismissQuickCapture", id);
   },
   /**
    * FinishAnnotated completes an in-place annotation: it stores the composited
@@ -246,6 +318,18 @@ export const Capture = {
   /** FinishScroll stops the scrolling capture and runs the chosen action. */
   finishScroll(sessionID: string, action: string): Promise<void> {
     return call("Capture.FinishScroll", sessionID, action);
+  },
+  hangClipboard(): Promise<void> {
+    return call("Capture.HangClipboard");
+  },
+  hangScrollResult(id: string): Promise<void> {
+    return call("Capture.HangScrollResult", id);
+  },
+  hideClothesline(): Promise<void> {
+    return call("Capture.HideClothesline");
+  },
+  importClotheslineImage(): Promise<boolean> {
+    return call("Capture.ImportClotheslineImage");
   },
   /**
    * LaunchAtLogin reports whether the OS currently launches Pinstill at login.
@@ -259,6 +343,21 @@ export const Capture = {
   /** ListArchivedPins lists images deliberately kept closed at launch. */
   listArchivedPins(): Promise<PinArchiveEntry[]> {
     return call("Capture.ListArchivedPins");
+  },
+  listClothesline(): Promise<LineView> {
+    return call("Capture.ListClothesline");
+  },
+  listManagedPins(): Promise<ManagedPin[]> {
+    return call("Capture.ListManagedPins");
+  },
+  managePin(id: string, action: string, value: string): Promise<PinPresentation> {
+    return call("Capture.ManagePin", id, action, value);
+  },
+  managePinGroup(group: string, action: string, value: string): Promise<void> {
+    return call("Capture.ManagePinGroup", group, action, value);
+  },
+  moveClotheslineImage(id: string, before: string): Promise<void> {
+    return call("Capture.MoveClotheslineImage", id, before);
   },
   /** OpenLoginItemsSettings opens the OS login items settings pane. */
   openLoginItemsSettings(): Promise<void> {
@@ -309,6 +408,18 @@ export const Capture = {
   prepareSelectionFast(rect: Rect): Promise<OverlayCapturePayload> {
     return call("Capture.PrepareSelectionFast", rect);
   },
+  previewOverlaySelection(session: number, rect: Rect | null): Promise<void> {
+    return call("Capture.PreviewOverlaySelection", session, rect);
+  },
+  quickAction(id: string, action: string): Promise<CaptureActionResult> {
+    return call("Capture.QuickAction", id, action);
+  },
+  quickCapture(): Promise<QuickCaptureInfo> {
+    return call("Capture.QuickCapture");
+  },
+  removeClotheslineImage(id: string): Promise<void> {
+    return call("Capture.RemoveClotheslineImage", id);
+  },
   /**
    * RequestScreenPermission asks the OS for screen recording access. macOS shows
    * its system prompt when the grant is missing; the return value is the state
@@ -326,6 +437,9 @@ export const Capture = {
   /** RestoreArchivedPin reopens a saved pin only at the user's request. */
   restoreArchivedPin(id: string): Promise<void> {
     return call("Capture.RestoreArchivedPin", id);
+  },
+  sampleOverlayPixels(localX: number, localY: number): Promise<PixelSample> {
+    return call("Capture.SampleOverlayPixels", localX, localY);
   },
   /** SavePin saves a pin's image through the save dialog. */
   savePin(id: string): Promise<string> {
@@ -365,6 +479,12 @@ export const Capture = {
   showMainWindow(): Promise<void> {
     return call("Capture.ShowMainWindow");
   },
+  showPinManager(): Promise<void> {
+    return call("Capture.ShowPinManager");
+  },
+  showQuickCapture(id: string): Promise<void> {
+    return call("Capture.ShowQuickCapture", id);
+  },
   /** StartScroll begins a manual scrolling capture for the current selection. */
   startScroll(rect: Rect): Promise<void> {
     return call("Capture.StartScroll", rect);
@@ -372,6 +492,9 @@ export const Capture = {
   /** UpdatePinState persists the size and opacity the page reports. */
   updatePinState(id: string, state: PinWindowState): Promise<void> {
     return call("Capture.UpdatePinState", id, state);
+  },
+  useClotheslineImage(id: string, action: string): Promise<boolean> {
+    return call("Capture.UseClotheslineImage", id, action);
   },
 } as const;
 
@@ -391,6 +514,9 @@ export const History = {
    */
   get(id: string): Promise<HistoryCapture> {
     return call("History.Get", id);
+  },
+  hang(id: string): Promise<void> {
+    return call("History.Hang", id);
   },
   /** List returns persisted captures, newest first. */
   list(): Promise<HistoryEntry[]> {
@@ -417,12 +543,16 @@ export const History = {
 
 /** Events sent by the Go side. Subscribe with `events.name.on(listener)`. */
 export const events = {
+  lineChanged: event<LineView>("line:changed"),
+  pinPresentation: event<PinPresentation>("pin:presentation"),
+  pinManaged: event<boolean>("pin:managed"),
   /** EventCaptureCancelled is emitted when the user cancels a capture. */
   captureCancelled: event<CaptureCancelledPayload>("capture:cancelled"),
   /** EventCaptureFailed is emitted when capturing failed. */
   captureFailed: event<CaptureFailedPayload>("capture:failed"),
   /** EventOverlayShown is emitted to the overlay window before it appears. */
   overlayShown: event<OverlayInfo>("overlay:shown"),
+  overlayPreview: event<OverlayPreviewPayload>("overlay:preview"),
   /**
    * EventScrollInit is emitted to the scroll control window when a session
    * starts.

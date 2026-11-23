@@ -12,6 +12,7 @@
 import {
   closeScrollResult,
   copyScrollResult,
+  hangScrollResult,
   hasNative,
   onScrollResult,
   pinScrollResult,
@@ -242,6 +243,7 @@ const ACTION_LABELS: Record<string, string> = {
   copy: "复制",
   save: "保存",
   pin: "贴图",
+  hang: "晾图",
   close: "关闭",
 };
 
@@ -266,6 +268,7 @@ async function runAction(action: string, button: HTMLButtonElement | null): Prom
       if (action === "copy") setStatus("浏览器预览 · 桌面应用中会复制长图到剪贴板");
       else if (action === "save") setStatus("浏览器预览 · 已下载示例长图");
       else if (action === "pin") setStatus("浏览器预览 · 桌面应用中会创建贴图窗口");
+      else if (action === "hang") setStatus("浏览器预览 · 桌面应用中可把长图挂到桌面晾绳");
       completed = true;
       window.setTimeout(() => closeLocally("操作完成，窗口已自动关闭", sequence), 700);
       return;
@@ -282,6 +285,8 @@ async function runAction(action: string, button: HTMLButtonElement | null): Prom
       }
     } else if (action === "pin") {
       await pinScrollResult(id);
+    } else if (action === "hang") {
+      await hangScrollResult(id);
     } else {
       return;
     }

@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pinstill · 贴图管理</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --paper: #f2eee4;
+    --muted: #b9b1a4;
+    --accent: #e9ac66;
+    --line: #3b382f;
+    --panel: #211f1a;
+    font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: #171613;
+    color: var(--paper);
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0 auto; padding: 24px 26px 36px; max-width: 960px; }
+  h1, h2, p { margin: 0; }
+  h1 { font-size: 21px; letter-spacing: -.02em; }
+  h2 { font-size: 14px; font-weight: 650; overflow-wrap: anywhere; }
+  button, input { font: inherit; }
+  button {
+    padding: 5px 9px;
+    min-height: 28px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: #302d25;
+    color: var(--paper);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  button:hover:not(:disabled) { background: #3c372d; border-color: #77654e; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button:disabled { opacity: .44; cursor: default; }
+  input {
+    min-width: 0;
+    width: 104px;
+    padding: 5px 8px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: #1b1915;
+    color: var(--paper);
+  }
+  input::placeholder { color: var(--muted); }
+  .intro { margin-top: 6px; color: var(--muted); }
+  .status { min-height: 19px; margin: 10px 0 14px; color: var(--muted); }
+  .status[data-error="1"] { color: #ffae9c; }
+  .empty {
+    margin-top: 10px;
+    padding: 22px 18px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    color: var(--muted);
+  }
+  .group { margin-bottom: 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
+  .group-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 12px;
+    min-height: 52px;
+    padding: 10px 12px;
+  }
+  .group-count { margin-left: 8px; color: var(--muted); font-size: 11px; font-weight: 450; }
+  .actions, .rename { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
+  .group .rename { padding: 0 12px 10px; }
+  .pin-row {
+    display: grid;
+    grid-template-columns: 78px minmax(100px, 1fr) auto;
+    align-items: center;
+    gap: 8px 12px;
+    padding: 10px 12px;
+    border-top: 1px solid var(--line);
+  }
+  .thumb {
+    position: relative;
+    width: 78px;
+    height: 54px;
+    overflow: hidden;
+    border-radius: 6px;
+    background: #14130f;
+  }
+  .thumb img { position: absolute; top: 50%; left: 50%; width: 100%; height: 100%; object-fit: contain; }
+  .thumb.sideways img { width: 54px; height: 78px; }
+  .pin-row[data-hidden="1"] .thumb { opacity: .5; }
+  .detail { display: grid; gap: 3px; }
+  .detail span { color: var(--muted); font-size: 11px; }
+  .pin-tools { display: grid; gap: 5px; justify-items: end; }
+  .pin-tools .rename { flex-wrap: nowrap; }
+  @media (max-width: 620px) {
+    body { padding: 18px; }
+    .pin-row { grid-template-columns: 78px minmax(80px, 1fr); }
+    .pin-tools { grid-column: 2; justify-items: start; }
+  }
+</style>
+</head>
+<body>
+  <header>
+    <h1 tabindex="-1" id="pinsTitle">贴图管理</h1>
+    <p class="intro">分组显示或隐藏贴图。开启鼠标穿透后，可在此恢复点击。</p>
+  </header>
+  <p id="pinsStatus" class="status" role="status">正在读取贴图…</p>
+  <main id="pinsList" aria-labelledby="pinsTitle" aria-busy="true"></main>
+  <p id="pinsEmpty" class="empty" hidden>还没有贴图。截完图后点「贴图」，就能在这里管理。</p>
+  <datalist id="pinGroupOptions"></datalist>
+  <script type="module" src="/src/pins.ts"></script>
+</body>
+</html>

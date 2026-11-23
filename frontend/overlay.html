@@ -105,7 +105,8 @@
   .resize-handle[data-resize="s"] { bottom: -8px; }
   .resize-handle[data-resize="w"] { left: -8px; }
   .resize-handle[data-resize="e"] { right: -8px; }
-  .selection.capturing .resize-handle { display: none; }
+  .selection.capturing .resize-handle,
+  .selection.fitted .resize-handle { display: none; }
 
   #overlayCanvas {
     position: absolute;
@@ -116,6 +117,16 @@
     cursor: crosshair;
     touch-action: none;
   }
+  #annotationSelection {
+    position: absolute;
+    z-index: 3;
+    border: 1px dashed #fffaf0;
+    box-shadow: 0 0 0 1px #242018;
+    pointer-events: none;
+  }
+  .selection.resizing #annotationSelection,
+  .selection.capturing #annotationSelection,
+  #overlayCanvas[hidden] + #annotationSelection { display: none; }
 
   .prepare-state {
     position: absolute;
@@ -161,6 +172,57 @@
     box-shadow: 0 8px 22px rgba(0, 0, 0, 0.38);
     z-index: 8;
   }
+
+  .precision-loupe, .precision-ruler-label {
+    position: fixed;
+    color: var(--paper);
+    background: #242218;
+    border: 1px solid #f2eee45c;
+    border-radius: 7px;
+    font: 600 11px/1.4 var(--font);
+    font-variant-numeric: tabular-nums;
+    pointer-events: none;
+  }
+  .precision-loupe {
+    z-index: 12;
+    width: 134px;
+    padding: 6px;
+    box-shadow: 0 4px 14px #0006;
+  }
+  .precision-grid { position: relative; width: 120px; height: 120px; background: #171713; }
+  .precision-grid img { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+  .precision-grid::after {
+    content: "";
+    position: absolute;
+    top: 56px;
+    left: 56px;
+    width: 8px;
+    height: 8px;
+    border: 1px solid white;
+    outline: 1px solid #161615;
+  }
+  .precision-reading { display: flex; justify-content: space-between; align-items: center; gap: 4px; margin-top: 5px; }
+  .precision-reading kbd { color: #ded6c6; font: inherit; }
+  .precision-ruler { position: fixed; inset: 0; pointer-events: none; z-index: 11; }
+  .precision-ruler-line {
+    position: absolute;
+    height: 1px;
+    background: var(--amber);
+    outline: 1px solid #110e0a66;
+    transform-origin: left center;
+  }
+  .precision-ruler-line::before, .precision-ruler-line::after {
+    content: "";
+    position: absolute;
+    top: -2px;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--amber);
+  }
+  .precision-ruler-line::before { left: -2px; }
+  .precision-ruler-line::after { right: -2px; }
+  .precision-ruler-label { padding: 4px 7px; white-space: nowrap; }
 
   .hint {
     position: fixed;
@@ -367,6 +429,7 @@
   .textstyle-btn[aria-pressed="true"] { background: #30362f; border-color: #30362f; color: #f7f3ea; }
   .textstyle-btn:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
   .textstyle-btn.italic { font-style: italic; font-family: Georgia, "Songti SC", serif; }
+  #annotationEditText { width: auto; padding: 0 6px; font-size: 11px; white-space: nowrap; }
   .textstyle-select {
     height: 26px;
     padding: 0 4px;
@@ -519,6 +582,7 @@
   <div class="mask" id="maskRight" hidden></div>
   <div class="selection" id="selection" hidden>
     <canvas id="overlayCanvas" aria-label="截图标注画布" hidden></canvas>
+    <div id="annotationSelection" aria-hidden="true" hidden></div>
     <div class="resize-handle" data-resize="n" aria-hidden="true"></div>
     <div class="resize-handle" data-resize="s" aria-hidden="true"></div>
     <div class="resize-handle" data-resize="w" aria-hidden="true"></div>
@@ -535,6 +599,14 @@
   <div class="crosshair v" id="crosshairV" hidden></div>
   <div class="crosshair h" id="crosshairH" hidden></div>
   <div class="size-badge" id="sizeBadge" hidden></div>
+  <div class="precision-ruler" id="precisionRuler" hidden>
+    <div class="precision-ruler-line" id="precisionRulerLine"></div>
+    <output class="precision-ruler-label" id="precisionRulerLabel"></output>
+  </div>
+  <div class="precision-loupe" id="precisionLoupe" hidden>
+    <div class="precision-grid"><img id="precisionPixels" alt="光标周围的放大像素" hidden /></div>
+    <div class="precision-reading"><output id="precisionColor"></output><kbd>C 复制</kbd></div>
+  </div>
 
   <div class="annotation-toolbar" id="annotationToolbar" role="toolbar" aria-label="标注工具栏" hidden>
     <div class="at-row at-tools">
@@ -552,6 +624,7 @@
           <select class="textstyle-select" id="textSize" aria-label="字号"></select>
           <select class="textstyle-select" id="textFont" aria-label="字体"></select>
         </div>
+        <button type="button" class="textstyle-btn" id="annotationEditText" title="编辑文字" hidden>改字</button>
         <label class="at-width" for="overlayWidth" id="overlayWidthLabel">
           <span id="overlayWidthLabelText">粗细</span>
           <input id="overlayWidth" type="range" min="1" max="10" step="1" value="2" aria-label="粗细" />
@@ -577,6 +650,10 @@
     <span class="hint-key">单击</span> 截取窗口
     <span class="hint-sep">·</span>
     <span class="hint-key">拖动</span> 选择区域
+    <span class="hint-sep">·</span>
+    <span class="hint-key">Z</span> 放大取色
+    <span class="hint-sep">·</span>
+    <span class="hint-key">M</span> 测距
     <span class="hint-sep">·</span>
     <span class="hint-key">Esc</span> 取消
   </div>

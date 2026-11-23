@@ -40,18 +40,30 @@ type OverlayWindow struct {
 	Title  string  `json:"title,omitempty"`
 }
 
+type OverlayDisplay struct {
+	Rect
+	Scale float64 `json:"scale"`
+}
+
 // OverlayInfo tells the overlay page where the selection surface is.
 type OverlayInfo struct {
-	Session   uint64          `json:"session,omitempty"`
-	DisplayX  int             `json:"displayX"`
-	DisplayY  int             `json:"displayY"`
-	Width     int             `json:"width"`
-	Height    int             `json:"height"`
-	Scale     float64         `json:"scale"`
-	CursorX   float64         `json:"cursorX"`
-	CursorY   float64         `json:"cursorY"`
-	HasCursor bool            `json:"hasCursor,omitempty"`
-	Windows   []OverlayWindow `json:"windows,omitempty"`
+	Session   uint64           `json:"session,omitempty"`
+	DisplayX  int              `json:"displayX"`
+	DisplayY  int              `json:"displayY"`
+	Width     int              `json:"width"`
+	Height    int              `json:"height"`
+	Scale     float64          `json:"scale"`
+	CursorX   float64          `json:"cursorX"`
+	CursorY   float64          `json:"cursorY"`
+	HasCursor bool             `json:"hasCursor,omitempty"`
+	Windows   []OverlayWindow  `json:"windows,omitempty"`
+	Desktop   *Rect            `json:"desktop,omitempty"`
+	Displays  []OverlayDisplay `json:"displays,omitempty"`
+}
+
+type OverlayPreviewPayload struct {
+	Session uint64 `json:"session"`
+	Rect    *Rect  `json:"rect,omitempty"`
 }
 
 // CaptureCancelledPayload reports a capture the user backed out of.
@@ -68,12 +80,13 @@ type CaptureFailedPayload struct {
 
 // PinInitPayload configures a pin window that has just been created.
 type PinInitPayload struct {
-	ID      string  `json:"id"`
-	URL     string  `json:"url"`
-	Width   float64 `json:"width"`
-	Height  float64 `json:"height"`
-	Opacity float64 `json:"opacity"`
-	Border  bool    `json:"border"`
+	ID           string           `json:"id"`
+	URL          string           `json:"url"`
+	Width        float64          `json:"width"`
+	Height       float64          `json:"height"`
+	Opacity      float64          `json:"opacity"`
+	Border       bool             `json:"border"`
+	Presentation *PinPresentation `json:"presentation,omitempty"`
 }
 
 // HistoryChangedPayload announces that the capture history changed.
@@ -225,7 +238,8 @@ var (
 	// EventCaptureFailed is emitted when capturing failed.
 	EventCaptureFailed = mygo.NewEvent[CaptureFailedPayload]("capture:failed")
 	// EventOverlayShown is emitted to the overlay window before it appears.
-	EventOverlayShown = mygo.NewEvent[OverlayInfo]("overlay:shown")
+	EventOverlayShown   = mygo.NewEvent[OverlayInfo]("overlay:shown")
+	EventOverlayPreview = mygo.NewEvent[OverlayPreviewPayload]("overlay:preview")
 	// EventScrollInit is emitted to the scroll control window when a session
 	// starts.
 	EventScrollInit = mygo.NewEvent[ScrollInitPayload]("scroll:init")

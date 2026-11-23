@@ -274,11 +274,11 @@ func TestOldResultActionsCannotOperateOnNewPreview(t *testing.T) {
 	if err := service.CloseScrollResult("old"); err == nil {
 		t.Error("stale close accepted")
 	}
-	if _, _, err := a.scrollResultPNG(""); err == nil {
+	if _, err := a.scrollResultSnapshot(""); err == nil {
 		t.Error("missing preview identity accepted")
 	}
-	if got, _, err := a.scrollResultPNG("new"); err != nil || string(got) != "new preview" {
-		t.Fatalf("current preview unavailable: %s %v", got, err)
+	if got, err := a.scrollResultSnapshot("new"); err != nil || string(got.png) != "new preview" {
+		t.Fatalf("current preview unavailable: %s %v", got.png, err)
 	}
 }
 

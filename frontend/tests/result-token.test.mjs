@@ -25,7 +25,7 @@ function resultBridge(hasNative) {
   return { bridge: exports, calls };
 }
 
-const methods = ['copyScrollResult', 'saveScrollResult', 'pinScrollResult', 'closeScrollResult'];
+const methods = ['copyScrollResult', 'saveScrollResult', 'pinScrollResult', 'hangScrollResult', 'closeScrollResult'];
 for (const method of methods) {
   test(`${method} forwards the result token and rejects missing tokens before native calls`, async () => {
     const { bridge, calls } = resultBridge(true);
@@ -43,7 +43,7 @@ for (const method of methods) {
 }
 
 const result = id => ({ id, url: `shot://${id}`, width: 120, height: 240, frames: 2, capped: false });
-for (const action of ['copy', 'save', 'pin']) {
+for (const action of ['copy', 'save', 'pin', 'hang']) {
   test(`result ${action} carries the original ID and its late success cannot close a newer preview`, async () => {
     const calls = [], closes = [];
     const p = page('result', { bridge: {

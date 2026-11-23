@@ -131,7 +131,7 @@ func (a *App) captureScrollFrameWith(session *scrollSession, control scrollContr
 		// scrollFrame sits 2px outside session.region, has no shadow, and uses
 		// content protection, so neither it nor a non-overlapping control bar
 		// needs to flicker off/on between frames.
-		return a.captureRegion(session.region, capture.CaptureOptions{IncludeCursor: false})
+		return a.captureRegion(session.region, capture.CaptureOptions{BackingScale: session.backingScale})
 	}
 	var data []byte
 	err := a.withScrollChromeHidden(session, func() {
@@ -143,7 +143,7 @@ func (a *App) captureScrollFrameWith(session *scrollSession, control scrollContr
 			control.ShowInactive()
 		}
 	}, func() (err error) {
-		data, err = a.captureRegion(session.region, capture.CaptureOptions{IncludeCursor: false})
+		data, err = a.captureRegion(session.region, capture.CaptureOptions{BackingScale: session.backingScale})
 		return err
 	}, delay)
 	return data, err

@@ -122,6 +122,7 @@ func (a *App) createPinWindow(st pin.State) error {
 		URL:               "/pin.html",
 	})
 	win.SetOpacity(opacity / 100)
+	win.SetIgnoreMouseEvents(st.ClickThrough)
 	id := st.ID
 	win.OnClose(func(e *mygo.CloseEvent) {
 		a.handlePinClose(id, e, func(err error) { a.reportPinError(win, err) })
@@ -135,8 +136,17 @@ func (a *App) createPinWindow(st pin.State) error {
 			delete(a.pinTimers, id)
 		}
 		a.mu.Unlock()
+		a.emitManagedPins()
 	})
-	win.OnReadyToShow(func() { win.Show() })
+	win.OnReadyToShow(func() {
+		if latest, ok := a.pinState(id); ok && !latest.Hidden {
+			if latest.ClickThrough {
+				win.ShowInactive()
+			} else {
+				win.Show()
+			}
+		}
+	})
 	win.OnMove(func() { a.persistPin(id) })
 	win.OnResize(func() { a.persistPin(id) })
 
@@ -145,14 +155,17 @@ func (a *App) createPinWindow(st pin.State) error {
 	a.pinStates[id] = st
 	a.mu.Unlock()
 
+	presentation := pinPresentation(st)
 	_ = EventPinInit.Emit(win, PinInitPayload{
-		ID:      id,
-		URL:     a.pinURL(st.File),
-		Width:   float64(st.Width),
-		Height:  float64(st.Height),
-		Opacity: opacity,
-		Border:  border,
+		ID:           id,
+		URL:          a.pinURL(st.File),
+		Width:        float64(st.Width),
+		Height:       float64(st.Height),
+		Opacity:      opacity,
+		Border:       border,
+		Presentation: &presentation,
 	})
+	a.emitManagedPins()
 	return nil
 }
 
@@ -177,18 +190,19 @@ func (a *App) persistPin(id string) {
 func (a *App) snapshotPin(id string) error {
 	a.mu.Lock()
 	win := a.pins[id]
-	st, ok := a.pinStates[id]
 	a.mu.Unlock()
-	if !ok {
-		return nil
-	}
 	if win == nil || win.IsDestroyed() {
 		return nil
 	}
-	b := win.Bounds()
-	st.X, st.Y, st.Width, st.Height = b.X, b.Y, b.Width, b.Height
-	st.Opacity = win.Opacity() * 100
-	return a.savePinSnapshot(st, nil)
+	bounds := win.ContentBounds()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	state, ok := a.pinStates[id]
+	if !ok || (state.X == bounds.X && state.Y == bounds.Y) {
+		return nil
+	}
+	state.X, state.Y = bounds.X, bounds.Y
+	return a.storePinStateLocked(state)
 }
 
 // storePinState updates a live pin. A snapshot copied before removal must not
@@ -362,7 +376,9 @@ func (a *App) resizePin(id string, width, height int) error {
 
 // updatePinState stores the size and opacity the page reports.
 func (a *App) updatePinState(id string, state PinWindowState) error {
-	st, ok := a.pinState(id)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	st, ok := a.pinStates[id]
 	if !ok {
 		return fmt.Errorf("贴图 %s 不存在", id)
 	}
@@ -375,7 +391,7 @@ func (a *App) updatePinState(id string, state PinWindowState) error {
 	if state.Opacity > 0 {
 		st.Opacity = min(max(state.Opacity, 10), 100)
 	}
-	return a.storePinState(st)
+	return a.storePinStateLocked(st)
 }
 
 // setPinOpacity changes a pin's opacity (10..100) and persists it.

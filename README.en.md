@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | English
 
-**Screenshot → annotate in place → copy / pin / save → back to history**, all from one hotkey.
+**Screenshot → annotate in place → copy / pin / hang / save**, all from one hotkey.
 Pure Go + system WebView: no Electron, no cgo. Screenshots stay on your Mac.
 
 [![CI](https://github.com/echoVic/Pinstill/actions/workflows/ci.yml/badge.svg)](https://github.com/echoVic/Pinstill/actions/workflows/ci.yml)
@@ -23,17 +23,23 @@ Builds with automatic updates check in the background, or you can choose “检�
 1. Pinstill lives in the menu bar; press **⌘⇧1** (or choose Capture Region from the tray) to start a selection.
 2. Drag a region and release to capture; the annotation toolbar appears next to it. Press Enter or double-click the canvas to copy, Esc to cancel.
 3. Drag any edge or corner to adjust the selection, then release to update the capture. Choose Scrolling Capture for a tall page.
-4. Pin puts the shot on top of other windows, Save opens the system save dialog, Copy puts it on the clipboard.
-5. Tray → History & Settings for captures, pins and all preferences.
+4. Choose Pin for an always-on-top window or Hang to put the image on the desktop clothesline. After copying or saving, the screenshot card at the bottom right offers more actions.
+5. From the menu bar, open Pin Manager to organize pins, toggle the desktop clothesline, or open History & Settings for captures and preferences.
 
 Hotkeys and what happens after a capture (annotate / copy / pin) are configurable in Settings.
 
+While selecting, use the arrow keys to fine-tune the endpoint and hold Shift for steps of 10 points. Press Z for the pixel loupe, C to copy the displayed color, or M to measure from the pointer. After capturing an area on one display, use Option + arrows to move the region or add Shift to adjust its size.
+
+Press V to select existing annotations. Drag to move a shape, double-click text or a tag to edit it, and use the palette to recolor the selection. Delete removes it, ⌘Z undoes, and ⌘⇧Z redoes.
+
 ## Features
 
-- **Capture and annotation**: region and full-screen capture with a dim mask, crosshair and size badge; the shot appears inside the selection with the full toolbar beside it. Rectangle, ellipse, line, arrow, pen, text, tag, mosaic, highlight and tiled watermark, with undo, a 40-colour palette, hex input and text styles.
-- **Pins**: always-on-top borderless windows you can drag, scale and fade, with a right-click menu for copy, save, opacity and original size; each keeps its own place and they come back after a restart (up to 60 active pins, older ones archived).
-- **History**: captures are saved locally with real thumbnails; a large preview supports copy, save, pin and delete, and retention by days and size applies.
-- **Scrolling capture**: starts in manual mode. Enable automatic scrolling from the controls with Accessibility permission. Pause, resume or finish at any time. Capture finishes automatically at 120 frames, 30,000 px or 32 Mi pixels.
+- **Capture and annotation** offers region and full-screen capture with a dim mask, crosshair and size badge. On macOS you can select across displays, with a fitted preview for annotation. Draw rectangles, ellipses, lines, arrows, freehand strokes, text, tags, mosaic, highlights and tiled watermarks using a 40-colour palette, hex input and text styles.
+- **Screenshot card** appears after you copy or save a region, full-screen, or scrolling capture. Copy, save, pin, or hang the image from the card. It stays open on hover and closes about six seconds after you move away.
+- **Pins** are always-on-top windows you can drag, resize, fade, rotate, and flip. Use Pin Manager to group pins, show or hide a group, and restore mouse clicks to click-through pins. Pin settings are restored with the images. Up to 60 pins stay active, with older ones archived.
+- **Desktop clothesline** displays a row of pictures centred below the menu bar on the primary Mac display and floats above ordinary windows while visible. Hang a capture from the toolbar or a preview, or add an image from a file or the clipboard. Drag to reorder. Select a picture to copy, save, pin, or remove it. Pictures, order, and visibility are restored when Pinstill restarts.
+- **History** displays local thumbnails. The large preview supports copy, save, pin, hang, and delete. Retention by age and size is configurable.
+- **Scrolling capture** starts in manual mode. Scroll and choose Finish now when ready, or enable automatic scrolling from the controls with Accessibility permission. If frames cannot be matched, the app keeps the stitched image and prompts you to scroll back slightly. Capture finishes at 120 frames, 30,000 px or 32 Mi pixels.
 - **Tray and hotkeys**: a menu-bar icon; **⌘⇧1** captures a region and **⌘⇧2** pins the clipboard image, both re-recordable in Settings.
 - **Settings and permissions**: seven categories take effect immediately; the permission centre shows the real state of screen recording, Accessibility and launch at login.
 
@@ -41,7 +47,7 @@ OCR, translation and QR decoding are still placeholders marked *not implemented 
 
 ## Data and permissions
 
-- Captures live in `~/Library/Application Support/Pinstill/captures/`, pins in `.../pins/`, and the session cache in `~/Library/Caches/Pinstill/session/`.
+- Captures live in `~/Library/Application Support/Pinstill/captures/`, pins in `.../pins/`, clothesline images in `.../clothesline/`, and the session cache in `~/Library/Caches/Pinstill/session/`.
 - Pages read those images through `shot://localhost/...`; nothing goes over the network and nothing is uploaded.
 - Screen Recording permission is needed for captures; automatic scrolling also needs Accessibility, and falls back to manual without it.
 - For development or self-tests, set `PINSTILL_DATA_DIR=/tmp/pinstill-data` so the app can't read your real history.
@@ -73,7 +79,7 @@ bash work/e2e.sh --skip-build   # 24 app-level self-tests; drop --skip-build to 
 
 - Windows has only cross-compilation and synthetic tests; mixed DPI, negative coordinates and multi-monitor setups still need real-hardware validation.
 - OCR, translation and QR decoding aren't wired up; scrolling capture can miss self-drawn scrolling, dynamic headers and fully repeating content.
-- The overlay covers the visible workspace, so the menu bar and Dock can't be selected directly; multi-monitor and mixed-scaling setups are not fully tested.
+- On macOS, a cross-display capture uses the highest pixel density in the selection and keeps any gaps between displays transparent. Scrolling capture needs a region within one display.
 - Launch at login fails when the app isn't in `/Applications`; the settings page reports that as it is.
 
 ## Contributing

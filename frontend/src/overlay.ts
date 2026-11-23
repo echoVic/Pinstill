@@ -16,18 +16,20 @@
 
 import { DEFAULT_PREFERENCES, loadPreferences } from "./settings";
 import { AnnotationEngine, DEFAULT_TEXT_FONT, InlineTextEditor } from "./annotate";
-import type { WatermarkLayer } from "./annotate";
+import type { Point, Shape, WatermarkLayer } from "./annotate";
 import {
   beginRegion,
   cancelRegion,
   finishAnnotated,
   hasNative,
+  onOverlayPreview,
   onOverlayShown,
   openPermissionSettings,
   overlayInfo,
   overlayReady,
   prepareSelection,
   prepareSelectionFast,
+  previewOverlaySelection,
   settings,
   startScroll,
   type FinishAnnotatedAction,
@@ -43,6 +45,7 @@ import {
   rememberColor,
 } from "./colors";
 import { ColorPalettePanel, createPaletteToggleButton } from "./palette";
+import { PrecisionInspector } from "./precision";
 import { DRAW_TOOLS, TOOLS, TOOL_ICONS, isDrawTool, type ToolId } from "./tools";
 import { blobToBase64, decodeImageBlob, flashButtonSuccess, setButtonPending } from "./util";
 
@@ -64,11 +67,12 @@ type Phase = "idle" | "selecting" | "preparing" | "annotating" | "finishing";
 type AfterCapture = "inplace" | "clipboard" | "pin";
 
 /** Toolbar actions as exposed to the page/E2E (data-action). */
-type ToolbarAction = "copy" | "pin" | "save" | "cancel";
+type ToolbarAction = FinishAnnotatedAction;
 
 const PENDING_LABELS: Record<ToolbarAction, string> = {
   copy: "正在复制…",
   pin: "正在固定到桌面…",
+  hang: "正在挂到桌面晾绳…",
   save: "正在保存…",
   cancel: "正在取消…",
 };
@@ -76,6 +80,7 @@ const PENDING_LABELS: Record<ToolbarAction, string> = {
 const DEMO_MESSAGES: Record<ToolbarAction, string> = {
   copy: "复制：桌面应用中会把合成图写入系统剪贴板",
   pin: "贴图：桌面应用中会创建置顶的桌面贴图窗口",
+  hang: "晾图：桌面应用中会把截图挂到桌面晾绳",
   save: "保存：桌面应用中会打开保存对话框",
   cancel: "已取消本次截图",
 };
@@ -88,6 +93,7 @@ const ACTION_DEFS: Array<{
 }> = [
   { action: "copy", label: "复制", icon: "copy", className: "primary" },
   { action: "pin", label: "贴图", icon: "pin" },
+  { action: "hang", label: "晾图", icon: "images" },
   { action: "save", label: "保存", icon: "download" },
   { action: "cancel", label: "取消", icon: "x", className: "cancel" },
 ];
@@ -128,8 +134,11 @@ const SVG_PATHS: Record<string, string> = {
   stamp:
     '<path d="M5 22h14"/><path d="M19.27 13.73A2.5 2.5 0 0 0 17.5 13h-11A2.5 2.5 0 0 0 4 15.5V17a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-1.5c0-.66-.26-1.3-.73-1.77Z"/><path d="M14 13V8.5C14 7 15 7 15 5a3 3 0 0 0-6 0c0 2 1 2 1 3.5V13"/>',
   "undo-2": '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
+  "redo-2": '<path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/>',
+  "mouse-pointer-2": '<path d="m4 4 16 7-7 2-2 7L4 4Z"/>',
   copy: '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
   pin: '<path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/>',
+  images: '<path d="M18 22H6a2 2 0 0 1-2-2V6"/><rect x="8" y="2" width="12" height="16" rx="2"/><circle cx="12.5" cy="6.5" r="1.5"/><path d="m8 14 3-3 3 3 3-4 3 4"/>',
   download:
     '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/>',
   "square-pen":
@@ -158,6 +167,8 @@ const maskLeft = el("maskLeft");
 const maskRight = el("maskRight");
 const selection = el("selection");
 const canvas = el<HTMLCanvasElement>("overlayCanvas");
+const annotationSelection = el("annotationSelection");
+const annotationEditText = el<HTMLButtonElement>("annotationEditText");
 const prepareState = el("prepareState");
 const crosshairV = el("crosshairV");
 const crosshairH = el("crosshairH");
@@ -358,14 +369,25 @@ let detectedWindows: OverlayWindow[] = [];
 let pressWindow: OverlayWindow | null = null;
 let dragMoved = false;
 let overlayShownHandled = false;
+let passiveSelection = false;
+let peerPreview: { session: number; rect: Rect | null } | null = null;
+let peerPreviewPending = false;
 
 let startX = 0;
 let startY = 0;
 let currentX = 0;
 let currentY = 0;
+let endpointOffsetX = 0;
+let endpointOffsetY = 0;
 let committedRect: Rect | null = null;
+let keyboardAdjustment: { original: Rect; rect: Rect; timer: number } | null = null;
+const precision = new PrecisionInspector(
+  () => ({ width: window.innerWidth, height: window.innerHeight }),
+  (message) => showTransient(message),
+);
 
 let engine: AnnotationEngine | null = null;
+let displayedAnnotation: Readonly<Shape> | null = null;
 let captureAttempt = 0;
 let captureImage: ImageBitmap | HTMLImageElement | HTMLCanvasElement | null = null;
 let settingsSequence = 0;
@@ -379,8 +401,10 @@ let inlineEditor: InlineTextEditor | null = null;
 // The shared in-app palette panel (R7.8). `setColor` is a hoisted function
 // declaration, so it is available when a colour is picked later.
 const palettePanel = new ColorPalettePanel({
-  getColor: () => color,
-  onColor: (next, options) => setColor(next, options.remember),
+  getColor: () => selectedAnnotation()?.color ?? color,
+  onColor: (next, options) => {
+    if (options.remember || !selectedAnnotation()) setColor(next, options.remember);
+  },
 });
 
 function clamp(value: number, min: number, max: number): number {
@@ -398,6 +422,20 @@ function viewportWidth(): number {
 
 function viewportHeight(): number {
   return displayInfo?.height && displayInfo.height > 0 ? displayInfo.height : window.innerHeight;
+}
+
+function desktopBounds(): Rect {
+  return displayInfo?.desktop ?? { x: 0, y: 0, width: viewportWidth(), height: viewportHeight() };
+}
+
+function editingRect(rect: Rect): Rect {
+  const width = viewportWidth();
+  const height = viewportHeight();
+  if (rect.x >= 0 && rect.y >= 0 && rect.x + rect.width <= width && rect.y + rect.height <= height) return rect;
+  const scale = Math.min(1, Math.max(1, width - 48) / rect.width, Math.max(1, height - 200) / rect.height);
+  const fittedWidth = rect.width * scale;
+  const fittedHeight = rect.height * scale;
+  return { x: (width - fittedWidth) / 2, y: (height - fittedHeight) / 2, width: fittedWidth, height: fittedHeight };
 }
 
 function toolLabel(tool: ToolId): string {
@@ -439,33 +477,37 @@ function selectionRect(): Rect {
 
 function roundedSelectionRect(): Rect {
   const rect = selectionRect();
-  const x = clamp(Math.round(rect.x), 0, viewportWidth());
-  const y = clamp(Math.round(rect.y), 0, viewportHeight());
+  const desktop = desktopBounds();
+  const right = desktop.x + desktop.width;
+  const bottom = desktop.y + desktop.height;
+  const x = clamp(Math.round(rect.x), desktop.x, right);
+  const y = clamp(Math.round(rect.y), desktop.y, bottom);
   return {
     x,
     y,
-    width: Math.max(1, Math.round(Math.min(rect.width, viewportWidth() - x))),
-    height: Math.max(1, Math.round(Math.min(rect.height, viewportHeight() - y))),
+    width: Math.max(1, Math.min(Math.round(rect.x + rect.width), right) - x),
+    height: Math.max(1, Math.min(Math.round(rect.y + rect.height), bottom) - y),
   };
 }
 
 function moveCrosshair(x: number, y: number): void {
+  precision.move(x, y);
   crosshairV.hidden = false;
   crosshairH.hidden = false;
   crosshairV.style.left = `${x}px`;
   crosshairH.style.top = `${y}px`;
 }
 
-function updateSizeBadge(rect: Rect, toolbarAbove = false, label?: string): void {
+function updateSizeBadge(rect: Rect, toolbarAbove = false, label?: string, badgeAnchor = rect): void {
   const dims = `${Math.round(rect.width)} × ${Math.round(rect.height)}`;
   const cleanLabel = label?.trim().slice(0, 24) ?? "";
   sizeBadge.textContent = cleanLabel ? `${cleanLabel} · ${dims}` : dims;
   sizeBadge.hidden = false;
   const badgeWidth = sizeBadge.offsetWidth || 84;
   const badgeHeight = sizeBadge.offsetHeight || 24;
-  let left = rect.x + rect.width - badgeWidth;
-  let top = toolbarAbove ? rect.y + 8 : rect.y - badgeHeight - 8;
-  if (top < EDGE_MARGIN) top = rect.y + 8;
+  let left = badgeAnchor.x + badgeAnchor.width - badgeWidth;
+  let top = toolbarAbove ? badgeAnchor.y + 8 : badgeAnchor.y - badgeHeight - 8;
+  if (top < EDGE_MARGIN) top = badgeAnchor.y + 8;
   left = clamp(left, EDGE_MARGIN, Math.max(EDGE_MARGIN, viewportWidth() - badgeWidth - EDGE_MARGIN));
   top = clamp(top, EDGE_MARGIN, Math.max(EDGE_MARGIN, viewportHeight() - badgeHeight - EDGE_MARGIN));
   sizeBadge.style.left = `${left}px`;
@@ -487,8 +529,8 @@ function positionMasks(rect: Rect | null): void {
   }
   const x = clamp(rect.x, 0, vw);
   const y = clamp(rect.y, 0, vh);
-  const w = clamp(rect.width, 0, vw - x);
-  const h = clamp(rect.height, 0, vh - y);
+  const w = clamp(rect.x + rect.width, x, vw) - x;
+  const h = clamp(rect.y + rect.height, y, vh) - y;
   const place = (el: HTMLElement, left: number, top: number, width: number, height: number) => {
     const visible = width > 0.5 && height > 0.5;
     el.hidden = !visible;
@@ -507,13 +549,9 @@ function positionMasks(rect: Rect | null): void {
 
 function renderSelection(): void {
   const rect = selectionRect();
-  selection.hidden = false;
-  positionMasks(rect);
-  selection.style.left = `${rect.x}px`;
-  selection.style.top = `${rect.y}px`;
-  selection.style.width = `${rect.width}px`;
-  selection.style.height = `${rect.height}px`;
+  positionSelection(rect);
   updateSizeBadge(rect);
+  queuePeerPreview(rect);
 }
 
 function positionSelection(rect: Rect): void {
@@ -523,6 +561,28 @@ function positionSelection(rect: Rect): void {
   selection.style.top = `${rect.y}px`;
   selection.style.width = `${rect.width}px`;
   selection.style.height = `${rect.height}px`;
+}
+
+function queuePeerPreview(rect: Rect | null): void {
+  const session = displayInfo?.session;
+  if (!displayInfo?.desktop || !session) return;
+  peerPreview = { session, rect };
+  if (peerPreviewPending) return;
+  peerPreviewPending = true;
+  requestAnimationFrame(publishPeerPreview);
+}
+
+function publishPeerPreview(): void {
+  const pending = peerPreview;
+  peerPreview = null;
+  if (!pending || pending.session !== displayInfo?.session) {
+    peerPreviewPending = false;
+    return;
+  }
+  void previewOverlaySelection(pending.session, pending.rect).catch(() => {}).finally(() => {
+    if (peerPreview) requestAnimationFrame(publishPeerPreview);
+    else peerPreviewPending = false;
+  });
 }
 
 function sanitizeWindows(list: OverlayWindow[] | undefined): OverlayWindow[] {
@@ -635,24 +695,18 @@ function setToolbarStatus(text: string, kind: "info" | "error" = "info"): void {
 
 function buildToolbar(): void {
   toolsHost.replaceChildren();
-  for (const tool of DRAW_TOOLS) {
+  for (const tool of ["select", ...DRAW_TOOLS, "undo", "redo"] as const) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "tool-btn";
     button.dataset.tool = tool;
     button.setAttribute("aria-label", toolLabel(tool));
-    button.setAttribute("aria-pressed", "false");
-    button.innerHTML = `${svgIcon(TOOL_ICONS[tool] ?? "square")}<span class="tip">${toolLabel(tool)}</span>`;
+    if (tool === "undo" || tool === "redo") button.disabled = true;
+    else button.setAttribute("aria-pressed", "false");
+    const tip = tool === "select" ? `${toolLabel(tool)} (V)` : toolLabel(tool);
+    button.innerHTML = `${svgIcon(TOOL_ICONS[tool] ?? "square")}<span class="tip">${tip}</span>`;
     toolsHost.append(button);
   }
-  const undo = document.createElement("button");
-  undo.type = "button";
-  undo.className = "tool-btn";
-  undo.dataset.tool = "undo";
-  undo.setAttribute("aria-label", "撤销");
-  undo.disabled = true;
-  undo.innerHTML = `${svgIcon("undo-2")}<span class="tip">撤销</span>`;
-  toolsHost.append(undo);
 
   const actionSeparator = document.createElement("span");
   actionSeparator.className = "at-tool-sep";
@@ -686,26 +740,22 @@ function buildToolbar(): void {
     textFontSelect.append(option);
   }
   textBoldButton.addEventListener("click", () => {
-    textStyle.bold = !textStyle.bold;
-    applyTextStyleUI();
-    saveTextStyle();
+    editTextStyle({ bold: !activeTextStyle().bold });
   });
   textItalicButton.addEventListener("click", () => {
-    textStyle.italic = !textStyle.italic;
-    applyTextStyleUI();
-    saveTextStyle();
+    editTextStyle({ italic: !activeTextStyle().italic });
   });
   textSizeSelect.addEventListener("change", () => {
     const size = Number(textSizeSelect.value);
-    textStyle.size = TEXT_SIZES.includes(size) ? size : DEFAULT_TEXT_STYLE.size;
-    saveTextStyle();
+    editTextStyle({ size: TEXT_SIZES.includes(size) ? size : DEFAULT_TEXT_STYLE.size });
   });
   textFontSelect.addEventListener("change", () => {
-    textStyle.family = TEXT_FONTS.some((font) => font.value === textFontSelect.value)
+    const family = TEXT_FONTS.some((font) => font.value === textFontSelect.value)
       ? textFontSelect.value
       : DEFAULT_TEXT_STYLE.family;
-    saveTextStyle();
+    editTextStyle({ family });
   });
+  annotationEditText.addEventListener("click", editSelectedText);
   applyTextStyleUI();
 
   actionsHost.replaceChildren();
@@ -721,9 +771,15 @@ function buildToolbar(): void {
 
   toolbar.addEventListener("click", onToolbarClick);
   widthInput.addEventListener("input", () => {
-    penWidth = clamp(Number(widthInput.value) || 1, 1, 10);
-    widthValue.textContent = String(penWidth);
-    if (watermarkEnabled) applyWatermark();
+    const width = clamp(Number(widthInput.value) || 1, 1, 10);
+    widthValue.textContent = String(width);
+    if (!selectedAnnotation()) {
+      penWidth = width;
+      if (watermarkEnabled) applyWatermark();
+    }
+  });
+  widthInput.addEventListener("change", () => {
+    engine?.editSelectedShape({ width: clamp(Number(widthInput.value) || 1, 1, 10) });
   });
   textInput.addEventListener("input", () => {
     entry = textInput.value;
@@ -754,6 +810,7 @@ function onToolbarClick(event: Event): void {
   if (toolButton) {
     const tool = toolButton.dataset.tool;
     if (tool === "undo") undo();
+    else if (tool === "redo") redo();
     else if (tool === "scroll") void startScrollFromToolbar();
     else if (tool === "watermark") toggleWatermarkTool();
     else if (tool && PLACEHOLDER_TOOLS.has(tool)) showRecognitionPlaceholder(tool);
@@ -774,6 +831,7 @@ function onToolbarClick(event: Event): void {
  * the small control-bar window (`/scroll.html`) and starts the capture loop;
  * the next BeginRegion's overlay:shown resets this page. */
 async function startScrollFromToolbar(): Promise<void> {
+  if (keyboardAdjustment && !await settleKeyboardAdjustment()) return;
   if (phase !== "annotating" || !committedRect) return;
   if (!hasNative) {
     setToolbarStatus("滚动截图 · 浏览器预览", "info");
@@ -814,11 +872,42 @@ function showRecognitionPlaceholder(tool: string): void {
   }, 3200);
 }
 
+function selectedAnnotation(): Readonly<Shape> | null {
+  return currentTool === "select" ? engine?.getSelectedShape() ?? null : null;
+}
+
+function activeTextStyle(): TextStyleState {
+  const shape = selectedAnnotation();
+  if (shape?.kind !== "text") return textStyle;
+  return {
+    size: shape.fontSize ?? DEFAULT_TEXT_STYLE.size,
+    bold: Boolean(shape.bold),
+    italic: Boolean(shape.italic),
+    family: shape.fontFamily ?? DEFAULT_TEXT_STYLE.family,
+  };
+}
+
+function editTextStyle(change: Partial<TextStyleState>): void {
+  if (selectedAnnotation()?.kind === "text") {
+    const { size, family, ...flags } = change;
+    engine?.editSelectedShape({
+      ...flags,
+      ...(size === undefined ? {} : { fontSize: size }),
+      ...(family === undefined ? {} : { fontFamily: family }),
+    });
+  } else {
+    Object.assign(textStyle, change);
+    saveTextStyle();
+  }
+  applyTextStyleUI();
+}
+
 function applyTextStyleUI(): void {
-  textBoldButton.setAttribute("aria-pressed", String(textStyle.bold));
-  textItalicButton.setAttribute("aria-pressed", String(textStyle.italic));
-  textSizeSelect.value = String(textStyle.size);
-  textFontSelect.value = textStyle.family;
+  const style = activeTextStyle();
+  textBoldButton.setAttribute("aria-pressed", String(style.bold));
+  textItalicButton.setAttribute("aria-pressed", String(style.italic));
+  textSizeSelect.value = String(style.size);
+  textFontSelect.value = style.family;
 }
 
 /** The watermark button is an on/off layer: clicking it shows the tiled
@@ -837,10 +926,11 @@ function toggleWatermarkTool(): void {
 }
 
 function selectTool(tool: ToolId): void {
+  if (currentTool !== tool) lastCanvasClick = null;
   currentTool = tool;
   engine?.setTool(tool);
   for (const button of toolbar.querySelectorAll<HTMLButtonElement>("button[data-tool]")) {
-    if (button.dataset.tool === "undo") continue;
+    if (button.dataset.tool === "undo" || button.dataset.tool === "redo") continue;
     const active = button.dataset.tool === tool;
     button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", String(active));
@@ -848,18 +938,17 @@ function selectTool(tool: ToolId): void {
   // Text and tag use the inline editor at the clicked position, so the old
   // toolbar text field stays hidden; the watermark has its own settings row.
   textInput.hidden = true;
-  const isTextTool = tool === "text";
   const isWatermarkTool = tool === "watermark";
-  textProps.hidden = !isTextTool;
   watermarkProps.hidden = !isWatermarkTool;
-  widthLabel.hidden = isTextTool;
   widthLabelText.textContent = isWatermarkTool ? "字号" : "粗细";
   if (isWatermarkTool) {
     watermarkEnabled = true;
     updateWatermarkUI();
     applyWatermark();
   }
-  canvas.style.cursor = tool === "text" ? "text" : "crosshair";
+  canvas.style.cursor = tool === "select" ? "default" : tool === "text" ? "text" : "crosshair";
+  updateToolbarState();
+  updateAnnotationProperties();
 }
 
 function renderPalette(): void {
@@ -899,7 +988,7 @@ function renderPalette(): void {
 }
 
 function updatePaletteSelection(): void {
-  const current = color.toLowerCase();
+  const current = (selectedAnnotation()?.color ?? color).toLowerCase();
   for (const button of colorsHost.querySelectorAll<HTMLElement>(".swatch")) {
     // The palette trigger is a button, not a colour choice.
     if (button.hasAttribute("data-palette-toggle")) continue;
@@ -916,25 +1005,62 @@ function updatePaletteSelection(): void {
 function setColor(next: string, remember = false): void {
   const normalized = normalizeColor(next);
   if (!normalized) return;
-  color = normalized;
+  const selected = selectedAnnotation();
+  if (selected) engine?.editSelectedShape({ color: normalized });
+  else color = normalized;
   if (remember) {
     recentColors = rememberColor(normalized);
     renderPalette();
   } else {
     updatePaletteSelection();
   }
-  if (inlineEditor) inlineEditor.element.style.color = color;
-  if (watermarkEnabled) applyWatermark();
+  if (inlineEditor) inlineEditor.element.style.color = normalized;
+  if (watermarkEnabled && !selected) applyWatermark();
 }
 
 function updateWidthValue(): void {
-  widthInput.value = String(penWidth);
-  widthValue.textContent = String(penWidth);
+  const width = String(selectedAnnotation()?.width ?? penWidth);
+  widthInput.value = width;
+  widthValue.textContent = width;
 }
 
 function updateToolbarState(): void {
   const undoButton = toolbar.querySelector<HTMLButtonElement>('button[data-tool="undo"]');
+  const redoButton = toolbar.querySelector<HTMLButtonElement>('button[data-tool="redo"]');
   if (undoButton) undoButton.disabled = !engine?.canUndo();
+  if (redoButton) redoButton.disabled = !engine?.canRedo();
+  const shape = selectedAnnotation();
+  if (shape !== displayedAnnotation) {
+    displayedAnnotation = shape;
+    updateAnnotationProperties();
+  }
+  const bounds = shape && !toolbar.hidden ? engine?.getSelectionBounds() : null;
+  annotationSelection.hidden = !bounds || !canvas.width || !canvas.height;
+  if (bounds && !annotationSelection.hidden) {
+    const left = clamp(bounds.x, 0, canvas.width);
+    const top = clamp(bounds.y, 0, canvas.height);
+    const right = clamp(bounds.x + bounds.width, left, canvas.width);
+    const bottom = clamp(bounds.y + bounds.height, top, canvas.height);
+    annotationSelection.hidden = right <= left || bottom <= top;
+    annotationSelection.style.left = `${left * 100 / canvas.width}%`;
+    annotationSelection.style.top = `${top * 100 / canvas.height}%`;
+    annotationSelection.style.width = `${(right - left) * 100 / canvas.width}%`;
+    annotationSelection.style.height = `${(bottom - top) * 100 / canvas.height}%`;
+  }
+}
+
+function updateAnnotationProperties(): void {
+  const shape = selectedAnnotation();
+  const showTextStyle = currentTool === "text" || shape?.kind === "text";
+  const showEdit = shape?.kind === "text" || shape?.kind === "tag";
+  const needsLayout = textProps.hidden === showTextStyle || annotationEditText.hidden === showEdit;
+  textProps.hidden = !showTextStyle;
+  annotationEditText.hidden = !showEdit;
+  widthLabel.hidden = showTextStyle || (currentTool === "select" && !shape);
+  updatePaletteSelection();
+  updateWidthValue();
+  applyTextStyleUI();
+  if (needsLayout && phase === "annotating" && !toolbar.hidden && !selectionResize) placeToolbar();
 }
 
 function setToolbarPending(pending: boolean, label = "", kind: "info" | "error" = "info"): void {
@@ -952,11 +1078,11 @@ function placeToolbar(): void {
   if (toolbarMoved) return;
   toolbar.style.left = "0px";
   toolbar.style.top = "0px";
+  const rect = editingRect(committedRect);
   toolbar.classList.toggle(
     "compact",
-    viewportWidth() < 760 || (committedRect.width ?? 0) < 320,
+    viewportWidth() < 760 || rect.width < 320,
   );
-  const rect = committedRect;
   const toolbarWidth = toolbar.offsetWidth;
   const toolbarHeight = toolbar.offsetHeight;
   const vw = viewportWidth();
@@ -982,7 +1108,7 @@ function placeToolbar(): void {
   );
   toolbar.style.left = `${left}px`;
   toolbar.style.top = `${top}px`;
-  updateSizeBadge(rect, toolbarAbove);
+  updateSizeBadge(committedRect, toolbarAbove, undefined, rect);
 }
 
 function showToolbar(): void {
@@ -1102,7 +1228,8 @@ function endToolbarDrag(event: PointerEvent): void {
   toolbar.classList.remove("dragging");
   document.body.classList.remove("dragging-toolbar");
   if (committedRect) {
-    updateSizeBadge(committedRect, toolbar.getBoundingClientRect().top < committedRect.y);
+    const rect = editingRect(committedRect);
+    updateSizeBadge(committedRect, toolbar.getBoundingClientRect().top < rect.y, undefined, rect);
   }
 }
 
@@ -1137,7 +1264,11 @@ window.addEventListener(
 function undo(): void {
   if (!engine) return;
   if (!engine.undo()) showTransient("没有可撤销的标注");
-  updateToolbarState();
+}
+
+function redo(): void {
+  if (!engine) return;
+  if (!engine.redo()) showTransient("没有可重做的标注");
 }
 
 // ---------------------------------------------------------------------------
@@ -1211,28 +1342,40 @@ async function fetchCaptureBlob(url: string): Promise<Blob> {
   return blob;
 }
 
-/** Opens the inline text editor at a canvas point (text and tag tools). */
-function openInlineText(point: { x: number; y: number }): void {
-  if (phase !== "annotating" || !engine || inlineEditor) return;
-  const tool = currentTool;
+function editSelectedText(): void {
+  const shape = selectedAnnotation();
+  if (shape?.kind !== "text" && shape?.kind !== "tag") return;
+  openInlineText({ x: shape.x + (shape.dx ?? 0), y: shape.y + (shape.dy ?? 0) }, shape);
+}
+
+function openInlineText(point: Point, shape?: Readonly<Shape>): void {
+  const activeEngine = engine;
+  if (phase !== "annotating" || !activeEngine || inlineEditor) return;
+  const tool = shape?.kind ?? currentTool;
   if (tool !== "text" && tool !== "tag") return;
-  const shapeColor = color;
-  const shapeWidth = penWidth;
+  const shapeColor = shape?.color ?? color;
+  const shapeWidth = shape?.width ?? penWidth;
   const isText = tool === "text";
-  const displayFontSize = isText ? textStyle.size : 20;
+  const style = activeTextStyle();
   inlineEditor = new InlineTextEditor({
     canvas,
     point,
     color: shapeColor,
-    displayFontSize,
-    bold: isText ? textStyle.bold : false,
-    italic: isText ? textStyle.italic : false,
-    fontFamily: isText ? textStyle.family : DEFAULT_TEXT_FONT,
+    displayFontSize: isText ? style.size : 20,
+    bold: isText && style.bold,
+    italic: isText && style.italic,
+    fontFamily: isText ? style.family : DEFAULT_TEXT_FONT,
+    value: shape?.text,
     placeholder: tool === "tag" ? "输入标签" : "输入文字",
     singleLine: tool === "tag",
     onSubmit: (text) => {
       inlineEditor = null;
-      engine?.addShape({
+      if (engine !== activeEngine) return;
+      if (shape) {
+        if (selectedAnnotation() === shape) activeEngine.editSelectedShape({ text });
+        return;
+      }
+      activeEngine.addShape({
         kind: tool,
         x: point.x,
         y: point.y,
@@ -1243,14 +1386,13 @@ function openInlineText(point: { x: number; y: number }): void {
         text,
         ...(isText
           ? {
-              fontSize: textStyle.size,
-              bold: textStyle.bold,
-              italic: textStyle.italic,
-              fontFamily: textStyle.family,
+              fontSize: style.size,
+              bold: style.bold,
+              italic: style.italic,
+              fontFamily: style.family,
             }
           : {}),
       });
-      updateToolbarState();
     },
     onCancel: () => {
       inlineEditor = null;
@@ -1280,7 +1422,9 @@ async function beginAnnotation(payload: OverlayCapture, attempt: number): Promis
       "naturalHeight" in image ? image.naturalHeight : image.height ?? height);
     committedRect = rect;
     selection.classList.remove("capturing");
-    positionSelection(rect);
+    const displayed = editingRect(rect);
+    selection.classList.toggle("fitted", !sameRect(rect, displayed));
+    positionSelection(displayed);
     // Clear the old width first: mixing a new width with the previous height
     // could otherwise temporarily allocate more pixels than either image.
     canvas.width = 0;
@@ -1289,7 +1433,7 @@ async function beginAnnotation(payload: OverlayCapture, attempt: number): Promis
     canvas.hidden = false;
     prepareState.hidden = true;
     dim.hidden = true;
-    updateSizeBadge(rect);
+    updateSizeBadge(rect, false, undefined, displayed);
 
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("画布不可用");
@@ -1302,7 +1446,7 @@ async function beginAnnotation(payload: OverlayCapture, attempt: number): Promis
     engine.setBaseRenderer(() => {
       ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
     });
-    const displayedWidth = canvas.getBoundingClientRect().width || rect.width;
+    const displayedWidth = canvas.getBoundingClientRect().width || displayed.width;
     engine.setScale(canvas.width / Math.max(1, displayedWidth));
     engine.setTool(currentTool);
     engine.reset();
@@ -1356,6 +1500,7 @@ async function prepareSelectionFor(
 ): Promise<void> {
   const attempt = ++captureAttempt;
   phase = "preparing";
+  precision.reset();
   toolbarMoved = false;
   lastCanvasClick = null;
   selectionResize = null;
@@ -1488,7 +1633,7 @@ function demoFinish(action: ToolbarAction): void {
 async function finishWith(
   action: FinishAnnotatedAction,
   base64: string,
-  uiAction: ToolbarAction = action as ToolbarAction,
+  uiAction: ToolbarAction = action,
 ): Promise<void> {
   if (phase === "finishing") return;
   const attempt = captureAttempt;
@@ -1536,6 +1681,7 @@ async function finishWith(
 }
 
 async function runAction(action: ToolbarAction): Promise<void> {
+  if (action !== "cancel" && keyboardAdjustment && !await settleKeyboardAdjustment()) return;
   if (phase !== "annotating") return;
   if (action === "cancel") {
     await finishWith("cancel", "", "cancel");
@@ -1543,6 +1689,11 @@ async function runAction(action: ToolbarAction): Promise<void> {
   }
   if (!engine) return;
   try {
+    inlineEditor?.submit();
+    if (drawingPointer !== null) {
+      engine.endDraw();
+      drawingPointer = null;
+    }
     await finishWith(action, engine.toPNGBase64(), action);
   } catch (error) {
     setToolbarStatus(`导出失败：${errorMessage(error)}`, "error");
@@ -1572,6 +1723,9 @@ hookHost.__pinstillDemoCapture = async (dataUrl: string): Promise<void> => {
 
 function reset(): void {
   ++captureAttempt;
+  precision.reset();
+  if (keyboardAdjustment) window.clearTimeout(keyboardAdjustment.timer);
+  keyboardAdjustment = null;
   releaseCaptureImage();
   phase = "idle";
   watermarkEnabled = false;
@@ -1584,8 +1738,10 @@ function reset(): void {
   positionMasks(null);
   pressWindow = null;
   dragMoved = false;
+  passiveSelection = false;
+  peerPreview = null;
   selectionResize = null;
-  selection.classList.remove("capturing", "window-preview", "resizing");
+  selection.classList.remove("capturing", "window-preview", "resizing", "fitted");
   if (transientTimer) window.clearTimeout(transientTimer);
   if (demoResetTimer) window.clearTimeout(demoResetTimer);
   transientTimer = undefined;
@@ -1621,6 +1777,8 @@ function beginSelection(x: number, y: number, snapped: OverlayWindow | null = nu
   startY = y;
   currentX = x;
   currentY = y;
+  endpointOffsetX = 0;
+  endpointOffsetY = 0;
   pressWindow = snapped;
   dragMoved = false;
   hint.hidden = true;
@@ -1663,7 +1821,7 @@ function cancelRegionFlow(): void {
 // ---------------------------------------------------------------------------
 
 function startSelectionResize(event: PointerEvent, direction: ResizeDirection): void {
-  if (phase !== "annotating" || !committedRect || selectionResize) return;
+  if (phase !== "annotating" || !committedRect || selectionResize || selection.classList.contains("fitted")) return;
   if (inlineEditor) {
     inlineEditor.cancel();
     inlineEditor = null;
@@ -1675,13 +1833,6 @@ function startSelectionResize(event: PointerEvent, direction: ResizeDirection): 
     startY: event.clientY,
     rect: { ...committedRect },
   };
-  // Mainstream behaviour: while the region is adjusted the selection shows the
-  // live screen, not a stretched copy of the old capture. The canvas (and the
-  // annotations on it) are hidden until the new region is captured on release,
-  // and the dim mask lifts so the whole screen is visible while adjusting.
-  canvas.hidden = true;
-  prepareState.hidden = true;
-  positionMasks(null);
   selection.classList.add("resizing");
   if (event.target instanceof HTMLElement) {
     try {
@@ -1745,7 +1896,7 @@ async function recaptureSelection(rect: Rect, previous: Rect): Promise<void> {
   if (phase !== "annotating") return;
   inlineEditor?.cancel();
   inlineEditor = null;
-  const hadAnnotations = engine?.canUndo() ?? false;
+  const hadAnnotations = Boolean(engine?.getShapes().length);
   // Shrinking is instant: the new region lies inside the capture we already
   // have, so crop it locally instead of grabbing the screen again.
   if (
@@ -1816,18 +1967,92 @@ async function recaptureSelection(rect: Rect, previous: Rect): Promise<void> {
   }
 }
 
-function canvasPoint(event: PointerEvent): { x: number; y: number } | null {
+function canvasPoint(event: PointerEvent, allowOutside = false): Point | null {
   const rect = canvas.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) return null;
   const x = ((event.clientX - rect.left) * canvas.width) / rect.width;
   const y = ((event.clientY - rect.top) * canvas.height) / rect.height;
-  if (x < -4 || y < -4 || x > canvas.width + 4 || y > canvas.height + 4) return null;
+  if (!allowOutside && (x < -4 || y < -4 || x > canvas.width + 4 || y > canvas.height + 4)) return null;
   return { x: clamp(x, 0, canvas.width), y: clamp(y, 0, canvas.height) };
+}
+
+function applyKeyboardAdjustment(): Promise<void> | undefined {
+  if (!keyboardAdjustment) return;
+  const adjustment = keyboardAdjustment;
+  keyboardAdjustment = null;
+  window.clearTimeout(adjustment.timer);
+  return recaptureSelection(adjustment.rect, adjustment.original);
+}
+
+async function settleKeyboardAdjustment(): Promise<boolean> {
+  const pending = applyKeyboardAdjustment();
+  const attempt = captureAttempt;
+  await pending;
+  return currentAttempt(attempt);
+}
+
+function handlePrecisionKey(event: KeyboardEvent): boolean {
+  if (event.metaKey || event.ctrlKey || selectionResize || drawingPointer !== null ||
+    (event.target instanceof Element && event.target.closest("button, input, textarea, select, [contenteditable]"))) {
+    return false;
+  }
+  const key = event.key.toLowerCase();
+  const horizontal = key === "arrowleft" ? -1 : key === "arrowright" ? 1 : 0;
+  const vertical = key === "arrowup" ? -1 : key === "arrowdown" ? 1 : 0;
+  if (phase === "idle" || phase === "selecting") {
+    if (!event.altKey && !event.shiftKey && ["z", "c", "m"].includes(key)) {
+      if (!event.repeat) {
+        if (key === "z") precision.toggleLoupe();
+        else if (key === "m") precision.toggleRuler();
+        else void precision.copyColor();
+      }
+      return true;
+    }
+    if (phase !== "selecting" || (!horizontal && !vertical) || event.altKey) return false;
+    const step = event.shiftKey ? 10 : 1;
+    const desktop = desktopBounds();
+    const nextX = clamp(currentX + horizontal * step, desktop.x, desktop.x + desktop.width);
+    const nextY = clamp(currentY + vertical * step, desktop.y, desktop.y + desktop.height);
+    endpointOffsetX += nextX - currentX;
+    endpointOffsetY += nextY - currentY;
+    currentX = nextX;
+    currentY = nextY;
+    dragMoved = true;
+    pressWindow = null;
+    selection.classList.remove("window-preview");
+    moveCrosshair(currentX, currentY);
+    renderSelection();
+    return true;
+  }
+  if (phase !== "annotating" || !committedRect || selection.classList.contains("fitted") || !event.altKey || (!horizontal && !vertical)) return false;
+
+  const original = keyboardAdjustment?.original ?? committedRect;
+  const previous = keyboardAdjustment?.rect ?? original;
+  const rect = { ...previous };
+  if (event.shiftKey) {
+    if (horizontal) rect.width = clamp(rect.width + horizontal, Math.min(MIN_RESIZE, original.width), viewportWidth() - rect.x);
+    if (vertical) rect.height = clamp(rect.height + vertical, Math.min(MIN_RESIZE, original.height), viewportHeight() - rect.y);
+  } else {
+    if (horizontal) rect.x = clamp(rect.x + horizontal, 0, viewportWidth() - rect.width);
+    if (vertical) rect.y = clamp(rect.y + vertical, 0, viewportHeight() - rect.height);
+  }
+  if (sameRect(previous, rect)) return true;
+  if (keyboardAdjustment) window.clearTimeout(keyboardAdjustment.timer);
+  if (sameRect(rect, original)) keyboardAdjustment = null;
+  else keyboardAdjustment = { original, rect, timer: window.setTimeout(applyKeyboardAdjustment, 140) };
+  canvas.hidden = keyboardAdjustment !== null;
+  positionSelection(rect);
+  updateSizeBadge(rect);
+  return true;
 }
 
 window.addEventListener("pointerdown", (event) => {
   if (isInsideTextEditor(event.target)) return;
   if (isInsidePalette(event.target)) return;
+  if (keyboardAdjustment && !isInsideToolbar(event.target)) {
+    void applyKeyboardAdjustment();
+    return;
+  }
   if (phase === "annotating" && event.button === 0 && event.target instanceof Element) {
     const handle = event.target.closest<HTMLElement>("[data-resize]");
     const direction = RESIZE_DIRECTIONS.find((value) => value === handle?.dataset.resize);
@@ -1838,7 +2063,7 @@ window.addEventListener("pointerdown", (event) => {
   }
   if (phase === "annotating") {
     if (isInsideToolbar(event.target)) return;
-    if (event.button !== 0 || !engine) return;
+    if (event.button !== 0 || !engine || drawingPointer !== null) return;
     const point = canvasPoint(event);
     if (!point) return;
     const now = performance.now();
@@ -1848,7 +2073,7 @@ window.addEventListener("pointerdown", (event) => {
       now - previousClick.time <= 350 &&
       Math.hypot(event.clientX - previousClick.x, event.clientY - previousClick.y) <= 8;
     lastCanvasClick = { time: now, x: event.clientX, y: event.clientY };
-    if (isDoubleClick) {
+    if (isDoubleClick && currentTool !== "select") {
       // A double-click on the image means "done": commit any pending inline
       // text, then copy the annotated capture (same path as the 复制 button).
       event.preventDefault();
@@ -1868,6 +2093,13 @@ window.addEventListener("pointerdown", (event) => {
       return;
     }
     event.preventDefault();
+    if (!engine.beginDraw(point)) return;
+    if (currentTool === "select" && isDoubleClick) {
+      lastCanvasClick = null;
+      engine.endDraw();
+      editSelectedText();
+      return;
+    }
     drawingPointer = event.pointerId;
     try {
       canvas.setPointerCapture(event.pointerId);
@@ -1875,10 +2107,10 @@ window.addEventListener("pointerdown", (event) => {
       // Synthetic events (E2E) have no capturable pointer id; window listeners
       // still receive the moves.
     }
-    engine.beginDraw(point);
     return;
   }
   if (phase !== "idle" && phase !== "selecting") return;
+  if (passiveSelection) return;
   if (isInsideToolbar(event.target)) return;
   if (event.button !== 0) {
     event.preventDefault();
@@ -1902,12 +2134,14 @@ window.addEventListener("pointermove", (event) => {
     if (event.pointerId !== selectionResize.pointerId) return;
     event.preventDefault();
     const rect = resizeRectFor(event);
+    canvas.hidden = !sameRect(rect, selectionResize.rect);
     committedRect = rect;
     positionSelection(rect);
     updateSizeBadge(rect);
     return;
   }
   if (phase === "idle") {
+    if (passiveSelection) return;
     const x = clamp(event.clientX, 0, viewportWidth());
     const y = clamp(event.clientY, 0, viewportHeight());
     moveCrosshair(x, y);
@@ -1915,8 +2149,9 @@ window.addEventListener("pointermove", (event) => {
     return;
   }
   if (phase === "selecting") {
-    currentX = clamp(event.clientX, 0, viewportWidth());
-    currentY = clamp(event.clientY, 0, viewportHeight());
+    const desktop = desktopBounds();
+    currentX = clamp(event.clientX + endpointOffsetX, desktop.x, desktop.x + desktop.width);
+    currentY = clamp(event.clientY + endpointOffsetY, desktop.y, desktop.y + desktop.height);
     moveCrosshair(currentX, currentY);
     if (
       !dragMoved &&
@@ -1932,14 +2167,24 @@ window.addEventListener("pointermove", (event) => {
     }
     return;
   }
-  if (phase === "annotating" && drawingPointer !== null && engine) {
-    const point = canvasPoint(event);
+  if (phase === "annotating" && drawingPointer !== null && event.pointerId === drawingPointer && engine) {
+    if (lastCanvasClick && Math.hypot(event.clientX - lastCanvasClick.x, event.clientY - lastCanvasClick.y) > 3) {
+      lastCanvasClick = null;
+    }
+    const point = canvasPoint(event, true);
     if (point) engine.moveDraw(point);
   }
 });
 
+document.documentElement.addEventListener("pointerenter", (event) => {
+  if (phase === "idle" && !passiveSelection && displayInfo?.desktop && (event.buttons & 1) === 0) {
+    queuePeerPreview(null);
+  }
+});
+
 document.documentElement.addEventListener("pointerleave", () => {
-  if (phase !== "idle") return;
+  if (phase !== "idle" || passiveSelection) return;
+  precision.leave();
   crosshairV.hidden = true;
   crosshairH.hidden = true;
   showWindowPreview(null);
@@ -1953,10 +2198,10 @@ window.addEventListener("pointerup", (event) => {
     selectionResize = null;
     selection.classList.remove("resizing");
     if (sameRect(original, rect)) {
-      // A click without movement: nothing to re-capture.
+      committedRect = original;
       canvas.hidden = false;
-      positionSelection(rect);
-      updateSizeBadge(rect);
+      positionSelection(original);
+      updateSizeBadge(original);
       return;
     }
     void recaptureSelection(rect, original);
@@ -1979,6 +2224,7 @@ window.addEventListener("pointerup", (event) => {
     const rect = selectionRect();
     if (rect.width < MIN_SELECTION || rect.height < MIN_SELECTION) {
       reset();
+      queuePeerPreview(null);
       return;
     }
     const finalRect = roundedSelectionRect();
@@ -1987,14 +2233,24 @@ window.addEventListener("pointerup", (event) => {
     void prepareSelectionFor(finalRect);
     return;
   }
-  if (phase === "annotating" && drawingPointer !== null && engine) {
+  if (phase === "annotating" && drawingPointer !== null && event.pointerId === drawingPointer && engine) {
     engine.endDraw();
     drawingPointer = null;
-    updateToolbarState();
   }
 });
 
 window.addEventListener("pointercancel", (event) => {
+  if (phase === "selecting") {
+    reset();
+    queuePeerPreview(null);
+    return;
+  }
+  if (drawingPointer !== null && event.pointerId === drawingPointer) {
+    engine?.cancelDraw();
+    lastCanvasClick = null;
+    drawingPointer = null;
+    return;
+  }
   if (selectionResize?.pointerId !== event.pointerId) return;
   const original = selectionResize.rect;
   selectionResize = null;
@@ -2019,6 +2275,10 @@ window.addEventListener("keydown", (event) => {
     return;
   }
   if (inlineEditor) return; // the inline textarea handles Enter / Esc itself
+  if (handlePrecisionKey(event)) {
+    event.preventDefault();
+    return;
+  }
   if (event.key === "Escape") {
     event.preventDefault();
     if (phase === "annotating") {
@@ -2031,11 +2291,27 @@ window.addEventListener("keydown", (event) => {
     }
     return;
   }
-  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
-    if (phase !== "annotating") return;
-    event.preventDefault();
-    undo();
-    return;
+  if (phase === "annotating" && !isInsidePalette(event.target) &&
+    !(event.target instanceof Element && event.target.closest("input, select, textarea, [contenteditable]"))) {
+    const key = event.key.toLowerCase();
+    const modifies = event.metaKey || event.ctrlKey;
+    if (modifies && !event.altKey && (key === "z" || (event.ctrlKey && key === "y"))) {
+      event.preventDefault();
+      if (event.shiftKey || key === "y") redo();
+      else undo();
+      return;
+    }
+    if (!modifies && !event.altKey && drawingPointer === null) {
+      if (key === "v") {
+        event.preventDefault();
+        selectTool("select");
+        return;
+      }
+      if ((key === "backspace" || key === "delete") && engine?.deleteSelectedShape()) {
+        event.preventDefault();
+        return;
+      }
+    }
   }
   if (event.key === "Enter" && enterCopyEnabled && phase === "annotating") {
     if (palettePanel.isOpen() && palettePanel.contains(event.target)) return;
@@ -2076,6 +2352,21 @@ onOverlayShown((payload) => {
   applyOverlayInfo(payload);
   settingsReady = loadSettings();
   notifyOverlayReady(payload?.session, captureAttempt);
+});
+
+onOverlayPreview(({ session, rect }) => {
+  if (session !== displayInfo?.session || phase !== "idle") return;
+  passiveSelection = Boolean(rect);
+  crosshairV.hidden = true;
+  crosshairH.hidden = true;
+  hint.hidden = passiveSelection;
+  if (rect) {
+    sizeBadge.hidden = true;
+    selection.classList.remove("window-preview");
+    positionSelection(rect);
+  } else {
+    showWindowPreview(null);
+  }
 });
 
 buildToolbar();

@@ -15,7 +15,8 @@ type CaptureOptions struct {
 	// DelayMillis waits before the screen is grabbed so transient UI (such as
 	// the selection overlay) can disappear first. Zero or negative means no
 	// extra delay. Delays are capped at ten seconds.
-	DelayMillis int
+	DelayMillis  int
+	BackingScale float64
 }
 
 // sleepBeforeCapture blocks for opts.DelayMillis when a delay was requested.
