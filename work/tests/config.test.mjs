@@ -46,3 +46,12 @@ test('signing alone does not opt into notarization', (t) => {
   const c = config(t, { MACOS_SIGNING_IDENTITY: 'Developer ID Application: Synthetic Test' });
   assert.equal(c.macos.notarize, undefined);
 });
+
+test('packaged builds use Pinstill GitHub Releases and pin only a public update key', (context) => {
+  const { updates } = config(context);
+  assert.equal(updates?.github, 'echoVic/Pinstill');
+  const publicKey = Buffer.from(updates.publicKey, 'base64');
+  assert.equal(publicKey.length, 32);
+  assert.equal(publicKey.toString('base64'), updates.publicKey);
+  assert.equal(updates.privateKey, undefined);
+});

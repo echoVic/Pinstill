@@ -7,7 +7,7 @@ export default defineConfig({
   name: "Pinstill",
   slug: "pinstill",
   identifier: "dev.echovic.pinstill",
-  version: "0.1.2",
+  version: "0.1.3",
   publisher: "echovic",
   license: "MIT",
   main: "./cmd/pinstill",
@@ -17,6 +17,10 @@ export default defineConfig({
   buildCommand: "npm run build:web",
   frontendDist: "dist",
   out: "build",
+  updates: {
+    github: "echoVic/Pinstill",
+    publicKey: "oO0mIN2AOhZQsCiMB7j6zsPH7m/AV0wtMdpTotjOS2Y=",
+  },
 
   // Local builds use ad-hoc signing without a developer certificate.
   // Release builds opt in with MACOS_SIGNING_IDENTITY and, for notarization,

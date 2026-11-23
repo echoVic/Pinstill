@@ -4,15 +4,18 @@ package main
 import (
 	"log"
 	"os"
+	"time"
 
 	"github.com/echoVic/Pinstill/internal/app"
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/plugins/updater"
 )
 
 func main() {
 	// Native tests can delete history and pins. Validate isolation before the
 	// single-instance lock, migration, MyGo initialization, or storage setup.
-	if os.Getenv("PINSTILL_SELFTEST") != "" {
+	selftest := os.Getenv("PINSTILL_SELFTEST") != ""
+	if selftest {
 		if err := app.ValidateSelftestDataDir(os.Getenv("PINSTILL_DATA_DIR")); err != nil {
 			log.Fatalf("PINSTILL_SELFTEST needs an isolated PINSTILL_DATA_DIR: %v", err)
 		}
@@ -25,7 +28,9 @@ func main() {
 	// Carry captures, pins and settings over from the pre-rename builds.
 	app.MigrateLegacyData()
 	mygo.App.SetName("Pinstill")
-	mygo.App.SetVersion("0.1.1")
+	if !selftest {
+		mygo.Use(updater.New(updater.Options{Interval: 4 * time.Hour}))
+	}
 
 	pinstill := app.New()
 	pinstill.Bind()

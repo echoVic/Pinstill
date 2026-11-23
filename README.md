@@ -16,6 +16,8 @@
 
 从 [Releases](https://github.com/echoVic/Pinstill/releases) 下载 macOS 版，需要 macOS 13 或以上。Windows 截图后端（GDI）已经交叉编译通过，但尚未真机验证，暂不提供正式安装包。
 
+支持自动更新的版本会在后台检查新版，也可以从托盘或 Pinstill 菜单选择「检查更新…」。默认由你确认后才下载安装；`v0.1.2` 及更早版本需手动升级一次。[维护者发版流程](docs/releasing.md)
+
 ## 使用
 
 1. 启动后常驻菜单栏；按 **⌘⇧1**（或点托盘「截取区域」）进入选区。

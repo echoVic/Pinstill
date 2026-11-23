@@ -18,6 +18,7 @@ import (
 	"github.com/echoVic/Pinstill/internal/pin"
 	"github.com/echoVic/Pinstill/internal/store"
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/plugins/updater"
 )
 
 // App owns the desktop windows and the capture workflow.
@@ -317,7 +318,7 @@ func (a *App) createOverlay() {
 }
 
 func (a *App) createTray() {
-	menu := mygo.NewMenu([]*mygo.MenuItem{
+	items := []*mygo.MenuItem{
 		{Label: "截取区域", Click: func(*mygo.MenuItem, *mygo.Window) { go a.beginRegion() }},
 		{Label: "截取整个屏幕", Click: func(*mygo.MenuItem, *mygo.Window) { go a.captureFullScreen() }},
 		{Label: "固定剪贴板图片", Click: func(*mygo.MenuItem, *mygo.Window) {
@@ -329,9 +330,11 @@ func (a *App) createTray() {
 		}},
 		{Type: mygo.MenuItemSeparator},
 		{Label: "历史与设置", Click: func(*mygo.MenuItem, *mygo.Window) { go a.showMain() }},
-		{Type: mygo.MenuItemSeparator},
-		{Role: mygo.RoleQuit},
-	})
+	}
+	if item := updateMenuItem(); item != nil {
+		items = append(items, item)
+	}
+	menu := mygo.NewMenu(append(items, mygo.Separator(), &mygo.MenuItem{Role: mygo.RoleQuit}))
 	tray, err := mygo.NewTray(mygo.TrayOptions{
 		ID:             "pinstill",
 		Icon:           trayIconPNG(),
@@ -349,6 +352,15 @@ func (a *App) createTray() {
 }
 
 func (a *App) setMenu() {
+	appMenu := &mygo.MenuItem{Role: mygo.RoleAppMenu}
+	if item := updateMenuItem(); item != nil {
+		appMenu.Submenu = []*mygo.MenuItem{
+			{Role: mygo.RoleAbout}, item, mygo.Separator(),
+			{Role: mygo.RoleServices}, mygo.Separator(),
+			{Role: mygo.RoleHide}, {Role: mygo.RoleHideOthers}, {Role: mygo.RoleUnhide},
+			mygo.Separator(), {Role: mygo.RoleQuit},
+		}
+	}
 	screenshotItems := []*mygo.MenuItem{
 		{Label: "截取区域", Click: func(*mygo.MenuItem, *mygo.Window) { go a.beginRegion() }},
 		{Label: "截取整个屏幕", Click: func(*mygo.MenuItem, *mygo.Window) { go a.captureFullScreen() }},
@@ -361,7 +373,7 @@ func (a *App) setMenu() {
 		}},
 	}
 	menu := mygo.NewMenu([]*mygo.MenuItem{
-		{Role: mygo.RoleAppMenu},
+		appMenu,
 		{Label: "文件", Submenu: append(screenshotItems,
 			&mygo.MenuItem{Type: mygo.MenuItemSeparator},
 			&mygo.MenuItem{Role: mygo.RoleClose},
@@ -372,6 +384,17 @@ func (a *App) setMenu() {
 		{Role: mygo.RoleWindowMenu},
 	})
 	mygo.App.SetMenu(menu)
+}
+
+func updateMenuItem() *mygo.MenuItem {
+	if os.Getenv("PINSTILL_SELFTEST") != "" {
+		return nil
+	}
+	return &mygo.MenuItem{
+		ID:    "check-update",
+		Label: "检查更新…",
+		Click: func(*mygo.MenuItem, *mygo.Window) { updater.CheckForUpdates() },
+	}
 }
 
 // settingsSnapshot returns the current settings.

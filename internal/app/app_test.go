@@ -13,6 +13,29 @@ import (
 	"github.com/egoist/mygo"
 )
 
+func TestApplicationMenuOffersUpdateCheck(test *testing.T) {
+	previous := mygo.App.Menu()
+	test.Cleanup(func() { mygo.App.SetMenu(previous) })
+	test.Setenv("PINSTILL_SELFTEST", "")
+
+	New().setMenu()
+	item := mygo.App.Menu().ItemByID("check-update")
+	if item == nil || item.Click == nil || item.Disabled || item.Hidden {
+		test.Fatal("expected a usable Check for Updates menu item")
+	}
+}
+
+func TestApplicationMenuOmitsUpdateCheckInSelftest(test *testing.T) {
+	previous := mygo.App.Menu()
+	test.Cleanup(func() { mygo.App.SetMenu(previous) })
+	test.Setenv("PINSTILL_SELFTEST", "startup")
+
+	New().setMenu()
+	if mygo.App.Menu().ItemByID("check-update") != nil {
+		test.Fatal("selftests must not offer to update the app")
+	}
+}
+
 func TestClampToDisplay(t *testing.T) {
 	tests := []struct {
 		name   string

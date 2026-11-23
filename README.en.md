@@ -16,6 +16,8 @@ Pure Go + system WebView: no Electron, no cgo. Screenshots stay on your Mac.
 
 Download the macOS build from [Releases](https://github.com/echoVic/Pinstill/releases); it needs macOS 13 or later. The Windows capture backend (GDI) cross-compiles, but it hasn't been verified on real hardware, so there is no Windows installer yet.
 
+Builds with automatic updates check in the background, or you can choose “检查更新…” (Check for Updates) from the tray or Pinstill menu. By default they ask before downloading and installing. If you are on `v0.1.2` or older, upgrade manually once. [Release instructions for maintainers](docs/releasing.md)
+
 ## Usage
 
 1. Pinstill lives in the menu bar; press **⌘⇧1** (or choose Capture Region from the tray) to start a selection.
