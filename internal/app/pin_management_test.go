@@ -104,8 +104,14 @@ func TestPinMutationsPersistGeometryAndOpacityBeforeApplying(test *testing.T) {
 			test.Fatal(err)
 		}
 		states := reopened.List()
-		if len(states) != 1 || states[0] != applied {
-			test.Fatalf("native apply saw geometry or opacity missing from disk: apply=%+v store=%+v", applied, states)
+		if len(states) != 1 {
+			test.Fatalf("expected one persisted pin, got %d", len(states))
+		}
+		persisted := states[0]
+		persisted.CreatedAt = persisted.CreatedAt.UTC()
+		applied.CreatedAt = applied.CreatedAt.UTC()
+		if persisted != applied {
+			test.Fatalf("native apply saw a different state on disk: apply=%+v store=%+v", applied, persisted)
 		}
 	}
 	if err := application.changePin(initial.ID, func(state *pin.State) {
