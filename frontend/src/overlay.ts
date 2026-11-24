@@ -14,7 +14,7 @@
 // browser (no MyGo runtime) the flow is simulated with the design's demo image
 // and toasts, so the static preview stays demoable without console errors.
 
-import { DEFAULT_PREFERENCES, loadPreferences } from "./settings";
+import { DEFAULT_PREFERENCES, isMacPlatform, loadPreferences } from "./settings";
 import { AnnotationEngine, DEFAULT_TEXT_FONT, InlineTextEditor } from "./annotate";
 import type { Point, Shape, WatermarkLayer } from "./annotate";
 import {
@@ -37,6 +37,7 @@ import {
   type OverlayCapture,
   type OverlayInfo,
   type OverlayWindow,
+  type RecognitionMode,
   type Rect,
 } from "./bridge";
 import {
@@ -47,6 +48,7 @@ import {
 } from "./colors";
 import { ColorPalettePanel, createPaletteToggleButton } from "./palette";
 import { PrecisionInspector } from "./precision";
+import { RecognitionPanel } from "./recognition";
 import { DRAW_TOOLS, TOOLS, TOOL_ICONS, isDrawTool, type ToolId } from "./tools";
 import { blobToBase64, decodeImageBlob, flashButtonSuccess, setButtonPending } from "./util";
 
@@ -99,7 +101,6 @@ const ACTION_DEFS: Array<{
   { action: "cancel", label: "取消", icon: "x", className: "cancel" },
 ];
 
-/** Editor actions Pinstill does not implement yet: honest "待接入" placeholders. */
 const EXTRA_TOOL_DEFS: Array<{
   tool: string;
   label: string;
@@ -107,8 +108,8 @@ const EXTRA_TOOL_DEFS: Array<{
   placeholder: boolean;
 }> = [
   { tool: "translate", label: "翻译", icon: "languages", placeholder: true },
-  { tool: "ocr", label: "提取文字", icon: "scan-text", placeholder: true },
-  { tool: "qr", label: "识别二维码", icon: "qr-code", placeholder: true },
+  { tool: "ocr", label: "提取文字", icon: "scan-text", placeholder: false },
+  { tool: "qr", label: "识别二维码", icon: "qr-code", placeholder: false },
   // Real Round 4 action: hands the selection to the scrolling-capture session.
   { tool: "scroll", label: "滚动截图", icon: "scroll-text", placeholder: false },
 ];
@@ -197,6 +198,7 @@ const textSizeSelect = el<HTMLSelectElement>("textSize");
 const textFontSelect = el<HTMLSelectElement>("textFont");
 const toolbarStatus = el("overlayStatus");
 const demoToast = el("demoToast");
+const recognitionPanel = new RecognitionPanel(el<HTMLDialogElement>("recognitionPanel"));
 const captureError = el("captureError");
 const captureErrorTitle = el("captureErrorTitle");
 const captureErrorText = el("captureErrorText");
@@ -815,6 +817,7 @@ function onToolbarClick(event: Event): void {
     if (tool === "undo") undo();
     else if (tool === "redo") redo();
     else if (tool === "scroll") void startScrollFromToolbar();
+    else if (tool === "ocr" || tool === "qr") void startRecognition(tool);
     else if (tool === "watermark") toggleWatermarkTool();
     else if (tool && PLACEHOLDER_TOOLS.has(tool)) showRecognitionPlaceholder(tool);
     else if (tool) selectTool(tool as ToolId);
@@ -861,9 +864,6 @@ async function startScrollFromToolbar(): Promise<void> {
   }
 }
 
-/** Honest "待接入" feedback for editor capabilities Pinstill does not implement
- * yet (translate/OCR/QR/scroll capture). Never calls FinishAnnotated and never
- * touches the annotations. */
 function showRecognitionPlaceholder(tool: string): void {
   const def = EXTRA_TOOL_DEFS.find((entry) => entry.tool === tool);
   if (!def || phase !== "annotating") return;
@@ -874,6 +874,29 @@ function showRecognitionPlaceholder(tool: string): void {
       setToolbarStatus("");
     }
   }, 3200);
+}
+
+async function startRecognition(mode: RecognitionMode): Promise<void> {
+  if (keyboardAdjustment && !await settleKeyboardAdjustment()) return;
+  if (phase !== "annotating" || !engine || selectionResize || recognitionPanel.open) return;
+  if (!hasNative || !isMacPlatform()) {
+    showTransient("截图识别目前支持 macOS 桌面版");
+    return;
+  }
+  palettePanel.close();
+  inlineEditor?.submit();
+  if (drawingPointer !== null) {
+    engine.endDraw();
+    drawingPointer = null;
+  }
+  lastCanvasClick = null;
+  await recognitionPanel.show(mode, storedPreferences.ocrLanguage, async () => {
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((image) => image ? resolve(image) : reject(new Error("无法读取选区画面")), "image/png");
+    });
+    if (blob.size > MAX_ENCODED_BYTES) throw new Error("图片文件超过上限（64 MiB）");
+    return blobToBase64(blob);
+  });
 }
 
 function selectedAnnotation(): Readonly<Shape> | null {
@@ -1133,6 +1156,7 @@ function clearActionFeedback(): void {
 }
 
 function hideToolbar(): void {
+  recognitionPanel.close();
   toolbar.hidden = true;
   selection.classList.remove("resizable");
   palettePanel.close();
@@ -2084,6 +2108,7 @@ function handlePrecisionKey(event: KeyboardEvent): boolean {
 }
 
 window.addEventListener("pointerdown", (event) => {
+  if (recognitionPanel.open) return;
   if (phase === "preparing" && quickClick && event.button === 0) {
     const nearby = Math.hypot(event.clientX - quickClick.x, event.clientY - quickClick.y) <= DOUBLE_CLICK_DISTANCE;
     settleQuickClick(nearby);
@@ -2310,6 +2335,13 @@ window.addEventListener("contextmenu", (event) => {
 });
 
 window.addEventListener("keydown", (event) => {
+  if (recognitionPanel.open) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      recognitionPanel.close();
+    }
+    return;
+  }
   if (!captureError.hidden) {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -2358,6 +2390,7 @@ window.addEventListener("keydown", (event) => {
   }
   if (event.key === "Enter" && enterCopyEnabled && phase === "annotating") {
     if (palettePanel.isOpen() && palettePanel.contains(event.target)) return;
+    if (event.target instanceof Element && event.target.closest('[data-tool="ocr"], [data-tool="qr"]')) return;
     event.preventDefault();
     void runAction("copy");
   }

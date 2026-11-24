@@ -42,8 +42,6 @@ export interface Preferences {
   pinBorder: boolean;
   // 识别与翻译
   ocrLanguage: string;
-  ocrCopy: boolean;
-  qrConfirm: boolean;
   translateTo: string;
   translationProvider: string;
   sideBySide: boolean;
@@ -177,7 +175,7 @@ export const SETTINGS_SCHEMA: SettingsCategory[] = [
           {
             key: "ocrKey",
             name: "提取屏幕文字",
-            description: "未启用 · 文字识别待接入，此快捷键不会注册。",
+            description: "未启用 · 截图后可在工具栏提取文字。",
             disabled: true,
             type: "shortcut",
           },
@@ -382,8 +380,7 @@ export const SETTINGS_SCHEMA: SettingsCategory[] = [
           {
             key: "ocrLanguage",
             name: "识别语言",
-            description: "未启用 · 文字识别待接入。",
-            disabled: true,
+            description: "选择截图中文字的识别语言。",
             type: "select",
             options: [
               { value: "中英文混合", label: "中英文混合" },
@@ -391,19 +388,6 @@ export const SETTINGS_SCHEMA: SettingsCategory[] = [
               { value: "English", label: "English" },
               { value: "日本語", label: "日本語" },
             ],
-          },
-          {
-            key: "ocrCopy",
-            name: "识别后自动复制",
-            description: "未启用 · 文字识别待接入。",
-            disabled: true,
-            type: "toggle",
-          },
-          {
-            key: "qrConfirm",
-            name: "打开二维码链接前确认",
-            description: "先显示链接内容，再决定是否打开。",
-            type: "toggle",
           },
         ],
       },
@@ -504,8 +488,6 @@ export const DEFAULT_PREFERENCES: Preferences = {
   pinOpacity: 100,
   pinBorder: true,
   ocrLanguage: "中英文混合",
-  ocrCopy: true,
-  qrConfirm: true,
   translateTo: "简体中文",
   translationProvider: "系统翻译",
   sideBySide: true,
@@ -524,7 +506,7 @@ export const SETTINGS_KEY_LABELS: Record<string, string> = {
   historyLimitMB: "历史容量上限",
 };
 
-function isMacPlatform(): boolean {
+export function isMacPlatform(): boolean {
   const navigatorWithHints = navigator as Navigator & {
     userAgentData?: { platform?: string };
   };

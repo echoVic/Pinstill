@@ -42,6 +42,7 @@ import {
   SETTINGS_SCHEMA,
   SHORTCUT_KEYS,
   formatAccelerator,
+  isMacPlatform,
   loadPreferences,
   preferenceValue,
   recordAccelerator,
@@ -640,6 +641,7 @@ function renderSettings(): void {
 }
 
 function renderSettingRow(row: SettingRow): HTMLElement {
+  const unavailableOCR = row.key === "ocrLanguage" && (!hasNative || !isMacPlatform());
   const wrapper = document.createElement("div");
   wrapper.className = "setting-row";
   const copy = document.createElement("div");
@@ -650,7 +652,7 @@ function renderSettingRow(row: SettingRow): HTMLElement {
   const description = document.createElement("div");
   description.className = "setting-description";
   description.id = `desc-${row.key}`;
-  description.textContent = row.description;
+  description.textContent = unavailableOCR ? "请在 macOS 桌面版使用。" : row.description;
   copy.append(label, description);
 
   const control = document.createElement("div");
@@ -673,7 +675,7 @@ function renderSettingRow(row: SettingRow): HTMLElement {
     input.addEventListener("change", () => commitSetting(row, input));
   } else if (row.type === "select") {
     const select = document.createElement("select");
-    select.disabled = Boolean(row.disabled);
+    select.disabled = Boolean(row.disabled) || unavailableOCR;
     for (const option of row.options) {
       const element = document.createElement("option");
       element.value = option.value;
@@ -1208,7 +1210,7 @@ function applyModeTexts(): void {
   if (!hasNative) return;
   const previewNote = document.getElementById("settingsPreviewNote");
   if (previewNote) {
-    previewNote.textContent = "设置保存在本机，并即时同步到 Pinstill。识别与翻译功能将在后续版本接入。";
+    previewNote.textContent = "设置保存在本机，并即时同步到 Pinstill。";
   }
 }
 

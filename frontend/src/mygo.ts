@@ -177,6 +177,16 @@ export interface PixelSample {
   hex: string;
 }
 
+export interface RecognitionCode {
+  text: string;
+  url?: string;
+}
+
+export interface RecognitionResult {
+  text?: string;
+  codes?: RecognitionCode[];
+}
+
 /**
  * Rect is a rectangle sent from a page: overlay-local CSS pixels for
  * PrepareSelection, screen coordinates elsewhere.
@@ -278,6 +288,7 @@ export const Capture = {
   /** CopyPin puts a pin's image on the clipboard. */
   copyPin: bind<[string], void>("Capture.CopyPin", (id: string) => [id]),
   copyPixelColor: bind<[string], void>("Capture.CopyPixelColor", (value: string) => [value]),
+  copyRecognizedText: bind<[string], void>("Capture.CopyRecognizedText", (text: string) => [text]),
   /** CopyScrollResult puts the stitched long image on the clipboard. */
   copyScrollResult: bind<[string], void>("Capture.CopyScrollResult", (id: string) => [id]),
   /**
@@ -309,6 +320,7 @@ export const Capture = {
   openLoginItemsSettings: bind<[], void>("Capture.OpenLoginItemsSettings", () => []),
   /** OpenPermissionSettings opens the OS privacy pane for screen recording. */
   openPermissionSettings: bind<[], void>("Capture.OpenPermissionSettings", () => []),
+  openRecognizedLink: bind<[string], void>("Capture.OpenRecognizedLink", (value: string) => [value]),
   /** OpenScrollAccessibilitySettings opens the Accessibility privacy pane. */
   openScrollAccessibilitySettings: bind<[], void>("Capture.OpenScrollAccessibilitySettings", () => []),
   /** OverlayInfo describes the display the overlay covers. */
@@ -335,6 +347,7 @@ export const Capture = {
    */
   prepareSelectionFast: bind<[Rect], OverlayCapturePayload>("Capture.PrepareSelectionFast", (rect: Rect) => [rect]),
   previewOverlaySelection: bind<[number, Rect | null], void>("Capture.PreviewOverlaySelection", (session: number, rect: Rect | null) => [session, rect]),
+  recognizeSelection: bind<[string, string, string], RecognitionResult>("Capture.RecognizeSelection", (kind: string, language: string, dataBase64: string) => [kind, language, dataBase64]),
   removeClotheslineImage: bind<[string], void>("Capture.RemoveClotheslineImage", (id: string) => [id]),
   /**
    * RequestScreenPermission asks the OS for screen recording access. macOS shows

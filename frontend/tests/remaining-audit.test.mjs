@@ -429,12 +429,11 @@ test('inactive OCR shortcut does not reserve its key against active actions', ()
   assert.equal(p.run('preferences.captureKey'), 'Ctrl+Alt+O');
 });
 
-test('OCR preference controls are disabled and labelled as inactive', () => {
+test('OCR language can be selected on macOS', () => {
   const p = page('index'); p.run('settingsCategory = "recognition"; renderSettings()');
-  for (const key of ['ocrLanguage', 'ocrCopy']) {
-    assert.equal(p.document.getElementById(`setting-${key}`).disabled, true, key);
-    assert.match(p.document.getElementById(`desc-${key}`).textContent, /未启用|待接入/);
-  }
+  const language = p.document.getElementById('setting-ocrLanguage');
+  assert.equal(language.disabled, false);
+  assert.equal(language.value, '中英文混合');
 });
 
 test('inactive OCR keeps the remembered key locally but sends no native registration', () => {

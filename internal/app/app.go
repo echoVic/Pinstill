@@ -716,10 +716,14 @@ func (a *App) overlayInfoFor(caller *mygo.Window) OverlayInfo {
 
 // cancelRegion closes the overlay and ends the active capture.
 func (a *App) cancelRegion() bool {
+	return a.endRegion(0, true)
+}
+
+func (a *App) endRegion(generation uint64, cancelled bool) bool {
 	completed := false
 	a.runOverlayUI(func() {
 		a.mu.Lock()
-		if a.scroll != nil {
+		if a.scroll != nil || (generation != 0 && (!a.capturing || a.quitting || a.captureGeneration != generation)) {
 			a.mu.Unlock()
 			return
 		}
@@ -733,7 +737,9 @@ func (a *App) cancelRegion() bool {
 		for _, window := range windows {
 			hideOverlayPane(window, session)
 		}
-		emitToMain(a, EventCaptureCancelled, CaptureCancelledPayload{Reason: "user"})
+		if cancelled {
+			emitToMain(a, EventCaptureCancelled, CaptureCancelledPayload{Reason: "user"})
+		}
 		completed = true
 	})
 	return completed

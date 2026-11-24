@@ -44,7 +44,7 @@ Press V to select existing annotations. Drag to move a shape, double-click text 
 - **Tray and hotkeys**: a menu-bar icon; **⌘⇧1** captures a region and **⌘⇧2** pins the clipboard image, both re-recordable in Settings.
 - **Settings and permissions**: seven categories take effect immediately; the permission centre shows the real state of screen recording, Accessibility and launch at login.
 
-OCR, translation and QR decoding are still placeholders marked *not implemented yet*; they say so when opened instead of pretending to work.
+On macOS, choose **Extract text** or **Scan QR code** in the capture toolbar. Copy part or all of the recognized text, and choose a language in Recognition & Translation preferences. QR results show each payload, with an explicit action to open web links in your default browser. Recognition runs locally on the current selection, including its annotations.
 
 ## Data and permissions
 
@@ -79,7 +79,7 @@ bash work/e2e.sh --skip-build   # 24 app-level self-tests; drop --skip-build to 
 ## Known limitations
 
 - Windows has only cross-compilation and synthetic tests; mixed DPI, negative coordinates and multi-monitor setups still need real-hardware validation.
-- OCR, translation and QR decoding aren't wired up; scrolling capture can miss self-drawn scrolling, dynamic headers and fully repeating content.
+- Screenshot translation is pending. Scrolling capture can miss self-drawn scrolling, dynamic headers and fully repeating content.
 - On macOS, a cross-display capture uses the highest pixel density in the selection and keeps any gaps between displays transparent. Scrolling capture needs a region within one display.
 - Launch at login fails when the app isn't in `/Applications`; the settings page reports that as it is.
 

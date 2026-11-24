@@ -60,11 +60,13 @@ export function page(name, { bridge = {}, globals = {}, storage = {} } = {}) {
     addEventListener(type, cb) { const list = this.events.get(type) ?? []; list.push(cb); this.events.set(type, list); }
     fire(type, event = {}) { const e = { target: this, preventDefault() {}, stopPropagation() {}, stopImmediatePropagation() {}, ...event }; for (const cb of this.events.get(type) ?? []) cb(e); }
     focus() {} select() {} setSelectionRange() {} setPointerCapture() {} click() { if (!this.disabled) this.fire('click'); }
+    showModal() { this.open = true; }
+    close() { this.open = false; }
     getBoundingClientRect() { return { left: 0, top: 0, width: this.width, height: this.height, bottom: this.height, right: this.width }; }
     getContext() {
       if (this.ctx) return this.ctx;
       const commands = [];
-      this.ctx = new Proxy({ commands, measureText: () => ({ width: 30 }), createLinearGradient: () => ({ addColorStop() {} }) }, {
+      this.ctx = new Proxy({ commands, measureText: () => ({ width: 30 }), getImageData: () => ({ data: [0, 0, 0, 255] }), createLinearGradient: () => ({ addColorStop() {} }) }, {
         get: (target, key) => key in target ? target[key] : (...args) => { commands.push([key, ...args]); },
       });
       return this.ctx;

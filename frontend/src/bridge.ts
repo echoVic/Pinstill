@@ -244,6 +244,26 @@ export async function copyPixelColor(hex: string): Promise<void> {
   await navigator.clipboard.writeText(hex);
 }
 
+export type RecognitionMode = "ocr" | "qr";
+export type RecognitionCode = Native.RecognitionCode;
+
+export function recognizeSelection(
+  mode: RecognitionMode,
+  language: string,
+  pngBase64: string,
+  signal: AbortSignal,
+): Promise<Native.RecognitionResult> {
+  return Capture.recognizeSelection.with({ signal })(mode, language, pngBase64);
+}
+
+export function copyRecognizedText(text: string, signal: AbortSignal): Promise<void> {
+  return Capture.copyRecognizedText.with({ signal })(text);
+}
+
+export function openRecognizedLink(url: string, signal: AbortSignal): Promise<void> {
+  return Capture.openRecognizedLink.with({ signal })(url);
+}
+
 export function finishAnnotated(
   action: FinishAnnotatedAction,
   dataBase64: string,

@@ -77,7 +77,7 @@ func (a *App) reconcileShortcutsWith(s Settings, r settingsRuntime) map[string]s
 	}
 	delete(active, "ocrKey")
 	if strings.TrimSpace(s.OcrKey) != "" {
-		errs["ocrKey"] = "文字识别尚未提供，未注册快捷键"
+		errs["ocrKey"] = "提取文字可从截图工具栏使用，未注册全局快捷键"
 	}
 	want := map[string]string{
 		"captureKey": strings.TrimSpace(s.CaptureKey),

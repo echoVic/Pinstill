@@ -512,6 +512,41 @@
   .at-status:empty { display: none; }
   .at-status[data-kind="error"] { color: #a64136; }
 
+  .recognition-panel {
+    width: min(420px, calc(100% - 24px));
+    max-height: calc(100% - 24px);
+    padding: 16px;
+    border: 1px solid #e4ded2;
+    border-radius: 12px;
+    color: #36332c;
+    background: #faf7f0;
+    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.42);
+    cursor: default;
+    overflow-y: auto;
+  }
+  .recognition-panel::backdrop { background: rgba(20, 20, 18, 0.2); }
+  .recognition-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .recognition-header h2 { margin: 0; font-size: 15px; }
+  .recognition-status { margin: 10px 0 0; color: #61594e; font-size: 12px; line-height: 1.5; }
+  .recognition-status:empty { display: none; }
+  .recognition-status.error { color: #a64136; }
+  .recognition-text, .recognition-code {
+    width: 100%;
+    margin-top: 10px;
+    padding: 8px 10px;
+    border: 1px solid #e4ded2;
+    border-radius: 7px;
+    background: #fffaf4;
+    color: #36332c;
+    font: 13px/1.5 var(--font);
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+    user-select: text;
+    -webkit-user-select: text;
+  }
+  .recognition-text { display: block; min-height: 100px; resize: vertical; }
+  .recognition-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+
   .annotation-toolbar.compact { padding: 4px; gap: 3px; }
   .annotation-toolbar.compact .tool-btn { width: 27px; height: 27px; }
   .annotation-toolbar.compact .tool-btn svg { width: 15px; height: 15px; }
@@ -647,6 +682,15 @@
       <span class="at-status" id="overlayStatus" role="status" aria-live="polite"></span>
     </div>
   </div>
+
+  <dialog class="recognition-panel" id="recognitionPanel" aria-labelledby="recognitionTitle">
+    <div class="recognition-header">
+      <h2 id="recognitionTitle"></h2>
+      <button type="button" class="action-btn" id="recognitionClose" autofocus>关闭</button>
+    </div>
+    <p class="recognition-status" id="recognitionStatus" role="status"></p>
+    <div id="recognitionResults"></div>
+  </dialog>
 
   <div class="hint" id="hint">
     <span class="hint-key">单击</span> 截取窗口
