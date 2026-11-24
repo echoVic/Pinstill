@@ -21,6 +21,10 @@ type desktopFrame struct {
 	image func() (image.Image, error)
 }
 
+func FreezeScreen(ctx context.Context, displays []DisplaySurface, opts CaptureOptions) (*DesktopSnapshot, error) {
+	return FreezeDesktop(ctx, displays, opts, captureSnapshotRegion)
+}
+
 func FreezeDesktop(ctx context.Context, displays []DisplaySurface, opts CaptureOptions, grab func(context.Context, Rect, CaptureOptions) ([]byte, error)) (*DesktopSnapshot, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

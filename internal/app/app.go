@@ -1,7 +1,9 @@
 package app
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"image"
@@ -31,7 +33,6 @@ type App struct {
 	finishMu   sync.Mutex
 
 	historyDir  string
-	sessionDir  string
 	shotBase    string
 	store       *store.Store
 	pinStore    *pin.Store
@@ -62,14 +63,13 @@ type App struct {
 	visibleWindows     func(excludePID int) []capture.WindowInfo
 
 	// resultPNG/resultMeta back the scrolling-capture preview window.
-	resultPNG           []byte
-	resultMeta          ScrollResultPayload
-	resultSessionFile   string
-	overlaySessionFile  string
-	pendingPreviewFiles []string
-	annotationDigest    [32]byte
-	annotationPayload   capturePayload
-	captureAction       func(string, []byte, capturePayload) (CaptureActionResult, error)
+	resultPNG         []byte
+	resultMeta        ScrollResultPayload
+	overlayPreviewID  string
+	overlayPreviewPNG []byte
+	annotationDigest  [32]byte
+	annotationPayload capturePayload
+	captureAction     func(string, []byte, capturePayload) (CaptureActionResult, error)
 
 	pins       map[string]*mygo.Window
 	pinStates  map[string]pin.State
@@ -203,19 +203,25 @@ func (a *App) prepareQuit(snapshot func() error) error {
 func (a *App) ShowMain() { a.showMain() }
 
 func (a *App) initStorage() error {
-	userData, err := mygo.App.Path(mygo.PathUserData)
-	if err != nil {
-		return err
-	}
-	cacheDir, err := mygo.App.Path(mygo.PathCache)
-	if err != nil {
-		return err
-	}
 	// Development and the screenshot selftests can point every store at an
 	// isolated directory, so they never read or write the user's captures.
-	if dir := strings.TrimSpace(os.Getenv("PINSTILL_DATA_DIR")); dir != "" {
-		userData = dir
-		cacheDir = dir
+	userData := strings.TrimSpace(os.Getenv("PINSTILL_DATA_DIR"))
+	cacheDir := userData
+	if userData == "" {
+		var err error
+		userData, err = mygo.App.Path(mygo.PathUserData)
+		if err != nil {
+			return err
+		}
+		cacheDir, err = mygo.App.Path(mygo.PathCache)
+		if err != nil {
+			log.Printf("pinstill: old preview cache: %v", err)
+		}
+	}
+	if cacheDir != "" {
+		if err := os.RemoveAll(filepath.Join(cacheDir, "session")); err != nil {
+			log.Printf("pinstill: old preview cache cleanup: %v", err)
+		}
 	}
 	a.shotBase = "shot://localhost"
 	if runtime.GOOS == "windows" {
@@ -223,13 +229,6 @@ func (a *App) initStorage() error {
 		a.shotBase = "http://shot.localhost"
 	}
 	a.historyDir = filepath.Join(userData, "captures")
-	a.sessionDir = filepath.Join(cacheDir, "session")
-	if err := os.RemoveAll(a.sessionDir); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(a.sessionDir, 0o755); err != nil {
-		return err
-	}
 	if err := os.MkdirAll(a.historyDir, 0o755); err != nil {
 		return err
 	}
@@ -261,11 +260,17 @@ func (a *App) shotURL(path string) string {
 }
 
 func (a *App) registerProtocol() {
+	if err := mygo.Protocol.Handle("shot", a.shotHandler()); err != nil {
+		log.Printf("pinstill: protocol: %v", err)
+	}
+}
+
+func (a *App) shotHandler() http.Handler {
 	mux := http.NewServeMux()
 	if a.store != nil {
 		mux.Handle("/h/", http.StripPrefix("/h/", imagesOnly(mygo.FileServer(os.DirFS(a.store.Dir())))))
 	}
-	mux.Handle("/s/", http.StripPrefix("/s/", imagesOnly(mygo.FileServer(os.DirFS(a.sessionDir)))))
+	mux.HandleFunc("/s/", a.serveSessionPreview)
 	mux.HandleFunc("/d/", a.serveOverlayBackdrop)
 	if a.pinStore != nil {
 		mux.Handle("/p/", http.StripPrefix("/p/", imagesOnly(mygo.FileServer(os.DirFS(a.pinStore.Dir())))))
@@ -273,9 +278,29 @@ func (a *App) registerProtocol() {
 	if a.lineStore != nil {
 		mux.Handle("/l/", http.StripPrefix("/l/", imagesOnly(mygo.FileServer(os.DirFS(a.lineStore.Dir())))))
 	}
-	if err := mygo.Protocol.Handle("shot", mux); err != nil {
-		log.Printf("pinstill: protocol: %v", err)
+	return mux
+}
+
+func (a *App) serveSessionPreview(writer http.ResponseWriter, request *http.Request) {
+	filename := strings.TrimPrefix(request.URL.Path, "/s/")
+	a.mu.Lock()
+	var data []byte
+	if !a.quitting {
+		switch {
+		case a.overlayPreviewID != "" && filename == a.overlayPreviewID+".png":
+			data = a.overlayPreviewPNG
+		case a.resultMeta.ID != "" && filename == a.resultMeta.ID:
+			data = a.resultPNG
+		}
 	}
+	a.mu.Unlock()
+	if len(data) == 0 {
+		http.NotFound(writer, request)
+		return
+	}
+	writer.Header().Set("Cache-Control", "no-store")
+	writer.Header().Set("Content-Type", "image/png")
+	http.ServeContent(writer, request, filename, time.Time{}, bytes.NewReader(data))
 }
 
 // imagesOnly keeps the captures protocol to the pictures it serves: the
@@ -703,7 +728,7 @@ func (a *App) cancelRegion() bool {
 		a.restoreMainAfterCapture = false
 		a.capturing = false
 		a.captureGeneration++
-		reportCacheCleanup(a.releaseOverlayCacheLocked())
+		a.releaseOverlayCaptureLocked()
 		a.mu.Unlock()
 		for _, window := range windows {
 			hideOverlayPane(window, session)
@@ -824,8 +849,7 @@ func (a *App) prepareSelectionFrom(ctx context.Context, caller *mygo.Window, rec
 		return OverlayCapturePayload{}, err
 	}
 	width, height := img.Bounds().Dx(), img.Bounds().Dy()
-	// Cancellation and publication must not cross: either this write belongs
-	// to the active request, or no session file is created for it.
+	previewID := "preview-" + rand.Text()
 	a.mu.Lock()
 	if err := ctx.Err(); err != nil {
 		a.mu.Unlock()
@@ -835,23 +859,14 @@ func (a *App) prepareSelectionFrom(ctx context.Context, caller *mygo.Window, rec
 		a.mu.Unlock()
 		return OverlayCapturePayload{}, errors.New("截图请求已取消")
 	}
-	sessionFile, err := a.writePreviewLocked(ctx, &a.overlaySessionFile, pngBytes)
-	if err == nil {
-		a.annotationDigest = [32]byte{}
-		a.annotationPayload = capturePayload{}
-	}
+	a.overlayPreviewID = previewID
+	a.overlayPreviewPNG = pngBytes
+	a.annotationDigest = [32]byte{}
+	a.annotationPayload = capturePayload{}
 	a.mu.Unlock()
-	if err != nil {
-		if ctx.Err() != nil {
-			return OverlayCapturePayload{}, err
-		}
-		err = fmt.Errorf("截图写入失败: %w", err)
-		a.failSelection(err, false)
-		return OverlayCapturePayload{}, err
-	}
 	payload := OverlayCapturePayload{
-		ID:     strings.TrimSuffix(sessionFile, ".png"),
-		URL:    a.shotURL("/s/" + sessionFile),
+		ID:     previewID,
+		URL:    a.shotURL("/s/" + previewID + ".png"),
 		Width:  width,
 		Height: height,
 		Rect:   rect,

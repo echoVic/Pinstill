@@ -101,9 +101,7 @@ type ToastPayload struct {
 	Kind string `json:"kind"`
 }
 
-// capturePayload describes a capture written to the session cache: the
-// identity and pixel size the actions need. It is internal to the app (the
-// pages no longer receive captured images).
+// capturePayload holds the capture identity and pixel size used by actions.
 type capturePayload struct {
 	ID        string
 	HistoryID string

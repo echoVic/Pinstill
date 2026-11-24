@@ -1,9 +1,8 @@
 package app
 
 import (
-	"context"
+	"crypto/rand"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -23,9 +22,7 @@ func scrollResultWindowSize(display mygo.Display) (int, int) {
 }
 
 // showScrollResult opens the preview window for a finished scrolling capture.
-// The stitched image is stored in the session cache (and history, when the
-// user keeps it), then handed to the window; the bytes are kept in memory so
-// the copy/save/pin actions do not read the file again.
+// The preview and its actions share the stitched PNG held in memory.
 func (a *App) showScrollResult(pngBytes []byte, frames int, capped bool) error {
 	return a.showScrollResultFor(nil, pngBytes, frames, capped)
 }
@@ -48,57 +45,26 @@ func (a *App) showScrollResultFor(session *scrollSession, pngBytes []byte, frame
 	if session != nil && !a.scrollResultIsCurrent(session) {
 		return nil
 	}
-	a.mu.Lock()
-	if err := a.releasePendingPreviewsLocked(); err != nil {
-		a.mu.Unlock()
-		return err
-	}
-	// Stage separately: a cancelled finalizer must not evict the open result.
-	var staged string
-	sessionFile, err := a.writePreviewLocked(context.Background(), &staged, pngBytes)
-	a.mu.Unlock()
-	if err != nil {
-		return fmt.Errorf("长图预览写入失败: %w", err)
-	}
-	url := a.shotURL("/s/" + sessionFile)
+	previewID := "preview-" + rand.Text() + ".png"
 	meta := ScrollResultPayload{
-		ID:        sessionFile,
+		ID:        previewID,
 		HistoryID: payload.HistoryID,
-		URL:       url,
+		URL:       a.shotURL("/s/" + previewID),
 		Width:     width,
 		Height:    height,
 		Frames:    frames,
 		Capped:    capped,
 	}
-	var publishErr error
 	a.runScrollUI(func() {
 		if session != nil && !a.scrollResultIsCurrent(session) {
-			a.mu.Lock()
-			if err := a.releaseCacheFileLocked(&staged); err != nil {
-				a.pendingPreviewFiles = append(a.pendingPreviewFiles, staged)
-				reportCacheCleanup(err)
-			}
-			a.mu.Unlock()
 			return
 		}
-		a.mu.Lock()
-		if err := a.releaseCacheFileLocked(&a.resultSessionFile); err != nil {
-			if cleanupErr := a.releaseCacheFileLocked(&staged); cleanupErr != nil {
-				a.pendingPreviewFiles = append(a.pendingPreviewFiles, staged)
-			}
-			a.mu.Unlock()
-			publishErr = err
-			return
-		}
-		a.resultSessionFile = staged
-		a.mu.Unlock()
 		a.publishScrollResult(pngBytes, meta)
 	})
-	return publishErr
+	return nil
 }
 
-// Window replacement is one UI-thread operation. Disk writes happen before it
-// so settings/native callbacks never wait on a lock held by this callback.
+// Window replacement is one UI-thread operation.
 func (a *App) publishScrollResult(pngBytes []byte, meta ScrollResultPayload) {
 
 	// Only one preview window at a time.
@@ -106,6 +72,7 @@ func (a *App) publishScrollResult(pngBytes []byte, meta ScrollResultPayload) {
 	old := a.result
 	a.result = nil
 	a.resultPNG = nil
+	a.resultMeta = ScrollResultPayload{}
 	a.mu.Unlock()
 	if old != nil && !old.IsDestroyed() {
 		old.Close()
@@ -150,9 +117,6 @@ func (a *App) publishScrollResult(pngBytes []byte, meta ScrollResultPayload) {
 	win.OnClosed(func() {
 		a.mu.Lock()
 		if a.result == win {
-			if a.resultSessionFile == meta.ID {
-				reportCacheCleanup(a.releaseCacheFileLocked(&a.resultSessionFile))
-			}
 			a.result = nil
 			a.resultPNG = nil
 			a.resultMeta = ScrollResultPayload{}

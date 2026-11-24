@@ -1,18 +1,14 @@
 package app
 
 import (
-	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"log"
-	"os"
-	"path/filepath"
 )
 
-// The caller holds a.mu. Only files owned by the overlay are released; a
-// separate result preview keeps its own file until its window closes.
-func (a *App) releaseOverlayCacheLocked() error {
+func (a *App) releaseOverlayCaptureLocked() {
+	a.overlayPreviewID = ""
+	a.overlayPreviewPNG = nil
 	a.annotationDigest = [32]byte{}
 	a.annotationPayload = capturePayload{}
 	a.overlayWindows = nil
@@ -26,79 +22,6 @@ func (a *App) releaseOverlayCacheLocked() error {
 	a.overlaySource = nil
 	a.overlayCommitted = false
 	a.clearOverlayRevealLocked()
-	return a.releaseCacheFileLocked(&a.overlaySessionFile)
-}
-
-func (a *App) releaseCacheFileLocked(file *string) error {
-	if *file == "" {
-		return nil
-	}
-	if err := os.Remove(filepath.Join(a.sessionDir, *file)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("无法清理截图预览缓存，请检查磁盘权限后重试: %w", err)
-	}
-	*file = ""
-	return nil
-}
-
-func (a *App) writePreviewLocked(ctx context.Context, file *string, pngBytes []byte) (string, error) {
-	return a.writePreviewLockedWith(ctx, file, pngBytes, func(f *os.File, data []byte) error { _, err := f.Write(data); return err })
-}
-
-func (a *App) writePreviewLockedWith(ctx context.Context, file *string, pngBytes []byte, write func(*os.File, []byte) error) (string, error) {
-	if err := a.releasePendingPreviewsLocked(); err != nil {
-		return "", err
-	}
-	if *file != "" {
-		info, err := os.Lstat(filepath.Join(a.sessionDir, *file))
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return "", err
-		}
-		if err == nil && !info.Mode().IsRegular() {
-			return "", errors.New("预览缓存不是普通文件，请检查缓存目录")
-		}
-	}
-	f, err := os.CreateTemp(a.sessionDir, "preview-*.png")
-	if err != nil {
-		return "", err
-	}
-	staged := filepath.Base(f.Name())
-	cleanup := func() error {
-		if err := a.releaseCacheFileLocked(&staged); err != nil {
-			a.pendingPreviewFiles = append(a.pendingPreviewFiles, staged)
-			return err
-		}
-		return nil
-	}
-	err = write(f, pngBytes)
-	closeErr := f.Close()
-	if err = errors.Join(err, closeErr); err != nil {
-		return "", errors.Join(err, cleanup())
-	}
-	if err := ctx.Err(); err != nil {
-		return "", errors.Join(err, cleanup())
-	}
-	if err := a.releaseCacheFileLocked(file); err != nil {
-		return "", errors.Join(err, cleanup())
-	}
-	*file = staged
-	return *file, nil
-}
-
-func (a *App) releasePendingPreviewsLocked() error {
-	for len(a.pendingPreviewFiles) > 0 {
-		pending := a.pendingPreviewFiles[0]
-		if err := a.releaseCacheFileLocked(&pending); err != nil {
-			return err
-		}
-		a.pendingPreviewFiles = a.pendingPreviewFiles[1:]
-	}
-	return nil
-}
-
-func reportCacheCleanup(err error) {
-	if err != nil {
-		log.Printf("pinstill: preview cache cleanup: %v", err)
-	}
 }
 
 func (a *App) finishAnnotation(action, dataBase64 string) (CaptureActionResult, error) {
@@ -160,7 +83,7 @@ func (a *App) finishAnnotation(action, dataBase64 string) (CaptureActionResult, 
 	current := a.capturing && a.captureGeneration == generation
 	if current && err == nil && result.Completed {
 		a.capturing, a.restoreMainAfterCapture = false, false
-		reportCacheCleanup(a.releaseOverlayCacheLocked())
+		a.releaseOverlayCaptureLocked()
 	}
 	a.mu.Unlock()
 	if current && (err != nil || !result.Completed) && overlay != nil {

@@ -7,8 +7,6 @@ import (
 	"image/draw"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/echoVic/Pinstill/internal/capture"
@@ -34,7 +32,7 @@ func TestSelectionUsesDesktopFrameTakenBeforePopupCloses(t *testing.T) {
 	}
 	a := &App{
 		capturing: true, overlayInteraction: 1, overlayDisplay: display, overlayRect: display.Bounds,
-		overlayDesktop: frozen, sessionDir: t.TempDir(),
+		overlayDesktop: frozen,
 	}
 	for _, selection := range []Rect{
 		{X: 25, Y: 10, Width: 25, Height: 20},
@@ -44,11 +42,12 @@ func TestSelectionUsesDesktopFrameTakenBeforePopupCloses(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		data, err := os.ReadFile(filepath.Join(a.sessionDir, payload.ID+".png"))
-		if err != nil {
-			t.Fatal(err)
+		response := httptest.NewRecorder()
+		a.shotHandler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/s/"+payload.ID+".png", nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("selection preview returned %d", response.Code)
 		}
-		shot, err := imagebudget.DecodePNG(data)
+		shot, err := imagebudget.DecodePNG(response.Body.Bytes())
 		if err != nil {
 			t.Fatal(err)
 		}

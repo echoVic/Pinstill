@@ -1,11 +1,15 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"hash/crc32"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,16 +25,13 @@ import (
 func TestCancelledPreparationSkipsCaptureAndPreservesPreview(t *testing.T) {
 	t.Setenv("PINSTILL_SELFTEST_FAKE_CAPTURE", "1")
 	synctest.Test(t, func(t *testing.T) {
-		application := &App{
-			capturing:          true,
-			settings:           DefaultSettings(),
-			sessionDir:         t.TempDir(),
-			overlayDisplay:     mygo.Display{Bounds: mygo.Rectangle{Width: 800, Height: 600}},
-			overlaySessionFile: "previous.png",
-		}
 		previous := []byte("previous preview")
-		if err := os.WriteFile(filepath.Join(application.sessionDir, application.overlaySessionFile), previous, 0o600); err != nil {
-			t.Fatal(err)
+		application := &App{
+			capturing:         true,
+			settings:          DefaultSettings(),
+			overlayDisplay:    mygo.Display{Bounds: mygo.Rectangle{Width: 800, Height: 600}},
+			overlayPreviewID:  "previous",
+			overlayPreviewPNG: previous,
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
 		defer cancel()
@@ -42,9 +43,8 @@ func TestCancelledPreparationSkipsCaptureAndPreservesPreview(t *testing.T) {
 		if elapsed := time.Since(start); elapsed >= 90*time.Millisecond {
 			t.Fatalf("canceled preparation waited for the compositor: %v", elapsed)
 		}
-		files, err := os.ReadDir(application.sessionDir)
-		if err != nil || len(files) != 1 || files[0].Name() != "previous.png" || application.overlaySessionFile != "previous.png" {
-			t.Fatalf("canceled preparation changed the cache: %v, %v", files, err)
+		if application.overlayPreviewID != "previous" || !bytes.Equal(application.overlayPreviewPNG, previous) {
+			t.Fatal("canceled preparation replaced the previous preview")
 		}
 	})
 }
@@ -161,25 +161,133 @@ func TestCaptureDoesNotReportHistoryWriteFailureAsSuccess(t *testing.T) {
 	}
 }
 
-func TestPreparationCacheOnlyKeepsCurrentOverlayAndResult(t *testing.T) {
+func TestSelectionPreviewSurvivesDeletedDiskCache(t *testing.T) {
 	t.Setenv("PINSTILL_SELFTEST_FAKE_CAPTURE", "1")
-	a := newTestApp(t)
-	a.sessionDir = t.TempDir()
-	a.capturing = true
-	a.overlayDisplay = mygo.Display{Bounds: mygo.Rectangle{Width: 1920, Height: 1080}}
-	for i := 0; i < 6; i++ {
-		if _, err := a.prepareSelectionWithDelay(Rect{Width: 100, Height: 100}, 0); err != nil {
+	dataDir := t.TempDir()
+	t.Setenv("PINSTILL_DATA_DIR", dataDir)
+	legacyCache := filepath.Join(dataDir, "session")
+	if err := os.Mkdir(legacyCache, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyCache, "old.png"), []byte("previous preview"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	application := New()
+	if err := application.initStorage(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(legacyCache); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old preview cache was not removed at startup: %v", err)
+	}
+	if err := os.Mkdir(legacyCache, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	application.capturing = true
+	application.overlayDisplay = mygo.Display{Bounds: mygo.Rectangle{Width: 800, Height: 600}}
+	handler := application.shotHandler()
+	prepare := func() OverlayCapturePayload {
+		t.Helper()
+		preview, err := application.prepareSelectionWithDelay(Rect{Width: 80, Height: 50}, 0)
+		if err != nil {
 			t.Fatal(err)
 		}
+		return preview
 	}
-	files, err := os.ReadDir(a.sessionDir)
-	if err != nil || len(files) != 1 {
-		t.Fatalf("cache has %d files: %v", len(files), err)
+	first := prepare()
+	if err := os.RemoveAll(legacyCache); err != nil {
+		t.Fatal(err)
 	}
-	a.cancelRegion()
-	files, err = os.ReadDir(a.sessionDir)
-	if err != nil || len(files) != 0 {
-		t.Fatalf("cancel retained %d files: %v", len(files), err)
+	assertPNGPreview(t, handler, first, http.StatusOK)
+	second := prepare()
+	assertPNGPreview(t, handler, first, http.StatusNotFound)
+	assertPNGPreview(t, handler, second, http.StatusOK)
+	if _, err := os.Lstat(legacyCache); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("preview recreated the old cache directory: %v", err)
+	}
+	if err := os.WriteFile(legacyCache, []byte("blocked directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	third := prepare()
+	assertPNGPreview(t, handler, third, http.StatusOK)
+	application.cancelRegion()
+	assertPNGPreview(t, handler, third, http.StatusNotFound)
+}
+
+func TestScrollResultPreviewSurvivesDeletedDiskCache(t *testing.T) {
+	legacyCache := filepath.Join(t.TempDir(), "session")
+	if err := os.Mkdir(legacyCache, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	image := gnPNGData(t, 24, 48)
+	application := &App{resultPNG: image, resultMeta: ScrollResultPayload{ID: "result.png", Width: 24, Height: 48}}
+	preview := OverlayCapturePayload{ID: "result", URL: "shot://localhost/s/result.png", Width: 24, Height: 48}
+	handler := application.shotHandler()
+	if err := os.RemoveAll(legacyCache); err != nil {
+		t.Fatal(err)
+	}
+	assertPNGPreview(t, handler, preview, http.StatusOK)
+	result, err := application.scrollResultSnapshot("result.png")
+	if err != nil || !bytes.Equal(result.png, image) {
+		t.Fatalf("scroll actions lost their image: %v", err)
+	}
+	application.mu.Lock()
+	application.resultPNG = nil
+	application.resultMeta = ScrollResultPayload{}
+	application.mu.Unlock()
+	assertPNGPreview(t, handler, preview, http.StatusNotFound)
+}
+
+func TestCaptureActionCompletesAfterPreviewCacheDeletion(t *testing.T) {
+	t.Setenv("PINSTILL_SELFTEST_FAKE_CAPTURE", "1")
+	application := newTestApp(t)
+	application.capturing = true
+	application.overlayDisplay = mygo.Display{Bounds: mygo.Rectangle{Width: 800, Height: 600}}
+	preview, err := application.prepareSelectionWithDelay(Rect{Width: 80, Height: 50}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyCache := filepath.Join(t.TempDir(), "session")
+	if err := os.Mkdir(legacyCache, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(legacyCache); err != nil {
+		t.Fatal(err)
+	}
+	image := application.overlayPreviewPNG
+	application.captureAction = func(action string, data []byte, payload capturePayload) (CaptureActionResult, error) {
+		if action != "copy" || !bytes.Equal(data, image) || payload.HistoryID == "" {
+			t.Fatalf("unexpected capture action: %q, %+v", action, payload)
+		}
+		return CaptureActionResult{Completed: true}, nil
+	}
+	result, err := application.finishAnnotated("copy", base64.StdEncoding.EncodeToString(image))
+	if err != nil || !result.Completed {
+		t.Fatalf("capture action failed: %+v, %v", result, err)
+	}
+	assertPNGPreview(t, application.shotHandler(), preview, http.StatusNotFound)
+	if len(application.store.List()) != 1 {
+		t.Fatal("completed capture was not saved to history")
+	}
+}
+
+func assertPNGPreview(t *testing.T, handler http.Handler, preview OverlayCapturePayload, wantStatus int) {
+	t.Helper()
+	previewURL, err := url.Parse(preview.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, previewURL.Path, nil))
+	if response.Code != wantStatus {
+		t.Fatalf("preview %s returned %d, want %d", preview.ID, response.Code, wantStatus)
+	}
+	if wantStatus == http.StatusOK {
+		if contentType, cacheControl := response.Header().Get("Content-Type"), response.Header().Get("Cache-Control"); contentType != "image/png" || cacheControl != "no-store" {
+			t.Fatalf("preview headers: content type %q, cache control %q", contentType, cacheControl)
+		}
+		if width, height := imageDimensions(response.Body.Bytes()); width != preview.Width || height != preview.Height {
+			t.Fatalf("preview %s decoded as %dx%d, want %dx%d", preview.ID, width, height, preview.Width, preview.Height)
+		}
 	}
 }
 
@@ -228,34 +336,6 @@ func TestScrollStopsAtAccumulatorPixelCap(t *testing.T) {
 	s.frames, s.height = 1, 5
 	if !scrollReachedLimit(s) {
 		t.Fatal("accumulator cap did not stop capture below global height/frame caps")
-	}
-}
-
-func TestFailedOverlayCacheRemovalDoesNotAccumulatePreviews(t *testing.T) {
-	t.Setenv("PINSTILL_SELFTEST_FAKE_CAPTURE", "1")
-	a := newTestApp(t)
-	a.sessionDir = t.TempDir()
-	a.capturing = true
-	a.overlayDisplay = mygo.Display{Bounds: mygo.Rectangle{Width: 1920, Height: 1080}}
-	a.overlaySessionFile = "blocked.png"
-	blocked := filepath.Join(a.sessionDir, a.overlaySessionFile)
-	if err := os.Mkdir(blocked, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(blocked, "keep"), []byte("do not remove"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	for range 3 {
-		if _, err := a.prepareSelectionWithDelay(Rect{Width: 100, Height: 100}, 0); err == nil {
-			t.Fatal("failed cache removal reported success")
-		}
-		files, err := os.ReadDir(a.sessionDir)
-		if err != nil || len(files) != 1 {
-			t.Fatalf("cache grew after failed cleanup: %d files, %v", len(files), err)
-		}
-	}
-	if a.overlaySessionFile != "blocked.png" {
-		t.Fatal("forgot the file that still needs cleanup")
 	}
 }
 
@@ -372,71 +452,24 @@ func TestQuitInvalidatesDelayedFullScreenCapture(t *testing.T) {
 	})
 }
 
-func TestPreviewWriteFailurePreservesPreviousFile(t *testing.T) {
-	a := &App{sessionDir: t.TempDir()}
-	previous := "old.png"
-	path := filepath.Join(a.sessionDir, previous)
-	if err := os.WriteFile(path, []byte("previous pixels"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	_, err := a.writePreviewLockedWith(context.Background(), &previous, []byte("new pixels"), func(f *os.File, data []byte) error { _, _ = f.Write(data[:3]); return errors.New("disk full") })
-	if err == nil {
-		t.Fatal("failed preview write reported success")
-	}
-	if previous != "old.png" {
-		t.Fatal("failed replacement lost previous preview ownership")
-	}
-	if data, err := os.ReadFile(path); err != nil || string(data) != "previous pixels" {
-		t.Fatalf("previous preview lost: %q %v", data, err)
-	}
-	if files, _ := os.ReadDir(a.sessionDir); len(files) != 1 {
-		t.Fatalf("failed preview left %d files", len(files))
-	}
-}
-
-func TestCanceledPreviewWriteKeepsPreviousFile(t *testing.T) {
-	application := &App{sessionDir: t.TempDir()}
-	previous := "previous.png"
-	if err := os.WriteFile(filepath.Join(application.sessionDir, previous), []byte("old preview"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	_, err := application.writePreviewLockedWith(ctx, &previous, []byte("new preview"), func(file *os.File, data []byte) error {
-		_, err := file.Write(data)
-		cancel()
-		return err
-	})
-	if !errors.Is(err, context.Canceled) || previous != "previous.png" {
-		t.Fatalf("canceled write replaced the preview: %q, %v", previous, err)
-	}
-	files, err := os.ReadDir(application.sessionDir)
-	if err != nil || len(files) != 1 || files[0].Name() != previous {
-		t.Fatalf("canceled write leaked a preview: %v, %v", files, err)
-	}
-}
-
 func TestCancelledResultPublicationKeepsPreviousPreview(t *testing.T) {
 	a := newTestApp(t)
-	a.sessionDir = t.TempDir()
-	a.resultSessionFile, a.resultMeta.ID = "old.png", "old.png"
-	a.resultPNG = []byte("previous pixels")
-	if err := os.WriteFile(filepath.Join(a.sessionDir, "old.png"), a.resultPNG, 0600); err != nil {
-		t.Fatal(err)
-	}
+	a.resultMeta = ScrollResultPayload{ID: "old.png", Width: 16, Height: 24}
+	previous := gnPNGData(t, 16, 24)
+	a.resultPNG = previous
 	s := &scrollSession{id: "old-session"}
 	a.scroll = s
 	a.scrollUI = func(fn func()) { a.scroll = &scrollSession{id: "new-session"}; fn() }
 	if err := a.showScrollResultFor(s, gnPNGData(t, 24, 16), 2, false); err != nil {
 		t.Fatal(err)
 	}
-	if data, err := os.ReadFile(filepath.Join(a.sessionDir, "old.png")); err != nil || string(data) != "previous pixels" {
-		t.Fatalf("cancelled finalization evicted prior preview: %q %v", data, err)
+	result, err := a.scrollResultSnapshot("old.png")
+	if err != nil || !bytes.Equal(result.png, previous) {
+		t.Fatalf("cancelled finalization replaced the active result: %v", err)
 	}
-	if a.resultMeta.ID != "old.png" || string(a.resultPNG) != "previous pixels" {
-		t.Fatal("cancelled finalization replaced prior metadata")
-	}
-	if files, _ := os.ReadDir(a.sessionDir); len(files) != 1 {
-		t.Fatalf("cancelled finalization retained %d files", len(files))
+	response := httptest.NewRecorder()
+	a.shotHandler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/s/old.png", nil))
+	if response.Code != http.StatusOK || !bytes.Equal(response.Body.Bytes(), previous) {
+		t.Fatalf("cancelled finalization evicted the preview: status %d", response.Code)
 	}
 }

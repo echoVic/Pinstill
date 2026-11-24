@@ -36,7 +36,7 @@ func (a *App) freezeOverlayDesktop(ctx context.Context, displays []mygo.Display,
 		surfaces = append(surfaces, capture.DisplaySurface{Bounds: asCaptureRect(captureOverlayBounds(display)), Scale: display.ScaleFactor})
 	}
 	options := capture.CaptureOptions{IncludeCursor: a.settingsSnapshot().IncludeCursor}
-	desktop, err := capture.FreezeDesktop(ctx, surfaces, options, capture.CaptureRegionContext)
+	desktop, err := capture.FreezeScreen(ctx, surfaces, options)
 	if err != nil && ctx.Err() == nil {
 		log.Printf("pinstill: desktop snapshot: %v", err)
 	}

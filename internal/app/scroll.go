@@ -337,15 +337,7 @@ func (a *App) startScroll(rect Rect, autoScroll bool) error {
 		overlay.Hide()
 	}
 	a.mu.Lock()
-	if err := a.releaseOverlayCacheLocked(); err != nil {
-		a.mu.Unlock()
-		if overlay != nil {
-			overlay.SetOpacity(1)
-			overlay.Show()
-			overlay.Focus()
-		}
-		return err
-	}
+	a.releaseOverlayCaptureLocked()
 	a.scrollSequence++
 	id := fmt.Sprintf("scroll-%d", a.scrollSequence)
 	a.mu.Unlock()

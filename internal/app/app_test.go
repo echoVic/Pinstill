@@ -310,7 +310,6 @@ func TestCopyImagePNGRejectsInvalidData(t *testing.T) {
 
 func TestStoreCaptureEnforcesHistoryRetention(t *testing.T) {
 	a := newTestApp(t)
-	a.sessionDir = t.TempDir()
 	a.settings.RetentionDays = 7
 	old, err := a.store.Save(gnPNGData(t, 32, 32), time.Now().AddDate(0, 0, -8))
 	if err != nil {
@@ -330,7 +329,6 @@ func TestStoreCaptureEnforcesHistoryRetention(t *testing.T) {
 func TestFailedSelectionCanBeRetried(t *testing.T) {
 	t.Setenv("PINSTILL_SELFTEST_FAKE_CAPTURE", "1")
 	a := newTestApp(t)
-	a.sessionDir = t.TempDir()
 	a.capturing = true
 	a.overlayDisplay = mygo.Display{Bounds: mygo.Rectangle{Width: 1920, Height: 1080}}
 	a.failSelection(errors.New("temporary capture failure"), false)
@@ -339,12 +337,11 @@ func TestFailedSelectionCanBeRetried(t *testing.T) {
 	}
 }
 
-func TestCancelledPreparationDoesNotWriteIntoNextCapture(t *testing.T) {
+func TestCancelledPreparationDoesNotPublishIntoNextCapture(t *testing.T) {
 	t.Setenv("PINSTILL_SELFTEST_FAKE_CAPTURE", "1")
 	for _, restart := range []bool{false, true} {
 		synctest.Test(t, func(t *testing.T) {
 			a := newTestApp(t)
-			a.sessionDir = t.TempDir()
 			a.capturing = true
 			a.overlayDisplay = mygo.Display{Bounds: mygo.Rectangle{Width: 1920, Height: 1080}}
 			done := make(chan error, 1)
@@ -364,9 +361,8 @@ func TestCancelledPreparationDoesNotWriteIntoNextCapture(t *testing.T) {
 			if err := <-done; err == nil {
 				t.Error("cancelled preparation returned a usable capture")
 			}
-			files, err := os.ReadDir(a.sessionDir)
-			if err != nil || len(files) != 0 {
-				t.Fatalf("cancelled preparation left session images: %v (%v)", files, err)
+			if a.overlayPreviewID != "" || len(a.overlayPreviewPNG) != 0 {
+				t.Fatal("cancelled preparation left a preview")
 			}
 		})
 	}
@@ -386,7 +382,6 @@ func TestSelfTestsUseSeparatePageStorage(t *testing.T) {
 
 func TestStoreCaptureIdentifiesItsOwnHistoryEntry(t *testing.T) {
 	a := newTestApp(t)
-	a.sessionDir = t.TempDir()
 	for _, keep := range []bool{true, false} {
 		a.settings.KeepHistory = keep
 		payload, err := a.storeCapture(gnPNGData(t, 24, 16))
@@ -423,7 +418,6 @@ func TestProjectOverlayWindowsAndLifecycle(t *testing.T) {
 	}
 
 	a := newTestApp(t)
-	a.sessionDir = t.TempDir()
 	a.overlayDisplay = mygo.Display{
 		WorkArea:    mygo.Rectangle{X: 0, Y: 25, Width: 1920, Height: 1055},
 		Bounds:      mygo.Rectangle{X: 0, Y: 0, Width: 1920, Height: 1080},
@@ -449,14 +443,11 @@ func TestProjectOverlayWindowsAndLifecycle(t *testing.T) {
 	}
 
 	a.mu.Lock()
-	err := a.releaseOverlayCacheLocked()
+	a.releaseOverlayCaptureLocked()
 	a.mu.Unlock()
-	if err != nil {
-		t.Fatalf("releaseOverlayCacheLocked() error = %v", err)
-	}
 	cleared := a.overlayInfo()
 	if cleared.HasCursor || cleared.CursorX != 0 || cleared.CursorY != 0 || len(cleared.Windows) != 0 {
-		t.Fatalf("overlayInfo after releaseOverlayCacheLocked = %+v", cleared)
+		t.Fatalf("overlayInfo after releaseOverlayCaptureLocked = %+v", cleared)
 	}
 }
 
@@ -477,7 +468,6 @@ func TestListVisibleWindowsUsesCustomProvider(t *testing.T) {
 func TestRevealOverlaySessionGating(t *testing.T) {
 	var reveals []float64
 	a := newTestApp(t)
-	a.sessionDir = t.TempDir()
 	a.overlayDisplay = mygo.Display{
 		WorkArea:    mygo.Rectangle{Width: 1920, Height: 1080},
 		Bounds:      mygo.Rectangle{Width: 1920, Height: 1080},
@@ -508,7 +498,7 @@ func TestRevealOverlaySessionGating(t *testing.T) {
 		t.Fatalf("overlaySession after reveal = %d, want 0", a.overlayInfo().Session)
 	}
 
-	// Pending reveal is cancelled by cancelRegion, active scroll, or releaseOverlayCacheLocked.
+	// Pending reveal is cancelled by cancelRegion, active scroll, or releaseOverlayCaptureLocked.
 	a.overlaySession = 8
 	a.scroll = &scrollSession{id: "scroll-1"}
 	a.revealOverlay(8)
@@ -521,13 +511,10 @@ func TestRevealOverlaySessionGating(t *testing.T) {
 	timerFired := false
 	a.overlayRevealTimer = time.AfterFunc(time.Hour, func() { timerFired = true })
 	a.mu.Lock()
-	err := a.releaseOverlayCacheLocked()
+	a.releaseOverlayCaptureLocked()
 	a.mu.Unlock()
-	if err != nil {
-		t.Fatalf("releaseOverlayCacheLocked() error = %v", err)
-	}
 	if a.overlaySession != 0 || a.overlayRevealTimer != nil {
-		t.Fatalf("releaseOverlayCacheLocked did not clear reveal state: session=%d timer=%v", a.overlaySession, a.overlayRevealTimer)
+		t.Fatalf("releaseOverlayCaptureLocked did not clear reveal state: session=%d timer=%v", a.overlaySession, a.overlayRevealTimer)
 	}
 	a.revealOverlay(9)
 	if len(reveals) != 1 || timerFired {

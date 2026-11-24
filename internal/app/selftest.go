@@ -505,9 +505,11 @@ func (a *App) selftestDrag() {
 	local := Rect{X: 10, Y: 10, Width: 120, Height: 100}
 	expected := capture.Rect{X: float64(origin.X) + local.X, Y: float64(origin.Y) + local.Y, Width: local.Width, Height: local.Height}
 	fmt.Printf("SELFTEST drag: overlay origin=%+v expected screen rect=%+v\n", origin, expected)
-	delivered, err := newestSessionPNG(a.sessionDir)
-	if err != nil {
-		selftestFail("SELFTEST drag: delivered image error %v\n", err)
+	a.mu.Lock()
+	delivered := a.overlayPreviewPNG
+	a.mu.Unlock()
+	if len(delivered) == 0 {
+		selftestFail("SELFTEST drag: no selection preview\n")
 	} else {
 		dw, dh := imageDimensions(delivered)
 		selftestArtifact("pinstill-selftest-drag-delivered.png", delivered)
@@ -558,35 +560,6 @@ func (a *App) selftestEscape() {
 		selftestRequire(!a.overlayVisible() && !a.main.IsVisible(), "Escape must close the overlay and leave the workbench hidden")
 	}
 	selftestExit(0)
-}
-
-// newestSessionPNG returns the most recent capture written for the current
-// session.
-func newestSessionPNG(dir string) ([]byte, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
-	var newest string
-	var newestTime time.Time
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || !strings.HasSuffix(name, ".png") || strings.HasPrefix(name, "pin-") {
-			continue
-		}
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-		if info.ModTime().After(newestTime) {
-			newest = name
-			newestTime = info.ModTime()
-		}
-	}
-	if newest == "" {
-		return nil, errors.New("no session capture found")
-	}
-	return os.ReadFile(filepath.Join(dir, newest))
 }
 
 // imageDiff decodes two PNGs of the same size and returns the mean absolute

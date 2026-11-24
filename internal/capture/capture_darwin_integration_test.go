@@ -8,6 +8,7 @@ package capture
 
 import (
 	"bytes"
+	"context"
 	"image/png"
 	"math"
 	"os"
@@ -17,6 +18,62 @@ import (
 
 	"github.com/echoVic/Pinstill/internal/imagebudget"
 )
+
+func TestIntegrationNativeFrozenDisplay(t *testing.T) {
+	if !PermissionGranted() {
+		t.Skip("screen recording permission is not granted")
+	}
+	if !initNativeSnapshot() {
+		t.Skip("ScreenCaptureKit rectangle snapshots require macOS 15.2")
+	}
+	displays, err := darwinDisplaySurfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, display := range displays {
+		start := time.Now()
+		data, err := captureNativeSnapshot(context.Background(), display.Bounds, CaptureOptions{BackingScale: display.Scale})
+		elapsed := time.Since(start)
+		if err != nil {
+			t.Fatal(err)
+		}
+		frame, err := imagebudget.DecodePNG(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, width, height := pointRect(display.Bounds)
+		wantWidth, wantHeight := int(math.Round(float64(width)*display.Scale)), int(math.Round(float64(height)*display.Scale))
+		if frame.Bounds().Dx() != wantWidth || frame.Bounds().Dy() != wantHeight {
+			t.Fatalf("display %+v: native image %v, want %dx%d", display, frame.Bounds(), wantWidth, wantHeight)
+		}
+		t.Logf("%dx%d lossless snapshot in %s", wantWidth, wantHeight, elapsed)
+	}
+}
+
+func BenchmarkIntegrationFreezeDesktop(b *testing.B) {
+	if !PermissionGranted() || !initNativeSnapshot() {
+		b.Skip("native snapshots require screen recording permission and macOS 15.2")
+	}
+	displays, err := darwinDisplaySurfaces()
+	if err != nil {
+		b.Fatal(err)
+	}
+	for _, backend := range []struct {
+		name string
+		grab func(context.Context, Rect, CaptureOptions) ([]byte, error)
+	}{
+		{"screencapture", CaptureRegionContext},
+		{"screen-capture-kit", captureNativeSnapshot},
+	} {
+		b.Run(backend.name, func(b *testing.B) {
+			for b.Loop() {
+				if _, err := FreezeDesktop(context.Background(), displays, CaptureOptions{}, backend.grab); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
 
 // TestIntegrationCaptureRegion captures a small region and checks that the
 // system produced a real PNG whose aspect ratio matches the requested points.
