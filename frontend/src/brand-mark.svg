@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Pinstill 小尺寸品牌标记</title>
+  <defs>
+    <linearGradient id="surface" x1="0" y1="0" x2=".35" y2="1">
+      <stop stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#f6f1e6"/>
+    </linearGradient>
+    <linearGradient id="pin" x1="0" y1="0" x2=".25" y2="1">
+      <stop stop-color="#ffab59"/>
+      <stop offset="1" stop-color="#e07a2c"/>
+    </linearGradient>
+  </defs>
+  <rect x="6.5" y="6.5" width="51" height="51" rx="12.5" fill="url(#surface)" stroke="#2b2620" stroke-opacity=".18" stroke-width="1.1"/>
+  <path d="M17 32V22a4.5 4.5 0 0 1 4.5-4.5h8" fill="none" stroke="#241f19" stroke-width="7" stroke-linecap="round"/>
+  <path d="M35.5 47.5h7.5a4.5 4.5 0 0 0 4.5-4.5V33" fill="none" stroke="#241f19" stroke-width="7" stroke-linecap="round"/>
+  <rect x="33" y="16" width="12" height="4.6" rx="1.9" fill="url(#pin)"/>
+  <path d="M35.2 20.4h7.4l.9 6.6h-9.2z" fill="url(#pin)"/>
+  <rect x="34.4" y="26.6" width="9.8" height="3.6" rx="1.4" fill="url(#pin)"/>
+  <path d="M38.2 30h2.2L39.4 39.8z" fill="url(#pin)"/>
+</svg>

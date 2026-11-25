@@ -267,12 +267,13 @@ func TestTrayIconPNG(t *testing.T) {
 		x, y   int
 		opaque bool
 	}{
-		{"upper crop corner", 5, 9, true},
-		{"lower crop corner", 15, 24, true},
-		{"pin head", 23, 6, true},
-		{"pin needle", 23, 20, true},
-		{"open space between the marks", 15, 10, false},
-		{"outside the glyph", 1, 1, false},
+		{"ring top", 16, 4, true},
+		{"cap cutout", 16, 12, false},
+		{"body cutout", 16, 16, false},
+		{"base cutout", 16, 20, false},
+		{"needle cutout", 16, 23, false},
+		{"outside the glyph", 2, 2, false},
+		{"ring right", 27, 16, true},
 	}
 	for _, c := range checks {
 		got := pixelAlpha(c.x, c.y) > 0x8000

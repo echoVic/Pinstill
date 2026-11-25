@@ -1,5 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
-  <path d="M5.5 13.5v-4h4.8m.2 15H16V20" fill="none" stroke="#000" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M22 15h3v4l-1.15 3.2a.4.4 0 0 1-.7 0L22 19Z" fill="#000"/>
-  <path d="M18.1 2.1H24.7Q26 2.1 26 3.4V4.3Q26 5.4 24.9 5.7L24.1 8.6Q23.9 9.3 24.7 9.7Q26.8 10.7 26.8 12.3V12.8Q26.8 14 25.6 14H17.2Q16 14 16 12.8V12.3Q16 10.7 18.1 9.7Q18.9 9.3 18.7 8.6L17.9 5.7Q16.8 5.4 16.8 4.3V3.4Q16.8 2.1 18.1 2.1Z" transform="translate(2 3)" fill="#000"/>
+  <defs>
+    <mask id="cut">
+      <rect width="32" height="32" fill="#fff"/>
+      <rect x="10" y="8.3" width="12" height="4" rx="1.8" fill="#000"/>
+      <path d="M12.5 12.1h7l.7 4.2h-8.4z" fill="#000"/>
+      <rect x="10.5" y="16.1" width="11" height="3" rx="1.4" fill="#000"/>
+      <path d="M14.4 19h3.2L16 23.8z" fill="#000"/>
+    </mask>
+  </defs>
+  <circle cx="16" cy="16" r="13" fill="#000" mask="url(#cut)"/>
 </svg>
