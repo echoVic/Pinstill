@@ -408,7 +408,7 @@ func (a *App) createTray() {
 	menu := mygo.NewMenu(append(items, mygo.Separator(), &mygo.MenuItem{Role: mygo.RoleQuit}))
 	tray, err := mygo.NewTray(mygo.TrayOptions{
 		ID:             "pinstill",
-		Icon:           trayIconPNG(),
+		Icon:           trayIconPNG,
 		IconIsTemplate: true,
 		ToolTip:        "Pinstill 截图与标注",
 		Menu:           menu,

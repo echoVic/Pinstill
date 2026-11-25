@@ -231,12 +231,12 @@ func TestStartCaptureSoundReapsChild(t *testing.T) {
 }
 
 func TestTrayIconPNG(t *testing.T) {
-	data := trayIconPNG()
+	data := trayIconPNG
 	if len(data) == 0 {
-		t.Fatal("trayIconPNG() returned no data")
+		t.Fatal("embedded tray icon is empty")
 	}
 	if !bytes.HasPrefix(data, gnPNGMagic()) {
-		t.Fatalf("trayIconPNG() does not start with the PNG signature: %x", data[:min(8, len(data))])
+		t.Fatalf("tray icon does not start with the PNG signature: %x", data[:min(8, len(data))])
 	}
 	config, err := png.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
@@ -246,12 +246,17 @@ func TestTrayIconPNG(t *testing.T) {
 		t.Fatalf("tray icon = %dx%d, want 32x32", config.Width, config.Height)
 	}
 
-	// The glyph is a "P" now (it used to be the old "T" mark): the stem runs
-	// the full height, a bowl sits on the upper right and its counter is a
-	// hole. These probes catch a blank or stale glyph.
 	img, err := png.Decode(bytes.NewReader(data))
 	if err != nil {
 		t.Fatalf("png.Decode(tray icon) error = %v", err)
+	}
+	for row := 0; row < config.Height; row++ {
+		for col := 0; col < config.Width; col++ {
+			red, green, blue, _ := img.At(col, row).RGBA()
+			if red != 0 || green != 0 || blue != 0 {
+				t.Fatalf("tray icon pixel (%d,%d) is not black for template tinting", col, row)
+			}
+		}
 	}
 	pixelAlpha := func(x, y int) uint32 {
 		_, _, _, a := img.At(x, y).RGBA()
@@ -262,11 +267,11 @@ func TestTrayIconPNG(t *testing.T) {
 		x, y   int
 		opaque bool
 	}{
-		{"stem top", 10, 6, true},
-		{"stem bottom", 10, 25, true},
-		{"bowl right", 21, 10, true},
-		{"bowl counter is a hole", 16, 11, false},
-		{"right of lower stem", 20, 25, false},
+		{"upper crop corner", 5, 9, true},
+		{"lower crop corner", 15, 24, true},
+		{"pin head", 23, 6, true},
+		{"pin needle", 23, 20, true},
+		{"open space between the marks", 15, 10, false},
 		{"outside the glyph", 1, 1, false},
 	}
 	for _, c := range checks {

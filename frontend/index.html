@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="icon" href="data:," />
+<link rel="icon" type="image/svg+xml" href="./src/brand.svg" />
 <title>Pinstill — 截图历史</title>
 <style>
 :root{
@@ -34,7 +34,7 @@ button{font:inherit;color:inherit;cursor:pointer}
   min-height:0;overflow:auto;background:rgba(13,13,12,.35);
 }
 .brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:18px;letter-spacing:-.04em;margin-bottom:48px}
-.brand-mark{width:29px;height:29px;border-radius:9px;background:var(--amber);display:grid;place-items:center;color:#17130d;font-weight:900;box-shadow:0 0 0 4px rgba(243,162,78,.13)}
+.brand-mark{display:block;width:29px;height:29px;flex:none}
 .rail-label{font-size:11px;color:#8e8a7e;text-transform:uppercase;letter-spacing:.12em;margin:0 10px 12px}
 .nav{display:grid;gap:5px}
 .nav button{
@@ -306,7 +306,7 @@ select:focus-visible,input[type=text]:focus-visible,input[type=range]:focus-visi
 <div class="app">
   <div class="titlebar" aria-hidden="true"></div>
   <aside class="rail">
-    <div class="brand"><div class="brand-mark">P</div><span>pinstill</span></div>
+    <div class="brand"><img class="brand-mark" src="./src/brand.svg" width="29" height="29" alt="" /><span>pinstill</span></div>
     <div class="rail-label">workspace</div>
     <nav class="nav" aria-label="主导航">
       <button class="active" data-view="history" aria-current="page">历史</button>

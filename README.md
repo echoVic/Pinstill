@@ -1,5 +1,7 @@
 # Pinstill · 钉图
 
+<img src="resources/icon.png" alt="Pinstill 应用图标" width="96" height="96" />
+
 简体中文 | [English](README.en.md)
 
 Pinstill 是免费开源的 Mac 截图工具。按 **⌘⇧1** 框选，在选区里直接标注、截长图、提取文字或识别二维码。做设计、写代码需要对照多张参考图时，可以把它们并排挂在主屏菜单栏下方。支持本机文字识别和可选的模型服务。

@@ -23,3 +23,15 @@
 5. 将这些文件按原名上传到同一个 `v<版本>` 草稿 Release，确认清单引用的所有文件都已上传，再发布为最新稳定版。不要只上传 `.dmg`，否则已安装的应用找不到更新。Universal 构建读取 `update-darwin-universal.json`，不要用单架构清单替代。
 
 `v0.1.2` 及更早版本不含更新器。用户需先手动安装首个启用更新的版本。发布后应使用此前已启用更新的版本，实际验证「检查更新… → 安装并重启 → 版本号变更」，并确认历史和贴图保留。
+
+## 更新品牌图标
+
+应用和开发版图标从 `frontend/src/brand.svg` 导出，菜单栏使用单独的黑色透明模板：
+
+```bash
+rsvg-convert frontend/src/brand.svg -o resources/icon.png
+cp resources/icon.png resources/icon-dev.png
+rsvg-convert internal/app/tray-icon.svg -o internal/app/tray-icon.png
+```
+
+将 `resources/icon.png` 同步到 `echovic-apps/assets/pinstill/icon.png`，在官网仓库运行 `python3 tools/make_images.py pinstill`，更新 favicon、触屏图标和双语分享图。

@@ -1,5 +1,7 @@
 # Pinstill · 钉图
 
+<img src="resources/icon.png" alt="Pinstill app icon" width="96" height="96" />
+
 [简体中文](README.md) | English
 
 Pinstill is a free, open-source screenshot tool for Mac. Press **⌘⇧1** to select a region, then mark it up, capture a scrolling page, extract text or read QR codes. Keep several reference images side by side just below the menu bar while you work. Capture and built-in recognition run on your Mac.
