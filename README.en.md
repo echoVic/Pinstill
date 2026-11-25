@@ -2,83 +2,85 @@
 
 [简体中文](README.md) | English
 
-**Screenshot → annotate in place → copy / pin / hang / save**, all from one hotkey.
-Pure Go + system WebView: no Electron, no cgo. Screenshots stay on your Mac.
+Pinstill is a free, open-source screenshot tool for Mac. Press **⌘⇧1** to select a region, then mark it up, capture a scrolling page, extract text or read QR codes. Keep several reference images side by side just below the menu bar while you work. Capture and recognition run on your Mac.
+
+[Website](https://pinstill.echovic.com/en/) · [Download the latest release](https://github.com/echoVic/Pinstill/releases/latest) · [Changelog](CHANGELOG.md)
 
 [![CI](https://github.com/echoVic/Pinstill/actions/workflows/ci.yml/badge.svg)](https://github.com/echoVic/Pinstill/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 ![macOS](https://img.shields.io/badge/platform-macOS%2013%2B-black)
-![Windows](https://img.shields.io/badge/platform-Windows%20(cross--compiled)-lightgrey)
 
-![In-place annotation overlay](outputs/pinstill-overlay.jpg)
+![The desktop clothesline keeps several demo reference images below the main display's menu bar](outputs/pinstill-clothesline-mock.webp)
 
 ## Download
 
-Download the macOS build from [Releases](https://github.com/echoVic/Pinstill/releases); it needs macOS 13 or later. The Windows capture backend (GDI) cross-compiles, but it hasn't been verified on real hardware, so there is no Windows installer yet.
+Open the signed, Apple-notarized Universal DMG and drag Pinstill into Applications. It runs on macOS 13 or later on Apple silicon and Intel Macs. Allow Screen Recording in System Settings before your first capture. [Download for Mac](https://github.com/echoVic/Pinstill/releases/latest)
 
-Builds with automatic updates check in the background, or you can choose “检查更新…” (Check for Updates) from the tray or Pinstill menu. By default they ask before downloading and installing. If you are on `v0.1.2` or older, upgrade manually once. [Release instructions for maintainers](docs/releasing.md)
+Starting with `v0.1.3`, Pinstill checks for updates in the background. You can also choose “检查更新…” (Check for Updates) from its menu bar icon. By default, Pinstill asks before downloading and installing. On `v0.1.2` or earlier, replace the app using the latest DMG once. [Release instructions for maintainers](docs/releasing.md)
 
-## Usage
+## Capture and mark up
 
-1. Pinstill lives in the menu bar; press **⌘⇧1** (or choose Capture Region from the tray) to start a selection.
-2. Drag a region and release to capture; the annotation toolbar appears next to it. Press Enter or double-click the canvas to copy, Esc to cancel.
-3. Drag any edge or corner to adjust the selection, then release to update the capture. Choose Scrolling Capture for a tall page.
-4. Copy or save from the toolbar, choose Pin for an always-on-top window, or choose Hang to add the image to the desktop clothesline.
-5. From the menu bar, open Pin Manager to organize pins, toggle the desktop clothesline, or open History & Settings for captures and preferences.
+1. Press **⌘⇧1** or choose Capture Region from the menu bar. Drag a selection or click a highlighted window. Double-click a highlighted window to copy it straight to the clipboard.
+2. The markup toolbar opens with no tool selected by default. Within one display, drag inside the box to move it, or drag an edge or corner to resize it. If a markup tool is active, hold `Option` to move the box. Releasing captures the new area and resets existing markup. Region capture can also span displays. [Capture and markup demo](https://pinstill.echovic.com/en/#annotate)
+3. Copy, save, pin or hang from the toolbar. By default, `Enter` or a double-click on the canvas copies the image, and `Esc` cancels. Change the shortcuts and default capture action in Settings.
 
-The screenshot shortcut freezes the desktop. To capture a Chrome extension popup, open it first, then press the shortcut and draw a selection. Double-click a highlighted window to copy it straight to the clipboard, or single-click to annotate it.
+- **Freeze the desktop**　Region capture freezes the current desktop image. To capture a Chrome extension popup, open it first and then press the capture shortcut. The menu bar also offers full-screen capture.
+- **Zoom, sample colour and measure**　Use the arrow keys to fine-tune the endpoint while selecting, or hold `Shift` for 10-point steps. Press `Z` for the pixel loupe, `C` to copy the displayed HEX colour, and `M` to measure from the pointer in screen points (pt). With a selection on one display, use `Option` + arrows to move it, or add `Shift` to resize. [Precision tools demo](https://pinstill.echovic.com/en/#precision)
+- **Edit annotations**　The toolbar includes rectangles, arrows, text, mosaic, highlights and tiled watermarks. The default markup colour is red; choose another from the 40-colour palette or enter a HEX value. Press `V` to select an annotation and move it, recolour it or change its stroke width. Double-click text or a tag to edit it. Use `Delete` to remove it, `⌘Z` to undo and `⌘⇧Z` to redo.
 
-Hotkeys and what happens after a capture (annotate / copy / pin) are configurable in Settings.
+## Pin and hang images
 
-While selecting, use the arrow keys to fine-tune the endpoint and hold Shift for steps of 10 points. Press Z for the pixel loupe, C to copy the displayed color, or M to measure from the pointer. After capturing an area on one display, use Option + arrows to move the region or add Shift to adjust its size.
+- **Floating pins**　Choose Pin for an independent window that stays on top, or press **⌘⇧2** to pin a clipboard image. Move, resize, fade, rotate, flip or make a pin click-through. Use Pin Manager to group pins, show or hide a group, or restore clicks. Pinstill restores up to 60 active pins at launch and keeps older pins in the history archive. [Pin management demo](https://pinstill.echovic.com/en/#pin)
+- **Desktop clothesline**　Choose Hang to place a capture in the row of images just below the main display's menu bar. The row floats above ordinary windows, and you can drag the images to reorder them. Hang from the capture toolbar, scrolling preview or history, or add a file or clipboard image. Select an image to copy, save, pin or remove it. Toggle the clothesline from the menu bar. Images, order and visibility are restored at launch. [Desktop clothesline demo](https://pinstill.echovic.com/en/#clothesline)
 
-Press V to select existing annotations. Drag to move a shape, double-click text or a tag to edit it, and use the palette to recolor the selection. Delete removes it, ⌘Z undoes, and ⌘⇧Z redoes.
+## Text extraction and QR codes
 
-## Features
+Select a region and choose **Extract Text**. Pinstill recognises Chinese and English by default, preserves line breaks and lets you copy a selection or the whole result. Choose a recognition language in Settings → Recognition & Translation.
 
-- **Capture and annotation** offers region and full-screen capture with a dim mask, crosshair and size badge. On macOS you can select across displays, with a fitted preview for annotation. Draw rectangles, ellipses, lines, arrows, freehand strokes, text, tags, mosaic, highlights and tiled watermarks using a 40-colour palette, hex input and text styles.
-- **Pins** are always-on-top windows you can drag, resize, fade, rotate, and flip. Use Pin Manager to group pins, show or hide a group, and restore mouse clicks to click-through pins. Pin settings are restored with the images. Up to 60 pins stay active, with older ones archived.
-- **Desktop clothesline** displays a row of pictures centred below the menu bar on the primary Mac display and floats above ordinary windows while visible. Hang a capture from the toolbar or a preview, or add an image from a file or the clipboard. Drag to reorder. Select a picture to copy, save, pin, or remove it. Pictures, order, and visibility are restored when Pinstill restarts.
-- **History** displays local thumbnails. The large preview supports copy, save, pin, hang, and delete. Retention by age and size is configurable.
-- **Scrolling capture** starts in manual mode. Scroll and choose Finish now when ready, or enable automatic scrolling from the controls with Accessibility permission. If frames cannot be matched, the app keeps the stitched image and prompts you to scroll back slightly. Capture finishes at 120 frames, 30,000 px or 32 Mi pixels.
-- **Tray and hotkeys**: a menu-bar icon; **⌘⇧1** captures a region and **⌘⇧2** pins the clipboard image, both re-recordable in Settings.
-- **Settings and permissions**: seven categories take effect immediately; the permission centre shows the real state of screen recording, Accessibility and launch at login.
+Choose **Scan QR Code** to see each code's contents. Copy the text or review the full web address before opening it. Opening a link in your browser ends the capture. Both tools use macOS Vision to recognise the current selection with its markup. Press `Esc` to close the results and continue marking up or saving. [Recognition demo](https://pinstill.echovic.com/en/#recognition)
 
-On macOS, choose **Extract text** or **Scan QR code** in the capture toolbar. Copy part or all of the recognized text, and choose a language in Recognition & Translation preferences. QR results show each payload, with an explicit action to open web links in your default browser. Recognition runs locally on the current selection, including its annotations.
+![Text extraction and QR results with demo content](outputs/pinstill-recognition-mock.png)
+
+## Scrolling capture and history
+
+- **Scrolling capture**　Select a region within one display and choose Scrolling Capture. Scroll by hand and choose Finish Now, or enable Auto Scroll in the controls with Accessibility permission. If two frames do not line up, Pinstill keeps the stitched portion and asks you to scroll back slightly. Capture finishes at 120 frames, 30,000 pixels in height or 32 Mi pixels. [Scrolling capture demo](https://pinstill.echovic.com/en/#scroll)
+- **Capture history**　Open History & Settings from the menu bar. In the preview you can copy, save, pin, hang or delete a capture. Set how long captures are kept and how much space history may use in Settings.
 
 ## Data and permissions
 
-- Captures live in `~/Library/Application Support/Pinstill/captures/`, pins in `.../pins/`, clothesline images in `.../clothesline/`, and the session cache in `~/Library/Caches/Pinstill/session/`.
-- Pages read those images through `shot://localhost/...`; nothing goes over the network and nothing is uploaded.
-- Screen Recording permission is needed for captures; automatic scrolling also needs Accessibility, and falls back to manual without it.
-- For development or self-tests, set `PINSTILL_DATA_DIR=/tmp/pinstill-data` so the app can't read your real history.
+- Capture history, pins and clothesline images use `captures/`, `pins/` and `clothesline/` under `~/Library/Application Support/Pinstill/`. The current selection and scrolling preview are kept in memory.
+- The app reads screenshots through the local `shot://localhost/...` protocol. Image processing and recognition happen on your Mac. Pinstill connects to GitHub to check for and download updates.
+- Screen Recording permission is needed for capture. Automatic scrolling also needs Accessibility. Settings → Permissions shows permission and launch-at-login status.
 
 ## Development
 
 You need Go 1.27+ (see `go.mod`), Node 22+ and npm.
 
 ```bash
-npm install
+npm ci
 npm run build:web          # build the frontend into dist/
-npm run build              # or ./node_modules/.bin/mygo build
+npm run build              # build the macOS app
 npm run dev                # Vite HMR with the MyGo window
 ```
 
-Checks (the same ones CI runs):
+Run `npm run generate` to refresh frontend bindings after changing Go services or events. For development, use `PINSTILL_DATA_DIR=/tmp/pinstill-data` to isolate capture and pin data.
+
+CI covers Go tests, Windows cross-compilation and the frontend build.
 
 ```bash
 GOTOOLCHAIN=auto go test ./...
 GOTOOLCHAIN=auto go vet ./...
+GOOS=windows GOARCH=amd64 GOTOOLCHAIN=auto go build ./...
 npm test
 npm run typecheck
-bash work/e2e.sh --skip-build   # 24 app-level self-tests; drop --skip-build to build first
+npm run build:web
 ```
 
-`go test -tags integration ./internal/capture` exercises the real capture backend and needs Screen Recording permission.
+To run macOS app self-tests, quit Pinstill and run `bash work/e2e.sh`. Add `--skip-build` if you already have a local build. `go test -tags integration ./internal/capture` exercises the real capture backend and needs Screen Recording permission.
 
 ## Known limitations
 
-- Windows has only cross-compilation and synthetic tests; mixed DPI, negative coordinates and multi-monitor setups still need real-hardware validation.
+- The Windows capture backend is at the cross-compilation and synthetic-test stage. Mixed DPI, negative coordinates and multi-monitor setups still need real-hardware validation.
 - Screenshot translation is pending. Scrolling capture can miss self-drawn scrolling, dynamic headers and fully repeating content.
 - On macOS, a cross-display capture uses the highest pixel density in the selection and keeps any gaps between displays transparent. Scrolling capture needs a region within one display.
 - Launch at login fails when the app isn't in `/Applications`; the settings page reports that as it is.
@@ -89,4 +91,4 @@ Issues and pull requests are welcome. Before submitting, make sure `gofmt -l .` 
 
 ## Credits and license
 
-Desktop shell by [MyGo](https://mygo.egoist.dev/) (Go + system WebView); frontend built with Vite; icons from Lucide (ISC). [MIT](LICENSE) © 2026 echovic.
+The desktop shell uses Go and the system WebView through MyGo. The frontend uses Vite and Lucide icons (ISC). [MyGo](https://mygo.egoist.dev/) · [MIT licence](LICENSE) © 2026 echovic.

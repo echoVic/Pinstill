@@ -68,6 +68,7 @@ function checkImageDimensions(width: number, height: number): void {
 
 type Phase = "idle" | "selecting" | "preparing" | "annotating" | "finishing";
 type AfterCapture = "inplace" | "clipboard" | "pin";
+type AnnotationTool = ToolId | "none";
 
 /** Toolbar actions as exposed to the page/E2E (data-action). */
 type ToolbarAction = FinishAnnotatedAction;
@@ -208,8 +209,7 @@ const captureErrorCancel = el<HTMLButtonElement>("captureErrorCancel");
 const hintInitialHTML = hint.innerHTML;
 
 let storedPreferences = loadPreferences();
-let color =
-  normalizeColor(storedPreferences.defaultColor) ?? PRESET_COLORS[0]!;
+let color = normalizeColor(storedPreferences.defaultColor) ?? DEFAULT_PREFERENCES.defaultColor;
 let penWidth =
   typeof storedPreferences.defaultWidth === "number"
     ? clamp(Math.round(storedPreferences.defaultWidth), 1, 10)
@@ -276,9 +276,11 @@ let watermarkOpacity =
     ? clamp(storedPreferences.watermarkOpacity, 10, 90)
     : 35;
 
-const initialTool = storedPreferences.defaultTool;
-let currentTool: ToolId =
-  typeof initialTool === "string" && isDrawTool(initialTool) ? initialTool : DEFAULT_PREFERENCES.defaultTool as ToolId;
+function preferredAnnotationTool(): AnnotationTool {
+  return isDrawTool(storedPreferences.defaultTool) ? storedPreferences.defaultTool : "none";
+}
+
+let currentTool = preferredAnnotationTool();
 let tooltipsEnabled = storedPreferences.tooltip !== false;
 let tooltipDelayMs =
   typeof storedPreferences.tooltipDelay === "number"
@@ -810,7 +812,7 @@ function buildToolbar(): void {
 function onToolbarClick(event: Event): void {
   const target = event.target;
   if (!(target instanceof Element)) return;
-  if (phase !== "annotating") return;
+  if (phase !== "annotating" || selectionDrag) return;
   const toolButton = target.closest<HTMLButtonElement>("button[data-tool]");
   if (toolButton) {
     const tool = toolButton.dataset.tool;
@@ -878,7 +880,7 @@ function showRecognitionPlaceholder(tool: string): void {
 
 async function startRecognition(mode: RecognitionMode): Promise<void> {
   if (keyboardAdjustment && !await settleKeyboardAdjustment()) return;
-  if (phase !== "annotating" || !engine || selectionResize || recognitionPanel.open) return;
+  if (phase !== "annotating" || !engine || selectionDrag || recognitionPanel.open) return;
   if (!hasNative || !isMacPlatform()) {
     showTransient("截图识别目前支持 macOS 桌面版");
     return;
@@ -952,7 +954,7 @@ function toggleWatermarkTool(): void {
   selectTool("watermark");
 }
 
-function selectTool(tool: ToolId): void {
+function selectTool(tool: AnnotationTool): void {
   if (currentTool !== tool) lastCanvasClick = null;
   currentTool = tool;
   engine?.setTool(tool);
@@ -973,7 +975,8 @@ function selectTool(tool: ToolId): void {
     updateWatermarkUI();
     applyWatermark();
   }
-  canvas.style.cursor = tool === "select" ? "default" : tool === "text" ? "text" : "crosshair";
+  const canMove = tool === "none" && !selection.classList.contains("fitted");
+  canvas.style.cursor = canMove ? "move" : tool === "none" || tool === "select" ? "default" : tool === "text" ? "text" : "crosshair";
   updateToolbarState();
   updateAnnotationProperties();
 }
@@ -1080,14 +1083,15 @@ function updateAnnotationProperties(): void {
   const shape = selectedAnnotation();
   const showTextStyle = currentTool === "text" || shape?.kind === "text";
   const showEdit = shape?.kind === "text" || shape?.kind === "tag";
-  const needsLayout = textProps.hidden === showTextStyle || annotationEditText.hidden === showEdit;
+  const showWidth = !showTextStyle && currentTool !== "none" && (currentTool !== "select" || Boolean(shape));
+  const needsLayout = textProps.hidden === showTextStyle || annotationEditText.hidden === showEdit || widthLabel.hidden === showWidth;
   textProps.hidden = !showTextStyle;
   annotationEditText.hidden = !showEdit;
-  widthLabel.hidden = showTextStyle || (currentTool === "select" && !shape);
+  widthLabel.hidden = !showWidth;
   updatePaletteSelection();
   updateWidthValue();
   applyTextStyleUI();
-  if (needsLayout && phase === "annotating" && !toolbar.hidden && !selectionResize) placeToolbar();
+  if (needsLayout && phase === "annotating" && !toolbar.hidden && !selectionDrag) placeToolbar();
 }
 
 function setToolbarPending(pending: boolean, label = "", kind: "info" | "error" = "info"): void {
@@ -1192,6 +1196,14 @@ const DOUBLE_CLICK_MS = 350;
 const DOUBLE_CLICK_DISTANCE = 8;
 let quickClick: { x: number; y: number; timer: number; resolve: (copy: boolean) => void } | null = null;
 
+function recordCanvasClick(x: number, y: number): boolean {
+  const time = performance.now();
+  const previous = lastCanvasClick;
+  lastCanvasClick = { time, x, y };
+  return previous !== null && time - previous.time <= DOUBLE_CLICK_MS &&
+    Math.hypot(x - previous.x, y - previous.y) <= DOUBLE_CLICK_DISTANCE;
+}
+
 function settleQuickClick(copy: boolean): void {
   if (!quickClick) return;
   const pending = quickClick;
@@ -1208,14 +1220,17 @@ function waitForQuickClick(x: number, y: number): Promise<boolean> {
 }
 
 const RESIZE_DIRECTIONS = ["n", "s", "w", "e", "nw", "ne", "sw", "se"] as const;
-type ResizeDirection = (typeof RESIZE_DIRECTIONS)[number];
+type SelectionDragDirection = (typeof RESIZE_DIRECTIONS)[number] | "move";
 
-interface SelectionResizeState {
-  direction: ResizeDirection;
+interface SelectionDragState {
+  direction: SelectionDragDirection;
   pointerId: number;
   startX: number;
   startY: number;
-  rect: Rect;
+  original: Rect;
+  preview: Rect;
+  moved: boolean;
+  clickToCopy: boolean;
 }
 
 function sameRect(a: Rect, b: Rect): boolean {
@@ -1228,7 +1243,12 @@ function sameRect(a: Rect, b: Rect): boolean {
 }
 
 const MIN_RESIZE = 24;
-let selectionResize: SelectionResizeState | null = null;
+let selectionDrag: SelectionDragState | null = null;
+
+function clearSelectionDrag(): void {
+  selectionDrag = null;
+  selection.classList.remove("moving");
+}
 
 function startToolbarDrag(event: PointerEvent): void {
   if (toolbar.hidden || event.button !== 0) return;
@@ -1332,8 +1352,6 @@ function reloadOverlayPreferences(): void {
   storedPreferences = loadPreferences();
   color = normalizeColor(storedPreferences.defaultColor) ?? DEFAULT_PREFERENCES.defaultColor;
   penWidth = clamp(Math.round(storedPreferences.defaultWidth), 1, 10);
-  currentTool = isDrawTool(storedPreferences.defaultTool)
-    ? storedPreferences.defaultTool : DEFAULT_PREFERENCES.defaultTool as ToolId;
   tooltipsEnabled = storedPreferences.tooltip;
   tooltipDelayMs = clamp(Math.round(storedPreferences.tooltipDelay), 0, 2000);
   enterCopyEnabled = storedPreferences.enterCopy;
@@ -1345,7 +1363,7 @@ function reloadOverlayPreferences(): void {
   toolbar.classList.toggle("no-tooltips", !tooltipsEnabled);
   updateWidthValue();
   setColor(color);
-  selectTool(currentTool);
+  selectTool(preferredAnnotationTool());
   applyTextStyleUI();
   updateWatermarkUI();
 }
@@ -1547,8 +1565,7 @@ async function prepareSelectionFor(
   precision.reset();
   toolbarMoved = false;
   lastCanvasClick = null;
-  selectionResize = null;
-  selection.classList.remove("resizing");
+  clearSelectionDrag();
   // Go captures straight through the overlay window: hide the border, corner
   // marks, size badge, crosshair and hint so the captured image contains none
   // of our UI (the selection interior is already transparent).
@@ -1594,7 +1611,7 @@ async function prepareSelectionFor(
     const blob = await withPreparationTimeout(preparation, controller, fast ? 4000 : 10000, fast ? "重新截取超时" : "截取超时");
     if (!blob || !currentAttempt(attempt)) return;
     selectionPreparation = null;
-    const autoAction = copyDirectly ? { go: "copy", ui: "copy" } as const : mappedAfterCapture();
+    const autoAction = copyDirectly ? { go: "copy", ui: "copy" } as const : fast ? null : mappedAfterCapture();
     if (autoAction) {
       const rawBase64 = await blobToBase64(blob);
       if (!currentAttempt(attempt)) return;
@@ -1650,6 +1667,8 @@ function showCaptureFailure(rawMessage: string, permission: boolean): void {
 
 function dismissCaptureFailure(): void {
   hideCaptureError();
+  currentTool = preferredAnnotationTool();
+  lastCanvasClick = null;
   detectedWindows = [];
   reset();
   // The 取消 button ends the capture session (like Esc elsewhere); Go hides the
@@ -1801,8 +1820,8 @@ function reset(): void {
   dragMoved = false;
   passiveSelection = false;
   peerPreview = null;
-  selectionResize = null;
-  selection.classList.remove("capturing", "window-preview", "resizing", "fitted");
+  clearSelectionDrag();
+  selection.classList.remove("capturing", "window-preview", "fitted");
   if (transientTimer) window.clearTimeout(transientTimer);
   if (demoResetTimer) window.clearTimeout(demoResetTimer);
   transientTimer = undefined;
@@ -1881,35 +1900,50 @@ function cancelRegionFlow(): void {
 // Pointer & keyboard
 // ---------------------------------------------------------------------------
 
-function startSelectionResize(event: PointerEvent, direction: ResizeDirection): void {
-  if (phase !== "annotating" || !committedRect || selectionResize || selection.classList.contains("fitted")) return;
+function startSelectionDrag(event: PointerEvent, direction: SelectionDragDirection): void {
+  if (phase !== "annotating" || !committedRect || selectionDrag || drawingPointer !== null || selection.classList.contains("fitted")) return;
   if (inlineEditor) {
     inlineEditor.cancel();
     inlineEditor = null;
   }
-  selectionResize = {
+  const clickToCopy = direction === "move" && currentTool === "none" && !event.altKey;
+  if (!clickToCopy) lastCanvasClick = null;
+  selectionDrag = {
     direction,
     pointerId: event.pointerId,
     startX: event.clientX,
     startY: event.clientY,
-    rect: { ...committedRect },
+    original: committedRect,
+    preview: committedRect,
+    moved: false,
+    clickToCopy,
   };
-  selection.classList.add("resizing");
-  if (event.target instanceof HTMLElement) {
-    try {
-      event.target.setPointerCapture(event.pointerId);
-    } catch {}
-  }
+  selection.classList.toggle("moving", direction === "move");
+  try {
+    selection.setPointerCapture(event.pointerId);
+  } catch {}
   event.preventDefault();
   event.stopPropagation();
 }
 
-function resizeRectFor(event: PointerEvent): Rect {
-  const drag = selectionResize;
-  if (!drag) return committedRect ?? { x: 0, y: 0, width: 0, height: 0 };
+function moveSelectionRect(rect: Rect, deltaX: number, deltaY: number): Rect {
+  return {
+    ...rect,
+    x: clamp(rect.x + deltaX, 0, viewportWidth() - rect.width),
+    y: clamp(rect.y + deltaY, 0, viewportHeight() - rect.height),
+  };
+}
+
+function selectionDragRect(drag: SelectionDragState, event: PointerEvent): Rect {
   const dx = event.clientX - drag.startX;
   const dy = event.clientY - drag.startY;
-  const base = drag.rect;
+  const base = drag.original;
+  if (drag.direction === "move") {
+    if (!drag.moved && Math.hypot(dx, dy) < MIN_SELECTION) return base;
+    drag.moved = true;
+    lastCanvasClick = null;
+    return moveSelectionRect(base, dx, dy);
+  }
   let x1 = base.x;
   let y1 = base.y;
   let x2 = base.x + base.width;
@@ -2053,7 +2087,7 @@ async function settleKeyboardAdjustment(): Promise<boolean> {
 }
 
 function handlePrecisionKey(event: KeyboardEvent): boolean {
-  if (event.metaKey || event.ctrlKey || selectionResize || drawingPointer !== null ||
+  if (event.metaKey || event.ctrlKey || selectionDrag || drawingPointer !== null ||
     (event.target instanceof Element && event.target.closest("button, input, textarea, select, [contenteditable]"))) {
     return false;
   }
@@ -2089,13 +2123,10 @@ function handlePrecisionKey(event: KeyboardEvent): boolean {
 
   const original = keyboardAdjustment?.original ?? committedRect;
   const previous = keyboardAdjustment?.rect ?? original;
-  const rect = { ...previous };
+  const rect = event.shiftKey ? { ...previous } : moveSelectionRect(previous, horizontal, vertical);
   if (event.shiftKey) {
     if (horizontal) rect.width = clamp(rect.width + horizontal, Math.min(MIN_RESIZE, original.width), viewportWidth() - rect.x);
     if (vertical) rect.height = clamp(rect.height + vertical, Math.min(MIN_RESIZE, original.height), viewportHeight() - rect.y);
-  } else {
-    if (horizontal) rect.x = clamp(rect.x + horizontal, 0, viewportWidth() - rect.width);
-    if (vertical) rect.y = clamp(rect.y + vertical, 0, viewportHeight() - rect.height);
   }
   if (sameRect(previous, rect)) return true;
   if (keyboardAdjustment) window.clearTimeout(keyboardAdjustment.timer);
@@ -2108,7 +2139,7 @@ function handlePrecisionKey(event: KeyboardEvent): boolean {
 }
 
 window.addEventListener("pointerdown", (event) => {
-  if (recognitionPanel.open) return;
+  if (recognitionPanel.open || selectionDrag) return;
   if (phase === "preparing" && quickClick && event.button === 0) {
     const nearby = Math.hypot(event.clientX - quickClick.x, event.clientY - quickClick.y) <= DOUBLE_CLICK_DISTANCE;
     settleQuickClick(nearby);
@@ -2125,22 +2156,21 @@ window.addEventListener("pointerdown", (event) => {
     const handle = event.target.closest<HTMLElement>("[data-resize]");
     const direction = RESIZE_DIRECTIONS.find((value) => value === handle?.dataset.resize);
     if (direction) {
-      startSelectionResize(event, direction);
+      startSelectionDrag(event, direction);
       return;
     }
   }
   if (phase === "annotating") {
     if (isInsideToolbar(event.target)) return;
     if (event.button !== 0 || !engine || drawingPointer !== null) return;
+    if ((currentTool === "none" || event.altKey) && !selection.classList.contains("fitted") &&
+      event.target instanceof Element && selection.contains(event.target)) {
+      startSelectionDrag(event, "move");
+      return;
+    }
     const point = canvasPoint(event);
     if (!point) return;
-    const now = performance.now();
-    const previousClick = lastCanvasClick;
-    const isDoubleClick =
-      previousClick !== null &&
-      now - previousClick.time <= DOUBLE_CLICK_MS &&
-      Math.hypot(event.clientX - previousClick.x, event.clientY - previousClick.y) <= DOUBLE_CLICK_DISTANCE;
-    lastCanvasClick = { time: now, x: event.clientX, y: event.clientY };
+    const isDoubleClick = recordCanvasClick(event.clientX, event.clientY);
     if (isDoubleClick && currentTool !== "select") {
       // A double-click on the image means "done": commit any pending inline
       // text, then copy the annotated capture (same path as the 复制 button).
@@ -2198,12 +2228,15 @@ window.addEventListener("pointerdown", (event) => {
 });
 
 window.addEventListener("pointermove", (event) => {
-  if (selectionResize) {
-    if (event.pointerId !== selectionResize.pointerId) return;
+  const drag = selectionDrag;
+  if (drag) {
+    if (event.pointerId !== drag.pointerId) return;
     event.preventDefault();
-    const rect = resizeRectFor(event);
-    canvas.hidden = !sameRect(rect, selectionResize.rect);
-    committedRect = rect;
+    const next = selectionDragRect(drag, event);
+    const rect = sameRect(next, drag.original) ? drag.original : next;
+    if (sameRect(rect, drag.preview)) return;
+    canvas.hidden = rect !== drag.original;
+    drag.preview = rect;
     positionSelection(rect);
     updateSizeBadge(rect);
     return;
@@ -2259,20 +2292,18 @@ document.documentElement.addEventListener("pointerleave", () => {
 });
 
 window.addEventListener("pointerup", (event) => {
-  if (selectionResize) {
-    if (event.pointerId !== selectionResize.pointerId) return;
-    const original = selectionResize.rect;
-    const rect = { ...(committedRect ?? original) };
-    selectionResize = null;
-    selection.classList.remove("resizing");
-    if (sameRect(original, rect)) {
-      committedRect = original;
-      canvas.hidden = false;
-      positionSelection(original);
-      updateSizeBadge(original);
+  const drag = selectionDrag;
+  if (drag) {
+    if (event.pointerId !== drag.pointerId || event.button !== 0) return;
+    clearSelectionDrag();
+    if (drag.preview === drag.original) {
+      if (drag.clickToCopy && !drag.moved && recordCanvasClick(drag.startX, drag.startY)) {
+        lastCanvasClick = null;
+        void runAction("copy");
+      }
       return;
     }
-    void recaptureSelection(rect, original);
+    void recaptureSelection(drag.preview, drag.original);
     return;
   }
   if (phase === "selecting" && event.button === 0) {
@@ -2319,14 +2350,14 @@ window.addEventListener("pointercancel", (event) => {
     drawingPointer = null;
     return;
   }
-  if (selectionResize?.pointerId !== event.pointerId) return;
-  const original = selectionResize.rect;
-  selectionResize = null;
-  selection.classList.remove("resizing");
-  committedRect = original;
+  const drag = selectionDrag;
+  if (!drag || drag.pointerId !== event.pointerId) return;
+  clearSelectionDrag();
+  lastCanvasClick = null;
+  if (drag.preview === drag.original) return;
   canvas.hidden = false;
-  positionSelection(original);
-  updateSizeBadge(original);
+  positionSelection(drag.original);
+  updateSizeBadge(drag.original);
 });
 
 window.addEventListener("contextmenu", (event) => {
@@ -2350,6 +2381,7 @@ window.addEventListener("keydown", (event) => {
     return;
   }
   if (inlineEditor) return; // the inline textarea handles Enter / Esc itself
+  if (selectionDrag && event.key !== "Escape") return;
   if (handlePrecisionKey(event)) {
     event.preventDefault();
     return;

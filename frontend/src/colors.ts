@@ -4,8 +4,10 @@
 // colours persisted in localStorage (up to MAX_RECENT_COLORS). The full
 // in-app palette panel lives in palette.ts and reuses this storage.
 
+export const DEFAULT_ANNOTATION_COLOR = "#ff0000";
+
 export const PRESET_COLORS: ReadonlyArray<string> = [
-  "#e56e48",
+  DEFAULT_ANNOTATION_COLOR,
   "#efb94c",
   "#78a576",
   "#70a8c2",

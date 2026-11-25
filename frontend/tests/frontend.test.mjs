@@ -388,9 +388,8 @@ async function resizeFixture() {
   p.run(`engine.addShape(${JSON.stringify(savedShape)}); watermarkEnabled = true; applyWatermark()`);
   const engine = p.run('engine');
   const canvas = p.document.getElementById('overlayCanvas');
-  // Exercise the drag lifecycle: move changes committedRect and hides the
-  // canvas before pointerup asks for the replacement capture.
-  p.run('startSelectionResize({ pointerId:1, clientX:130, clientY:90, preventDefault(){}, stopPropagation(){} }, "se")');
+  const grip = p.document.querySelector('[data-resize="se"]');
+  p.window.fire('pointerdown', { target: grip, pointerId: 1, button: 0, clientX: 130, clientY: 90 });
   p.window.fire('pointermove', { pointerId: 1, clientX: 190, clientY: 130 });
   p.window.fire('pointerup', { pointerId: 1, button: 0 });
   await settle();

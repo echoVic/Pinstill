@@ -5,6 +5,7 @@
 // only the contract fields are pushed to `Capture.ApplySettings`.
 
 import type { Settings } from "./bridge";
+import { DEFAULT_ANNOTATION_COLOR, normalizeColor } from "./colors";
 import { DEFAULT_TOOL_CHOICES, toolName } from "./tools";
 
 export const STORAGE_KEY = "pinstill.preferences";
@@ -84,7 +85,10 @@ export interface SettingsCategory {
   groups: SettingGroup[];
 }
 
-const toolOptions = DEFAULT_TOOL_CHOICES.map((id) => ({ value: id, label: toolName(id) }));
+const toolOptions = [
+  { value: "none", label: "不预选" },
+  ...DEFAULT_TOOL_CHOICES.map((id) => ({ value: id, label: toolName(id) })),
+];
 
 /** The seven categories of the settings view (six design ones + 权限). */
 export const SETTINGS_SCHEMA: SettingsCategory[] = [
@@ -294,7 +298,7 @@ export const SETTINGS_SCHEMA: SettingsCategory[] = [
           {
             key: "defaultTool",
             name: "默认工具",
-            description: "选区工具栏默认选中的标注工具。",
+            description: "不预选时，直接拖动选区内部可以移动选区。",
             type: "select",
             options: toolOptions,
           },
@@ -480,8 +484,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
   keepHistory: true,
   retentionDays: 30,
   historyLimitMB: 2048,
-  defaultTool: "arrow",
-  defaultColor: "#e56e48",
+  defaultTool: "none",
+  defaultColor: DEFAULT_ANNOTATION_COLOR,
   defaultWidth: 2,
   watermarkText: "Pinstill",
   watermarkOpacity: 35,
@@ -551,6 +555,20 @@ function migrateLegacyWidth(preferences: Preferences): void {
   }
 }
 
+const ANNOTATION_DEFAULTS_MIGRATION_KEY = "pinstill.prefsAnnotationDefaults";
+
+function migrateAnnotationDefaults(preferences: Preferences): void {
+  try {
+    if (localStorage.getItem(ANNOTATION_DEFAULTS_MIGRATION_KEY)) return;
+    const oldTool = preferences.defaultTool === "arrow";
+    const oldColor = normalizeColor(preferences.defaultColor) === "#e56e48";
+    if (oldTool) preferences.defaultTool = DEFAULT_PREFERENCES.defaultTool;
+    if (oldColor) preferences.defaultColor = DEFAULT_PREFERENCES.defaultColor;
+    if ((oldTool || oldColor) && !savePreferences(preferences)) return;
+    localStorage.setItem(ANNOTATION_DEFAULTS_MIGRATION_KEY, "1");
+  } catch {}
+}
+
 export function loadPreferences(): Preferences {
   const preferences: Preferences = { ...DEFAULT_PREFERENCES };
   try {
@@ -580,6 +598,7 @@ export function loadPreferences(): Preferences {
     preferences.afterCapture = "inplace";
   }
   migrateLegacyWidth(preferences);
+  migrateAnnotationDefaults(preferences);
   return preferences;
 }
 

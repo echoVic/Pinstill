@@ -12,6 +12,7 @@
 // `#palettePreview`, `[data-palette-recent]` and `[data-palette-close]`.
 
 import {
+  DEFAULT_ANNOTATION_COLOR,
   loadRecentColors,
   MAX_RECENT_COLORS,
   normalizeColor,
@@ -36,9 +37,9 @@ export interface ColorPalettePanelOptions {
  * match the dark-warm design language.
  */
 export const PALETTE_PRESETS: ReadonlyArray<string> = [
+  DEFAULT_ANNOTATION_COLOR,
   "#e56e48",
   "#e46c4e",
-  "#d9553b",
   "#c94b35",
   "#f08a5d",
   "#f3a24e",
@@ -250,7 +251,7 @@ export class ColorPalettePanel {
   private v = 0.9;
   private anchor: HTMLElement | null = null;
   private draggingSV = false;
-  private appliedColor = "#e56e48";
+  private appliedColor = DEFAULT_ANNOTATION_COLOR;
 
   constructor(options: ColorPalettePanelOptions) {
     this.options = options;

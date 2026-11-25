@@ -7,6 +7,7 @@
 <style>
   :root {
     --amber: #f3a24e;
+    --selection-color: #ff0000;
     --paper: #f2eee4;
     --ink: #1a1915;
     --mask: rgba(12, 12, 11, 0.45);
@@ -39,7 +40,7 @@
   .selection {
     position: fixed;
     background: transparent;
-    border: 1px solid var(--amber);
+    border: 1px solid var(--selection-color);
     z-index: 2;
   }
   .selection::before,
@@ -48,7 +49,7 @@
     position: absolute;
     width: 11px;
     height: 11px;
-    border: 0 solid #fffaf0;
+    border: 0 solid var(--selection-color);
     pointer-events: none;
     z-index: 2;
   }
@@ -62,7 +63,7 @@
   .selection.resizable::before,
   .selection.resizable::after { display: none; }
   .selection.window-preview {
-    border: 2px solid var(--amber);
+    border: 2px solid var(--selection-color);
     box-shadow: inset 0 0 0 1px rgba(255, 250, 240, 0.55);
     pointer-events: none;
   }
@@ -81,7 +82,7 @@
     top: 50%;
     width: 7px;
     height: 7px;
-    border: 1px solid var(--amber);
+    border: 1px solid var(--selection-color);
     border-radius: 50%;
     background: #fffaf0;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
@@ -108,6 +109,7 @@
   .resize-handle[data-resize="e"] { right: -8px; }
   .selection.capturing .resize-handle,
   .selection.fitted .resize-handle { display: none; }
+  .selection.moving { cursor: move; }
 
   #overlayCanvas {
     position: absolute;
@@ -125,7 +127,6 @@
     box-shadow: 0 0 0 1px #242018;
     pointer-events: none;
   }
-  .selection.resizing #annotationSelection,
   .selection.capturing #annotationSelection,
   #overlayCanvas[hidden] + #annotationSelection { display: none; }
 
