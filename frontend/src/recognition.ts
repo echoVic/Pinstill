@@ -1,5 +1,6 @@
-import { copyRecognizedText, modelSettings, openRecognizedLink, recognizeSelection, recognizeWithModel, translateModel } from "./bridge";
+import { cancelTranslation, copyRecognizedText, modelSettings, openRecognizedLink, pollTranslation, recognizeSelection, recognizeWithModel, startTranslation } from "./bridge";
 import type { ModelSettings, RecognitionCode, RecognitionMode } from "./bridge";
+import { translateLanguageLabel } from "./languages";
 import type { Preferences } from "./settings";
 import { setButtonPending } from "./util";
 
@@ -172,27 +173,57 @@ export class RecognitionPanel {
     const original = this.renderTranslationText("原文", "original", text);
     if (preferences.sideBySide) columns.append(original);
     this.results.replaceChildren(columns);
-    this.setStatus(`正在翻译为 ${preferences.translateTo}…`);
+    const translated = this.renderTranslationColumn("译文", "translation", "");
+    columns.append(translated.column);
+    const bilingual = this.actions();
+    this.button(bilingual, "copy-bilingual", "复制对照", (signal) => {
+      const value = translated.field.value.trim();
+      if (!value) return Promise.reject(new Error("还没有译文"));
+      return copyRecognizedText(`原文：\n${text}\n\n译文：\n${value}`, signal);
+    }, "已复制对照");
+    this.results.append(bilingual);
+    this.setStatus(`正在翻译为 ${translateLanguageLabel(preferences.translateTo)}…`);
+    let token = "";
+    const cancelRemote = () => {
+      if (token) void cancelTranslation(token);
+    };
+    signal.addEventListener("abort", cancelRemote, { once: true });
     try {
-      const translation = await translateModel(settings.revision, text, preferences.translateTo, signal);
-      if (signal.aborted) return;
-      columns.append(this.renderTranslationText("译文", "translation", translation));
+      token = await startTranslation(settings.revision, text, preferences.translateTo, "auto");
+      for (;;) {
+        if (signal.aborted) {
+          void cancelTranslation(token);
+          return;
+        }
+        const update = await pollTranslation(token);
+        translated.field.value = update.text;
+        if (update.error) throw new Error(update.error);
+        if (update.done) break;
+        await new Promise((resolve) => setTimeout(resolve, 120));
+      }
       this.setStatus("");
     } catch (error) {
-      if (!signal.aborted && !preferences.sideBySide) columns.append(original);
+      if (!signal.aborted && !preferences.sideBySide) columns.prepend(original);
       throw error;
+    } finally {
+      signal.removeEventListener("abort", cancelRemote);
     }
   }
 
   private renderTranslationText(label: string, action: string, text: string): HTMLElement {
+    return this.renderTranslationColumn(label, action, text).column;
+  }
+
+  private renderTranslationColumn(label: string, action: string, text: string): { column: HTMLElement; field: HTMLTextAreaElement } {
     const column = document.createElement("div");
     column.className = "translation-column";
     const heading = document.createElement("h3");
     heading.textContent = label;
+    const field = this.textField(label, text);
     const actions = this.actions();
-    this.button(actions, `copy-${action}`, `复制${label}`, (signal) => copyRecognizedText(text, signal), `已复制${label}`);
-    column.append(heading, this.textField(label, text), actions);
-    return column;
+    this.button(actions, `copy-${action}`, `复制${label}`, (signal) => copyRecognizedText(field.value, signal), `已复制${label}`);
+    column.append(heading, field, actions);
+    return { column, field };
   }
 
   private renderModelText(settings: ModelSettings, preferences: RecognitionPreferences, text: string): void {

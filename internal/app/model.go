@@ -54,6 +54,9 @@ type ModelService struct {
 	app     *App
 	secrets modelSecretStore
 	mu      sync.Mutex
+
+	streamsMu sync.Mutex
+	streams   map[string]*translationStream
 }
 
 func normalizeModelInput(input ModelInput) (ModelInput, error) {
@@ -93,7 +96,7 @@ func normalizeModelInput(input ModelInput) (ModelInput, error) {
 				endpoint.Host = net.JoinHostPort("127.0.0.1", port)
 			}
 		} else if !net.ParseIP(host).IsLoopback() {
-			return ModelInput{}, errors.New("本地模型需要本机回环地址，例如 http://127.0.0.1:11434/v1")
+			return ModelInput{}, errors.New("本地模型需要本机回环地址，例如 http://127.0.0.1:11434")
 		}
 	} else if endpoint.Scheme != "https" {
 		return ModelInput{}, errors.New("云端模型需要 HTTPS 服务地址")
@@ -200,9 +203,9 @@ func (service *ModelService) profileForRevision(revision string) (modelProfile, 
 	return profile, nil
 }
 
-func (service *ModelService) TranslateText(ctx context.Context, revision, text, target string) (string, error) {
+func (service *ModelService) TranslateText(ctx context.Context, revision, text, target, source string) (string, error) {
 	return service.runForSelection(ctx, revision, func(profile modelProfile) (string, error) {
-		return translateWithModel(ctx, modelHTTPClient, profile, text, target)
+		return translateWithModel(ctx, modelHTTPClient, profile, text, target, source)
 	})
 }
 

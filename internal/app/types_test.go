@@ -130,6 +130,7 @@ func TestSettingsJSONContract(t *testing.T) {
 		"retentionDays",
 		"sound",
 		"tooltip",
+		"translateKey",
 	}
 	if got := gnJSONKeys(t, DefaultSettings()); !slices.Equal(got, want) {
 		t.Fatalf("Settings JSON keys = %v, want %v", got, want)

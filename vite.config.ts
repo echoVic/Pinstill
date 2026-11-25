@@ -27,6 +27,7 @@ export default defineConfig({
         frame: page("frame.html"),
         result: page("result.html"),
         line: page("line.html"),
+        translate: page("translate.html"),
       },
     },
   },

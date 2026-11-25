@@ -59,6 +59,9 @@ func (a *App) shortcutHandlers() map[string]func() {
 				}
 			}()
 		},
+		"translateKey": func() {
+			go a.ShowTranslate()
+		},
 	}
 }
 
@@ -80,12 +83,13 @@ func (a *App) reconcileShortcutsWith(s Settings, r settingsRuntime) map[string]s
 		errs["ocrKey"] = "提取文字可从截图工具栏使用，未注册全局快捷键"
 	}
 	want := map[string]string{
-		"captureKey": strings.TrimSpace(s.CaptureKey),
-		"pinKey":     strings.TrimSpace(s.PinKey),
+		"captureKey":   strings.TrimSpace(s.CaptureKey),
+		"pinKey":       strings.TrimSpace(s.PinKey),
+		"translateKey": strings.TrimSpace(s.TranslateKey),
 	}
 	handlers := a.shortcutHandlers()
 	var groups [][]string
-	for _, key := range []string{"captureKey", "pinKey"} {
+	for _, key := range []string{"captureKey", "pinKey", "translateKey"} {
 		if want[key] != active[key] {
 			groups = append(groups, []string{key})
 		}

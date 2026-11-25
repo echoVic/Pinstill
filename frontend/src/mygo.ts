@@ -249,6 +249,7 @@ export interface ScrollResultPayload {
 export interface Settings {
   captureKey: string;
   pinKey: string;
+  translateKey: string;
   ocrKey: string;
   afterCapture: string;
   format: string;
@@ -270,6 +271,13 @@ export interface Settings {
 export interface ToastPayload {
   text: string;
   kind: string;
+}
+
+/** TranslationUpdate is the polling payload for a running translation. */
+export interface TranslationUpdate {
+  text: string;
+  done: boolean;
+  error: string;
 }
 
 // ---- Services ----
@@ -433,10 +441,20 @@ export const History = {
 } as const;
 
 export const Models = {
+  /** CancelTranslation stops a running translation, e.g. when the page is closed. */
+  cancelTranslation: bind<[string], void>("Models.CancelTranslation", (token: string) => [token]),
+  /** PollTranslation reports the translation so far. The page polls until Done. */
+  pollTranslation: bind<[string], TranslationUpdate>("Models.PollTranslation", (token: string) => [token]),
   recognizeImage: bind<[string, string], string>("Models.RecognizeImage", (revision: string, imageBase64: string) => [revision, imageBase64]),
   saveSettings: bind<[ModelInput], ModelSettings>("Models.SaveSettings", (input: ModelInput) => [input]),
   settings: bind<[], ModelSettings>("Models.Settings", () => []),
-  translateText: bind<[string, string, string], string>("Models.TranslateText", (revision: string, text: string, target: string) => [revision, text, target]),
+  /**
+   * StartTranslation begins a streaming translation and returns the token the
+   * page polls with PollTranslation. Errors that would fail before any request
+   * are returned here; later failures arrive in the update payload.
+   */
+  startTranslation: bind<[string, string, string, string], string>("Models.StartTranslation", (revision: string, text: string, target: string, source: string) => [revision, text, target, source]),
+  translateText: bind<[string, string, string, string], string>("Models.TranslateText", (revision: string, text: string, target: string, source: string) => [revision, text, target, source]),
 } as const;
 
 // ---- Events ----

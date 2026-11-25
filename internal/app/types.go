@@ -188,6 +188,7 @@ type HistoryCapture struct {
 type Settings struct {
 	CaptureKey      string   `json:"captureKey"`
 	PinKey          string   `json:"pinKey"`
+	TranslateKey    string   `json:"translateKey"`
 	OcrKey          string   `json:"ocrKey"`
 	AfterCapture    string   `json:"afterCapture"`
 	Format          string   `json:"format"`
@@ -212,6 +213,7 @@ func DefaultSettings() Settings {
 	return Settings{
 		CaptureKey:     "CmdOrCtrl+Shift+1",
 		PinKey:         "CmdOrCtrl+Shift+2",
+		TranslateKey:   "CmdOrCtrl+Shift+3",
 		OcrKey:         "CmdOrCtrl+Shift+O",
 		AfterCapture:   "inplace",
 		Format:         "PNG",

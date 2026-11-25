@@ -136,15 +136,16 @@ test('screenshot translation uses the configured local model for OCR before tran
       calls.push(['model-ocr', revision, image]);
       return text;
     },
-    translateModel: async (revision, value, target) => {
+    startTranslation: async (revision, value, target) => {
       calls.push(['translate', revision, value, target]);
-      return 'スクリーンショットの文字';
+      return 'token-one';
     },
+    pollTranslation: async () => ({ text: 'スクリーンショットの文字', done: true, error: '' }),
     copyRecognizedText: async (value) => { copied.push(value); },
   });
   chooseTool(overlay, 'translate');
   await settle();
-  assert.deepEqual(calls, [['model-ocr', localModel.revision, encodedPNG], ['translate', localModel.revision, text, '日本語']]);
+  assert.deepEqual(calls, [['model-ocr', localModel.revision, encodedPNG], ['translate', localModel.revision, text, 'ja']]);
   assert.deepEqual(overlay.document.querySelectorAll('#recognitionPanel textarea').map((field) => field.value), [text, 'スクリーンショットの文字']);
   overlay.document.querySelector('[data-recognition-copy-translation]').click();
   await settle();
@@ -213,17 +214,18 @@ test('model OCR results can be translated as text on request', async () => {
     modelSettings: async () => localModel,
     recognizeSelection: async () => { assert.fail('Vision ran before the configured model'); },
     recognizeWithModel: async () => '手写文字',
-    translateModel: async (revision, value, target) => {
+    startTranslation: async (revision, value, target) => {
       requests.push([revision, value, target]);
-      return '手書きの文字';
+      return 'token-two';
     },
+    pollTranslation: async () => ({ text: '手書きの文字', done: true, error: '' }),
   });
   chooseTool(overlay, 'ocr');
   await settle();
   assert.deepEqual(requests, []);
   overlay.document.querySelector('[data-recognition-translate-model-text]').click();
   await settle();
-  assert.deepEqual(requests, [[model.revision, '手写文字', '日本語']]);
+  assert.deepEqual(requests, [[model.revision, '手写文字', 'ja']]);
   assert.deepEqual(overlay.document.querySelectorAll('#recognitionPanel textarea').map((field) => field.value), ['手写文字', '手書きの文字']);
 });
 
@@ -236,17 +238,18 @@ test('cloud translation offers built-in OCR and keeps the image on the Mac when 
       return { text };
     },
     recognizeWithModel: async () => { assert.fail('the image was sent to the cloud'); },
-    translateModel: async (revision, value, target) => {
+    startTranslation: async (revision, value, target) => {
       calls.push(['translate', revision, value, target]);
-      return 'translated text';
+      return 'token-three';
     },
+    pollTranslation: async () => ({ text: 'translated text', done: true, error: '' }),
   });
   chooseTool(overlay, 'translate');
   await settle();
   assert.deepEqual(calls, []);
   overlay.document.querySelector('[data-recognition-local-ocr]').click();
   await settle();
-  assert.deepEqual(calls, [['ocr', 'English', encodedPNG], ['translate', model.revision, text, '日本語']]);
+  assert.deepEqual(calls, [['ocr', 'English', encodedPNG], ['translate', model.revision, text, 'ja']]);
   assert.equal(overlay.document.querySelector('textarea[aria-label="译文"]').value, 'translated text');
 });
 

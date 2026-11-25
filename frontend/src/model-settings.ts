@@ -52,7 +52,7 @@ export function renderModelSettings(available: boolean): HTMLElement {
   mode.value = "off";
   const modeRow = modelRow(mode, "接入方式", "配置后，提取文字和截图翻译优先用模型识别。发送选区图片到云端前会询问。");
   const base = modelInput("modelBaseUrl", "url", 512, "");
-  const baseRow = modelRow(base, "服务地址", "填写 OpenAI 兼容接口的 Base URL，通常以 /v1 结尾。");
+  const baseRow = modelRow(base, "服务地址", "填写 OpenAI 兼容接口的服务地址。只填到域名会自动补 /v1，填写完整路径则按原样使用。");
   const model = modelInput("modelName", "text", 200, "服务中的模型 ID");
   const modelNameRow = modelRow(model, "模型名", "优先选支持图片输入的模型。仅支持文字的模型可搭配本机取字来翻译。");
   const key = modelInput("modelApiKey", "password", 1024, "");
@@ -82,7 +82,7 @@ export function renderModelSettings(available: boolean): HTMLElement {
     for (const control of controls) control.disabled = !available || busy || (control !== mode && !enabled);
     base.required = enabled;
     model.required = enabled;
-    base.placeholder = mode.value === "local" ? "http://127.0.0.1:11434/v1" : "https://api.openai.com/v1";
+    base.placeholder = mode.value === "local" ? "http://127.0.0.1:11434" : "https://api.openai.com";
     if (saved?.hasApiKey && saved.mode === mode.value && saved.baseUrl === base.value.trim()) {
       key.placeholder = "已保存，留空沿用";
     } else {

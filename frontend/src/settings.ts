@@ -6,6 +6,7 @@
 
 import type { Settings } from "./bridge";
 import { DEFAULT_ANNOTATION_COLOR, normalizeColor } from "./colors";
+import { DEFAULT_TRANSLATE_TO, normalizeTranslateTo, TARGET_LANGUAGES } from "./languages";
 import { DEFAULT_TOOL_CHOICES, toolName } from "./tools";
 
 export const STORAGE_KEY = "pinstill.preferences";
@@ -22,6 +23,7 @@ export interface Preferences {
   // 快捷键
   captureKey: string;
   pinKey: string;
+  translateKey: string;
   ocrKey: string;
   enterCopy: boolean;
   // 保存与历史
@@ -173,6 +175,12 @@ export const SETTINGS_SCHEMA: SettingsCategory[] = [
             key: "pinKey",
             name: "固定剪贴板图片",
             description: "将剪贴板中的图片固定到桌面。",
+            type: "shortcut",
+          },
+          {
+            key: "translateKey",
+            name: "翻译",
+            description: "打开翻译窗口，输入文字后翻译。",
             type: "shortcut",
           },
           {
@@ -402,12 +410,7 @@ export const SETTINGS_SCHEMA: SettingsCategory[] = [
             name: "目标语言",
             description: "默认将识别出的文字翻译为此语言。",
             type: "select",
-            options: [
-              { value: "简体中文", label: "简体中文" },
-              { value: "English", label: "English" },
-              { value: "日本語", label: "日本語" },
-              { value: "한국어", label: "한국어" },
-            ],
+            options: TARGET_LANGUAGES.map((language) => ({ value: language.code, label: language.label })),
           },
           {
             key: "sideBySide",
@@ -464,6 +467,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   tooltipDelay: 120,
   captureKey: "CmdOrCtrl+Shift+1",
   pinKey: "CmdOrCtrl+Shift+2",
+  translateKey: "CmdOrCtrl+Shift+3",
   ocrKey: "CmdOrCtrl+Shift+O",
   enterCopy: true,
   folder: "~/Pictures/Pinstill",
@@ -481,16 +485,17 @@ export const DEFAULT_PREFERENCES: Preferences = {
   pinOpacity: 100,
   pinBorder: true,
   ocrLanguage: "中英文混合",
-  translateTo: "简体中文",
+  translateTo: DEFAULT_TRANSLATE_TO,
   sideBySide: true,
 };
 
-export const SHORTCUT_KEYS = ["captureKey", "pinKey"] as const;
+export const SHORTCUT_KEYS = ["captureKey", "pinKey", "translateKey"] as const;
 
 /** Labels shown for partially applied native settings. */
 export const SETTINGS_KEY_LABELS: Record<string, string> = {
   captureKey: "区域截图快捷键",
   pinKey: "固定剪贴板图片快捷键",
+  translateKey: "翻译快捷键",
   ocrKey: "提取屏幕文字快捷键",
   launchAtLogin: "登录后启动",
   keepHistory: "保存历史",
@@ -574,6 +579,7 @@ export function loadPreferences(): Preferences {
   } catch {
     // Corrupt storage falls back to the defaults.
   }
+  preferences.translateTo = normalizeTranslateTo(preferences.translateTo);
   preferences.captureKey = normalizeLegacyAccelerator(preferences.captureKey);
   preferences.pinKey = normalizeLegacyAccelerator(preferences.pinKey);
   preferences.ocrKey = normalizeLegacyAccelerator(preferences.ocrKey);
@@ -641,6 +647,7 @@ export function toNativeSettings(preferences: Preferences): Settings {
   return {
     captureKey: preferences.captureKey,
     pinKey: preferences.pinKey,
+    translateKey: preferences.translateKey,
     ocrKey: "",
     afterCapture,
     format,

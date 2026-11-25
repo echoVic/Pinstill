@@ -82,6 +82,8 @@ type App struct {
 	lineReady  bool
 	lineState  clothesline.State
 
+	translate *mygo.Window
+
 	scroll         *scrollSession
 	scrollMu       sync.Mutex
 	scrollSequence uint64
@@ -136,6 +138,7 @@ func (a *App) Start() {
 	a.registerProtocol()
 	a.createOverlay()
 	a.createMainWindow()
+	a.createTranslateWindow()
 	mygo.Screen.OnDisplaysChanged(func() {
 		a.mu.Lock()
 		active := a.overlayInteraction != 0 || a.overlayFreeze != nil
@@ -346,6 +349,50 @@ func (a *App) createMainWindow() {
 	a.main = win
 }
 
+func (a *App) createTranslateWindow() {
+	win := mygo.NewWindow(mygo.WindowOptions{
+		Page:            mygo.PageOptions{Session: a.pageSession},
+		Title:           "翻译",
+		Width:           760,
+		Height:          440,
+		MinWidth:        560,
+		MinHeight:       380,
+		TitleBarStyle:   mygo.TitleBarHiddenInset,
+		TitleBarHeight:  44,
+		BackgroundColor: "#141412",
+		URL:             "/translate.html",
+	})
+	win.OnClose(func(e *mygo.CloseEvent) {
+		a.mu.Lock()
+		quitting := a.quitting
+		a.mu.Unlock()
+		if quitting {
+			return
+		}
+		e.PreventDefault()
+		win.Hide()
+	})
+	win.Hide()
+	a.mu.Lock()
+	a.translate = win
+	a.mu.Unlock()
+}
+
+// ShowTranslate reveals the standalone text translation window used by the
+// menu bar item and the translate shortcut.
+func (a *App) ShowTranslate() {
+	a.mu.Lock()
+	win := a.translate
+	quitting := a.quitting
+	a.mu.Unlock()
+	if win == nil || win.IsDestroyed() || quitting {
+		return
+	}
+	mygo.App.Focus()
+	win.Show()
+	win.Focus()
+}
+
 func (a *App) createOverlay() {
 	a.overlay = a.newOverlayWindow()
 	a.overlayPool = []*mygo.Window{a.overlay}
@@ -397,6 +444,7 @@ func (a *App) createTray() {
 				}
 			}()
 		}},
+		{Label: "翻译…", Click: func(*mygo.MenuItem, *mygo.Window) { go a.ShowTranslate() }},
 		{Type: mygo.MenuItemSeparator},
 		{Label: "贴图管理…", Click: func(*mygo.MenuItem, *mygo.Window) { go a.showPinManager() }},
 		{Label: "显示 / 隐藏桌面晾绳", Click: func(*mygo.MenuItem, *mygo.Window) { go a.toggleClothesline() }},

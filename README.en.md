@@ -45,7 +45,7 @@ Choose **Scan QR Code** to scan your selection on your Mac with macOS Vision. Co
 
 ### Screenshot translation and model OCR
 
-Under Settings → Recognition & Translation → Model Service, choose a local model or a cloud API and enter the OpenAI-compatible base URL and model ID. Ollama defaults to `http://127.0.0.1:11434/v1`, and LM Studio defaults to `http://127.0.0.1:1234/v1`. Cloud services require HTTPS and an API key. The system keychain stores the configuration. Select Off and save to remove it.
+Under Settings → Recognition & Translation → Model Service, choose a local model or a cloud API and enter the OpenAI-compatible base URL and model ID. A bare host gets `/v1` appended automatically, while a full path is used as-is; for example Ollama at `http://127.0.0.1:11434` and LM Studio at `http://127.0.0.1:1234`. Cloud services require HTTPS and an API key. The system keychain stores the configuration. Select Off and save to remove it.
 
 - **Extract Text**　Once configured, an image-capable model handles text extraction first, including handwriting and complex layouts. Translate the result from the same panel, or switch to built-in OCR.
 - **Translate**　Pinstill uses the configured model to recognise the selection, then translates the extracted text. Copy the original and translation separately. Choose on-device OCR to send only the extracted text to the model.

@@ -56,7 +56,7 @@ func (n *runtimeTestNative) callbacks() settingsRuntime {
 
 func runtimeTestApp() (*App, *runtimeTestNative) {
 	s := DefaultSettings()
-	s.CaptureKey, s.PinKey, s.OcrKey = "capture-old", "pin-old", ""
+	s.CaptureKey, s.PinKey, s.TranslateKey, s.OcrKey = "capture-old", "pin-old", "", ""
 	a := &App{settings: s, shortcutKeys: map[string]string{
 		"captureKey": s.CaptureKey, "pinKey": s.PinKey,
 	}}

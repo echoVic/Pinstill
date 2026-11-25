@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"image"
 	"image/png"
 	"net/http"
@@ -69,6 +70,8 @@ func TestModelSettingsValidateDestination(t *testing.T) {
 		{"local", "http://localhost:11434", "http://127.0.0.1:11434/v1"},
 		{"local", "http://[::1]:1234/v1/", "http://[::1]:1234/v1"},
 		{"cloud", "https://example.test/compatible/v1", "https://example.test/compatible/v1"},
+		{"cloud", "https://api.openai.com", "https://api.openai.com/v1"},
+		{"cloud", "https://api.openai.com/", "https://api.openai.com/v1"},
 		{"local", "http://localhost.example.test:11434/v1", ""},
 		{"local", "http://192.168.1.10:11434/v1", ""},
 		{"cloud", "http://example.test/v1", ""},
@@ -109,7 +112,7 @@ func TestModelTranslationSendsOnlyText(t *testing.T) {
 	}))
 	defer server.Close()
 	profile := modelProfile{ModelInput: ModelInput{Mode: "cloud", BaseURL: server.URL + "/compatible/v1", Model: "local-test-model", APIKey: fixtureModelKey}}
-	value, err := translateWithModel(context.Background(), server.Client(), profile, "第一行\n第二行", "English")
+	value, err := translateWithModel(context.Background(), server.Client(), profile, "第一行\n第二行", "en", "auto")
 	if err != nil || value != "First line\nSecond line" {
 		t.Fatalf("translation = %q, %v", value, err)
 	}
@@ -163,17 +166,46 @@ func TestModelRequestsDoNotFollowRedirects(t *testing.T) {
 	}))
 	defer server.Close()
 	profile := modelProfile{ModelInput: ModelInput{Mode: "local", BaseURL: server.URL + "/v1", Model: "sample"}}
-	if _, err := translateWithModel(context.Background(), newModelHTTPClient(), profile, "private text", "English"); err == nil {
+	if _, err := translateWithModel(context.Background(), newModelHTTPClient(), profile, "private text", "en", "auto"); err == nil {
 		t.Fatal("redirect was accepted")
 	}
 }
 
 func TestModelRequestsRejectNonOverlayCaller(t *testing.T) {
 	service := &ModelService{app: &App{capturing: true, overlayCommitted: true, overlayPreviewID: "ready"}}
-	if _, err := service.TranslateText(context.Background(), "revision", "private text", "English"); err == nil {
+	if _, err := service.TranslateText(context.Background(), "revision", "private text", "en", "auto"); err == nil {
 		t.Fatal("non-overlay translation call was allowed")
 	}
 	if _, err := service.RecognizeImage(context.Background(), "revision", "private screenshot"); err == nil {
 		t.Fatal("non-overlay model OCR call was allowed")
+	}
+}
+func TestTranslateStreamsDeltas(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body struct {
+			Stream bool `json:"stream"`
+		}
+		if json.NewDecoder(request.Body).Decode(&body) != nil || !body.Stream {
+			t.Error("translation request did not ask for a stream")
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(writer, "data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\n\n")
+		fmt.Fprint(writer, "data: {\"choices\":[{\"delta\":{\"content\":\"，世界\"},\"finish_reason\":\"stop\"}]}\n\n")
+		fmt.Fprint(writer, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+	profile := modelProfile{ModelInput: ModelInput{Mode: "cloud", BaseURL: server.URL + "/v1", Model: "stream-model", APIKey: fixtureModelKey}}
+	var deltas []string
+	value, err := translateWithModelStream(context.Background(), server.Client(), profile, "hello", "zh-Hans", "auto", func(delta string) {
+		deltas = append(deltas, delta)
+	})
+	if err != nil {
+		t.Fatalf("streaming translation error = %v", err)
+	}
+	if value != "你好，世界" {
+		t.Fatalf("translation = %q", value)
+	}
+	if strings.Join(deltas, "") != "你好，世界" {
+		t.Fatalf("deltas = %v", deltas)
 	}
 }

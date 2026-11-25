@@ -75,6 +75,7 @@ export interface Settings {
   /** MyGo accelerator string, e.g. "CmdOrCtrl+Shift+1". */
   captureKey: string;
   pinKey: string;
+  translateKey: string;
   ocrKey: string;
   /** "inplace" is the default: the selection shows the full annotation toolbar. */
   afterCapture: "inplace" | "clipboard" | "pin";
@@ -257,8 +258,24 @@ export function saveModelSettings(input: ModelInput): Promise<ModelSettings> {
   return Models.saveSettings(input);
 }
 
-export function translateModel(revision: string, text: string, target: string, signal: AbortSignal): Promise<string> {
-  return Models.translateText.with({ signal })(revision, text, target);
+/** A polling snapshot of a streaming translation. */
+export type TranslationUpdate = Native.TranslationUpdate;
+
+export function translateModel(revision: string, text: string, target: string, source: string, signal: AbortSignal): Promise<string> {
+  return Models.translateText.with({ signal })(revision, text, target, source);
+}
+
+/** Starts a streaming translation and returns the token to poll with. */
+export function startTranslation(revision: string, text: string, target: string, source: string): Promise<string> {
+  return Models.startTranslation(revision, text, target, source);
+}
+
+export function pollTranslation(token: string): Promise<TranslationUpdate> {
+  return Models.pollTranslation(token);
+}
+
+export function cancelTranslation(token: string): Promise<void> {
+  return Models.cancelTranslation(token);
 }
 
 export function recognizeWithModel(revision: string, pngBase64: string, signal: AbortSignal): Promise<string> {
@@ -531,6 +548,7 @@ function browserCapture(rect: Rect): OverlayCapture {
 const BROWSER_DEFAULT_SETTINGS: Settings = {
   captureKey: "CmdOrCtrl+Shift+1",
   pinKey: "CmdOrCtrl+Shift+2",
+  translateKey: "CmdOrCtrl+Shift+3",
   ocrKey: "CmdOrCtrl+Shift+O",
   afterCapture: "inplace",
   format: "PNG",
