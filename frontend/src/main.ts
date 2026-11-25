@@ -36,7 +36,9 @@ import {
   type PinArchiveEntry,
 } from "./bridge";
 import { refreshPinstillIcons } from "./icons";
+import { renderGlossarySettings } from "./glossary-settings";
 import { renderModelSettings } from "./model-settings";
+import { renderTTSSettings } from "./tts-settings";
 import {
   DEFAULT_PREFERENCES,
   SETTINGS_KEY_LABELS,
@@ -635,7 +637,12 @@ function renderSettings(): void {
     for (const row of group.rows) card.append(renderSettingRow(row));
     body.append(card);
   }
-  if (category.id === "recognition") body.append(renderModelSettings(hasNative && isMacPlatform()));
+  if (category.id === "recognition") {
+    const macNative = hasNative && isMacPlatform();
+    body.append(renderModelSettings(macNative));
+    body.append(renderTTSSettings(macNative));
+    body.append(renderGlossarySettings());
+  }
   // Permissions come from the OS, not from saved preferences: no "reset".
   const resetButton = document.getElementById("resetSettings") as HTMLButtonElement | null;
   if (resetButton) {
@@ -1317,14 +1324,48 @@ onToast((payload) => showToast(payload.text, (payload.kind as "info" | "success"
 updateShortcutButton();
 applyPreferences();
 applyModeTexts();
-showView("history");
+const OPEN_SETTINGS_KEY = "pinstill.openSettingsCategory";
+
+function consumePendingSettingsCategory(): boolean {
+  let category = "";
+  try {
+    category = localStorage.getItem(OPEN_SETTINGS_KEY) ?? "";
+    if (category) {
+      if (typeof localStorage.removeItem === "function") {
+        localStorage.removeItem(OPEN_SETTINGS_KEY);
+      } else {
+        localStorage.setItem(OPEN_SETTINGS_KEY, "");
+      }
+    }
+  } catch {
+    return false;
+  }
+  if (!category || !SETTINGS_SCHEMA.some((entry) => entry.id === category)) {
+    return false;
+  }
+  settingsCategory = category;
+  recordingShortcut = null;
+  showView("settings");
+  return true;
+}
+
+if (!consumePendingSettingsCategory()) {
+  showView("history");
+}
 void refreshPermissionStatus();
 void refreshPermissionBanner();
 void pushNativeSettings();
 
+window.addEventListener("storage", (event) => {
+  if (event.key === OPEN_SETTINGS_KEY) {
+    consumePendingSettingsCategory();
+  }
+});
+
 // Keep the permission hint fresh when the app regains focus (e.g. after the
 // user granted screen recording in System Settings).
 window.addEventListener("focus", () => {
+  consumePendingSettingsCategory();
   if (!hasNative) return;
   void refreshPermissionStatus();
   void refreshPermissionBanner();

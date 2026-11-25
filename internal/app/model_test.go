@@ -112,7 +112,7 @@ func TestModelTranslationSendsOnlyText(t *testing.T) {
 	}))
 	defer server.Close()
 	profile := modelProfile{ModelInput: ModelInput{Mode: "cloud", BaseURL: server.URL + "/compatible/v1", Model: "local-test-model", APIKey: fixtureModelKey}}
-	value, err := translateWithModel(context.Background(), server.Client(), profile, "第一行\n第二行", "en", "auto")
+	value, err := translateWithModel(context.Background(), server.Client(), profile, "第一行\n第二行", "en", "auto", "", nil)
 	if err != nil || value != "First line\nSecond line" {
 		t.Fatalf("translation = %q, %v", value, err)
 	}
@@ -166,14 +166,14 @@ func TestModelRequestsDoNotFollowRedirects(t *testing.T) {
 	}))
 	defer server.Close()
 	profile := modelProfile{ModelInput: ModelInput{Mode: "local", BaseURL: server.URL + "/v1", Model: "sample"}}
-	if _, err := translateWithModel(context.Background(), newModelHTTPClient(), profile, "private text", "en", "auto"); err == nil {
+	if _, err := translateWithModel(context.Background(), newModelHTTPClient(), profile, "private text", "en", "auto", "", nil); err == nil {
 		t.Fatal("redirect was accepted")
 	}
 }
 
 func TestModelRequestsRejectNonOverlayCaller(t *testing.T) {
 	service := &ModelService{app: &App{capturing: true, overlayCommitted: true, overlayPreviewID: "ready"}}
-	if _, err := service.TranslateText(context.Background(), "revision", "private text", "en", "auto"); err == nil {
+	if _, err := service.TranslateText(context.Background(), "revision", "private text", "en", "auto", "", nil); err == nil {
 		t.Fatal("non-overlay translation call was allowed")
 	}
 	if _, err := service.RecognizeImage(context.Background(), "revision", "private screenshot"); err == nil {
@@ -196,7 +196,7 @@ func TestTranslateStreamsDeltas(t *testing.T) {
 	defer server.Close()
 	profile := modelProfile{ModelInput: ModelInput{Mode: "cloud", BaseURL: server.URL + "/v1", Model: "stream-model", APIKey: fixtureModelKey}}
 	var deltas []string
-	value, err := translateWithModelStream(context.Background(), server.Client(), profile, "hello", "zh-Hans", "auto", func(delta string) {
+	value, err := translateWithModelStream(context.Background(), server.Client(), profile, "hello", "zh-Hans", "auto", "", nil, func(delta string) {
 		deltas = append(deltas, delta)
 	})
 	if err != nil {
@@ -207,5 +207,335 @@ func TestTranslateStreamsDeltas(t *testing.T) {
 	}
 	if strings.Join(deltas, "") != "你好，世界" {
 		t.Fatalf("deltas = %v", deltas)
+	}
+}
+
+func TestTranslateWindowCallerAuthorization(t *testing.T) {
+	mainWin := new(mygo.Window)
+	translateWin := new(mygo.Window)
+	otherWin := new(mygo.Window)
+	app := &App{main: mainWin, translate: translateWin}
+	service := &ModelService{app: app, secrets: modelTestKeychain{}}
+
+	ctx := context.Background()
+	saved, err := service.saveSettingsFor(ctx, mainWin, ModelInput{
+		Mode: "cloud", BaseURL: "https://model.example.test/v1", Model: "sample", APIKey: fixtureModelKey,
+	})
+	if err != nil || saved.Revision == "" {
+		t.Fatalf("saveSettingsFor(main) = %+v, %v", saved, err)
+	}
+
+	if got, err := service.settingsFor(ctx, mainWin); err != nil || got.Revision != saved.Revision {
+		t.Fatalf("settingsFor(main) = %+v, %v", got, err)
+	}
+	if got, err := service.settingsFor(ctx, translateWin); err != nil || got.Revision != saved.Revision {
+		t.Fatalf("settingsFor(translate) = %+v, %v", got, err)
+	}
+	if _, err := service.settingsFor(ctx, nil); err != errRecognitionSelection {
+		t.Fatalf("settingsFor(nil) error = %v, want %v", err, errRecognitionSelection)
+	}
+	if _, err := service.settingsFor(ctx, otherWin); err != errRecognitionSelection {
+		t.Fatalf("settingsFor(other) error = %v, want %v", err, errRecognitionSelection)
+	}
+
+	if _, err := service.saveSettingsFor(ctx, translateWin, ModelInput{Mode: "off"}); err == nil {
+		t.Fatal("saveSettingsFor(translate) was allowed")
+	}
+	if _, err := service.saveSettingsFor(ctx, otherWin, ModelInput{Mode: "off"}); err == nil {
+		t.Fatal("saveSettingsFor(other) was allowed")
+	}
+
+	if _, err := service.startTranslationFor(ctx, nil, saved.Revision, "hello", "zh-Hans", "auto", "", nil); err != errRecognitionSelection {
+		t.Fatalf("startTranslationFor(nil) error = %v, want %v", err, errRecognitionSelection)
+	}
+	if _, err := service.startTranslationFor(ctx, otherWin, saved.Revision, "hello", "zh-Hans", "auto", "", nil); err != errRecognitionSelection {
+		t.Fatalf("startTranslationFor(other) error = %v, want %v", err, errRecognitionSelection)
+	}
+	if _, err := service.startTranslationFor(ctx, translateWin, saved.Revision, "   ", "zh-Hans", "auto", "", nil); err == nil || err.Error() != "没有可翻译的文字" {
+		t.Fatalf("startTranslationFor(translate) error = %v, want 没有可翻译的文字", err)
+	}
+	if _, err := service.startTranslationFor(ctx, translateWin, saved.Revision, "hello", "zh-Hans", "auto", "casual", nil); err == nil || err.Error() != "请选择有效的翻译风格" {
+		t.Fatalf("startTranslationFor(invalid style) error = %v, want 请选择有效的翻译风格", err)
+	}
+
+	app.mu.Lock()
+	app.quitting = true
+	app.mu.Unlock()
+	if _, err := service.settingsFor(ctx, translateWin); err != errRecognitionSelection {
+		t.Fatalf("settingsFor(translate while quitting) error = %v, want %v", err, errRecognitionSelection)
+	}
+	if _, err := service.startTranslationFor(ctx, translateWin, saved.Revision, "hello", "zh-Hans", "auto", "", nil); err != errRecognitionSelection {
+		t.Fatalf("startTranslationFor(translate while quitting) error = %v, want %v", err, errRecognitionSelection)
+	}
+}
+
+func TestTranslationPromptStyles(t *testing.T) {
+	base, err := translationPrompt("zh-Hans", "auto", "")
+	if err != nil {
+		t.Fatalf("default style error = %v", err)
+	}
+	standard, err := translationPrompt("zh-Hans", "auto", "standard")
+	if err != nil || standard != base {
+		t.Fatalf("standard = %q (%v), want %q", standard, err, base)
+	}
+	polish, err := translationPrompt("en", "zh-Hans", "polish")
+	if err != nil || !strings.Contains(polish, "naturally and idiomatically") || !strings.Contains(polish, "Keep code, URLs, file paths and @mentions verbatim.") {
+		t.Fatalf("polish prompt = %q, %v", polish, err)
+	}
+	technical, err := translationPrompt("zh-Hans", "en", "technical")
+	if err != nil || !strings.Contains(technical, "technical documentation") || !strings.Contains(technical, "Keep code, URLs, file paths and @mentions verbatim.") {
+		t.Fatalf("technical prompt = %q, %v", technical, err)
+	}
+	summary, err := translationPrompt("zh-Hans", "auto", "summary")
+	if err != nil || !strings.Contains(summary, "Summarize the key points") || !strings.Contains(summary, "Keep code, URLs, file paths and @mentions verbatim.") {
+		t.Fatalf("summary prompt = %q, %v", summary, err)
+	}
+	if _, err := translationPrompt("zh-Hans", "auto", "casual"); err == nil || err.Error() != "请选择有效的翻译风格" {
+		t.Fatalf("invalid style error = %v", err)
+	}
+}
+
+func TestModelPresetsLifecycleAndLegacyMigration(t *testing.T) {
+	mainWin := new(mygo.Window)
+	keychain := modelTestKeychain{}
+	app := &App{main: mainWin}
+	service := &ModelService{app: app, secrets: keychain}
+	ctx := context.Background()
+
+	// Seed a legacy single-profile entry.
+	legacyProfile := modelProfile{
+		ModelInput: ModelInput{Mode: "cloud", BaseURL: "https://legacy.example.test/v1", Model: "legacy-model", APIKey: fixtureModelKey},
+		Revision:   "legacy-rev",
+	}
+	legacyBytes, _ := json.Marshal(legacyProfile)
+	keychain[modelSettingsKey] = legacyBytes
+
+	loaded, err := service.settingsFor(ctx, mainWin)
+	if err != nil || loaded.ActiveID != "default" || len(loaded.Presets) != 1 || loaded.Presets[0].Name != "legacy-model" {
+		t.Fatalf("legacy settingsFor = %+v, %v", loaded, err)
+	}
+
+	// Add a second local preset; legacy entry migrates out of modelSettingsKey.
+	added, err := service.savePresetFor(ctx, mainWin, ModelPresetInput{
+		Name: "本地 Ollama", Mode: "local", BaseURL: "http://127.0.0.1:11434", Model: "qwen2.5",
+	})
+	if err != nil || len(added.Presets) != 2 || added.ActiveID == "default" || added.Mode != "local" {
+		t.Fatalf("savePresetFor(new) = %+v, %v", added, err)
+	}
+	if _, legacyStillExists := keychain[modelSettingsKey]; legacyStillExists {
+		t.Fatal("legacy modelSettingsKey was not removed after migration")
+	}
+
+	// Switch back to the legacy preset and update its model while keeping its key.
+	switched, err := service.selectPresetFor(ctx, mainWin, "default")
+	if err != nil || switched.ActiveID != "default" || switched.Model != "legacy-model" {
+		t.Fatalf("selectPresetFor(default) = %+v, %v", switched, err)
+	}
+	updated, err := service.savePresetFor(ctx, mainWin, ModelPresetInput{
+		ID: "default", Name: "Legacy Updated", Mode: "cloud", BaseURL: "https://legacy.example.test/v1", Model: "legacy-v2",
+	})
+	if err != nil || !updated.HasAPIKey || updated.Presets[0].Name != "Legacy Updated" || updated.Presets[0].Model != "legacy-v2" {
+		t.Fatalf("savePresetFor(update) = %+v, %v", updated, err)
+	}
+
+	// Delete active preset falls back to the remaining preset.
+	afterDelete, err := service.deletePresetFor(ctx, mainWin, "default")
+	if err != nil || len(afterDelete.Presets) != 1 || afterDelete.ActiveID == "" || afterDelete.Model != "qwen2.5" {
+		t.Fatalf("deletePresetFor(default) = %+v, %v", afterDelete, err)
+	}
+
+	// Enforce maxModelPresets limit.
+	for i := 1; i < maxModelPresets; i++ {
+		if _, err := service.savePresetFor(ctx, mainWin, ModelPresetInput{
+			Name: fmt.Sprintf("Extra %d", i), Mode: "local", BaseURL: "http://127.0.0.1:11434", Model: fmt.Sprintf("m-%d", i),
+		}); err != nil {
+			t.Fatalf("savePresetFor #%d failed: %v", i, err)
+		}
+	}
+	if _, err := service.savePresetFor(ctx, mainWin, ModelPresetInput{
+		Name: "Too Many", Mode: "local", BaseURL: "http://127.0.0.1:11434", Model: "overflow",
+	}); err == nil {
+		t.Fatal("expected maxModelPresets limit error")
+	}
+}
+
+func TestModelPresetCallerAuthorization(t *testing.T) {
+	mainWin := new(mygo.Window)
+	translateWin := new(mygo.Window)
+	otherWin := new(mygo.Window)
+	app := &App{main: mainWin, translate: translateWin}
+	service := &ModelService{app: app, secrets: modelTestKeychain{}}
+	ctx := context.Background()
+
+	saved, err := service.savePresetFor(ctx, mainWin, ModelPresetInput{
+		Name: "Local", Mode: "local", BaseURL: "http://127.0.0.1:11434", Model: "m1",
+	})
+	if err != nil {
+		t.Fatalf("savePresetFor(main) = %v", err)
+	}
+
+	if _, err := service.savePresetFor(ctx, translateWin, ModelPresetInput{Name: "Bad", Mode: "local", BaseURL: "http://127.0.0.1:11434", Model: "m2"}); err == nil {
+		t.Fatal("savePresetFor(translate) was allowed")
+	}
+	if _, err := service.deletePresetFor(ctx, translateWin, saved.ActiveID); err == nil {
+		t.Fatal("deletePresetFor(translate) was allowed")
+	}
+	if _, err := service.testConnectionFor(ctx, translateWin, ModelPresetInput{Mode: "local", BaseURL: "http://127.0.0.1:11434", Model: "m1"}); err == nil {
+		t.Fatal("testConnectionFor(translate) was allowed")
+	}
+	if _, err := service.selectPresetFor(ctx, otherWin, saved.ActiveID); err != errRecognitionSelection {
+		t.Fatalf("selectPresetFor(other) = %v, want %v", err, errRecognitionSelection)
+	}
+	if _, err := service.selectPresetFor(ctx, translateWin, ""); err == nil {
+		t.Fatal("selectPresetFor(translate, empty) was allowed")
+	}
+	if got, err := service.selectPresetFor(ctx, translateWin, saved.ActiveID); err != nil || got.ActiveID != saved.ActiveID {
+		t.Fatalf("selectPresetFor(translate, valid) = %+v, %v", got, err)
+	}
+}
+
+func TestModelConnectionTest(t *testing.T) {
+	mainWin := new(mygo.Window)
+	app := &App{main: mainWin}
+	keychain := modelTestKeychain{}
+	service := &ModelService{app: app, secrets: keychain}
+	ctx := context.Background()
+
+	var authStatus int = http.StatusOK
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Authorization") != "Bearer "+fixtureModelKey {
+			writer.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if authStatus != http.StatusOK {
+			writer.WriteHeader(authStatus)
+			return
+		}
+		_, _ = writer.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+
+	saved, err := service.savePresetFor(ctx, mainWin, ModelPresetInput{
+		Name: "Cloud", Mode: "cloud", BaseURL: server.URL + "/v1", Model: "test-model", APIKey: fixtureModelKey,
+	})
+	if err != nil {
+		t.Fatalf("savePresetFor = %v", err)
+	}
+
+	// Reuses saved key when testing the same preset & endpoint without re-entering APIKey.
+	msg, err := service.testConnectionWithClient(ctx, mainWin, server.Client(), ModelPresetInput{
+		ID: saved.ActiveID, Mode: "cloud", BaseURL: server.URL + "/v1", Model: "test-model",
+	})
+	if err != nil || !strings.HasPrefix(msg, "连接成功（") {
+		t.Fatalf("testConnectionWithClient = %q, %v", msg, err)
+	}
+
+	// Different endpoint must not reuse saved key.
+	if _, err := service.testConnectionWithClient(ctx, mainWin, server.Client(), ModelPresetInput{
+		ID: saved.ActiveID, Mode: "cloud", BaseURL: "https://other.example.test/v1", Model: "test-model",
+	}); err == nil || !strings.Contains(err.Error(), "API Key") {
+		t.Fatalf("expected API Key error for changed endpoint, got %v", err)
+	}
+
+	// 401 maps to friendly auth error.
+	authStatus = http.StatusUnauthorized
+	if _, err := service.testConnectionWithClient(ctx, mainWin, server.Client(), ModelPresetInput{
+		ID: saved.ActiveID, Mode: "cloud", BaseURL: server.URL + "/v1", Model: "test-model",
+	}); err == nil || !strings.Contains(err.Error(), "API Key") {
+		t.Fatalf("expected auth error on 401, got %v", err)
+	}
+}
+
+func TestDictionaryQueryAndGlossaryPrompts(t *testing.T) {
+	for _, query := range []string{"ephemeral", "rate limit", "self-hosted", "don't", "幂等性"} {
+		if !looksLikeDictionaryQuery(query) {
+			t.Errorf("looksLikeDictionaryQuery(%q) = false, want true", query)
+		}
+	}
+	for _, nonQuery := range []string{
+		"", "Hello world.", "one\ntwo", "https://example.test", "/usr/local/bin",
+		"@alice", "one two three four", "foo_bar", "这是一个比较长的中文句子超过六个字",
+	} {
+		if looksLikeDictionaryQuery(nonQuery) {
+			t.Errorf("looksLikeDictionaryQuery(%q) = true, want false", nonQuery)
+		}
+	}
+
+	dictPrompt, err := translationPromptForText("ephemeral", "zh-Hans", "en", "standard", nil)
+	if err != nil || !strings.Contains(dictPrompt, "dictionary entry") || !strings.Contains(dictPrompt, "pronunciation/phonetics") {
+		t.Fatalf("dictionary prompt = %q, %v", dictPrompt, err)
+	}
+
+	techPrompt, err := translationPromptForText("ephemeral", "zh-Hans", "en", "technical", nil)
+	if err != nil || strings.Contains(techPrompt, "dictionary entry") || !strings.Contains(techPrompt, "technical documentation") {
+		t.Fatalf("technical style should not switch to dictionary prompt: %q, %v", techPrompt, err)
+	}
+
+	glossary := []GlossaryEntry{
+		{Source: "Pinstill", Target: ""},
+		{Source: "rate limit", Target: "速率限制"},
+		{Source: "UnusedTerm", Target: "不会出现"},
+	}
+	withGlossary, err := translationPromptForText("Pinstill enforces a RATE LIMIT here.", "zh-Hans", "en", "standard", glossary)
+	if err != nil {
+		t.Fatalf("translationPromptForText with glossary error = %v", err)
+	}
+	if !strings.Contains(withGlossary, "- Pinstill => keep verbatim") || !strings.Contains(withGlossary, "- rate limit => 速率限制") {
+		t.Fatalf("matched glossary entries missing in prompt: %q", withGlossary)
+	}
+	if strings.Contains(withGlossary, "UnusedTerm") {
+		t.Fatalf("unmatched glossary entry should not be injected: %q", withGlossary)
+	}
+}
+
+type indexFailingModelKeychain struct {
+	modelTestKeychain
+	fail bool
+}
+
+func (keychain *indexFailingModelKeychain) Set(key string, value []byte) error {
+	if keychain.fail && key == modelIndexKey {
+		return fmt.Errorf("fixture: index write failed")
+	}
+	return keychain.modelTestKeychain.Set(key, value)
+}
+
+func TestModelPresetMigrationKeepsLegacyOnFailedIndexWrite(t *testing.T) {
+	for _, operation := range []string{"save", "select"} {
+		t.Run(operation, func(t *testing.T) {
+			legacy := modelProfile{
+				ModelInput: ModelInput{Mode: "cloud", BaseURL: "https://legacy.example.test/v1", Model: "legacy-model", APIKey: fixtureModelKey},
+				Revision:   "legacy-rev",
+			}
+			data, err := json.Marshal(legacy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			keychain := &indexFailingModelKeychain{modelTestKeychain: modelTestKeychain{modelSettingsKey: data}, fail: true}
+			main := new(mygo.Window)
+			service := &ModelService{app: &App{main: main}, secrets: keychain}
+			migrate := func() error {
+				if operation == "select" {
+					_, err := service.selectPresetFor(context.Background(), main, "default")
+					return err
+				}
+				_, err := service.savePresetLocked(ModelPresetInput{ID: "default", Mode: "cloud", BaseURL: legacy.BaseURL, Model: "new-model"})
+				return err
+			}
+			if err := migrate(); err == nil {
+				t.Fatal("migration succeeded despite the failed index write")
+			}
+			profile, err := service.load()
+			if err != nil || profile.APIKey != legacy.APIKey || profile.Revision != legacy.Revision {
+				t.Fatalf("original model configuration could not be retrieved: mode=%q revision=%q err=%v", profile.Mode, profile.Revision, err)
+			}
+			keychain.fail = false
+			if err := migrate(); err != nil {
+				t.Fatalf("migration retry: %v", err)
+			}
+			if _, exists := keychain.modelTestKeychain[modelSettingsKey]; exists {
+				t.Fatal("legacy record remained after successful migration")
+			}
+		})
 	}
 }

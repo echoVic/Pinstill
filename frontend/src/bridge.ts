@@ -10,6 +10,7 @@
 import { isMyGo } from "mygo-runtime";
 import { Capture, History, Models, events } from "./mygo";
 import type * as Native from "./mygo";
+import type { TranslationStyle } from "./translate-text";
 import { downloadBlob } from "./util";
 
 /** `true` when the page runs inside a MyGo window. */
@@ -248,6 +249,8 @@ export async function copyPixelColor(hex: string): Promise<void> {
 export type RecognitionMode = "ocr" | "qr";
 export type RecognitionCode = Native.RecognitionCode;
 export type ModelInput = Native.ModelInput;
+export type ModelPreset = Native.ModelPreset;
+export type ModelPresetInput = Native.ModelPresetInput;
 export type ModelSettings = Native.ModelSettings;
 
 export function modelSettings(signal?: AbortSignal): Promise<ModelSettings> {
@@ -258,16 +261,73 @@ export function saveModelSettings(input: ModelInput): Promise<ModelSettings> {
   return Models.saveSettings(input);
 }
 
+export function saveModelPreset(input: ModelPresetInput): Promise<ModelSettings> {
+  return Models.savePreset(input);
+}
+
+export function deleteModelPreset(id: string): Promise<ModelSettings> {
+  return Models.deletePreset(id);
+}
+
+export function selectModelPreset(id: string): Promise<ModelSettings> {
+  return Models.selectPreset(id);
+}
+
+export type TTSInput = Native.TTSInput;
+export type TTSSettings = Native.TTSSettings;
+export type TTSAudio = Native.TTSAudio;
+
+export function testModelConnection(input: ModelPresetInput): Promise<string> {
+  return Models.testConnection(input);
+}
+
+export function ttsSettings(signal?: AbortSignal): Promise<TTSSettings> {
+  return Models.ttsSettings.with({ signal })();
+}
+
+export function saveTTSSettings(input: TTSInput): Promise<TTSSettings> {
+  return Models.saveTTSSettings(input);
+}
+
+export function testTTS(input: TTSInput): Promise<TTSAudio> {
+  return Models.testTTS(input);
+}
+
+export function synthesizeSpeech(
+  revision: string,
+  text: string,
+  signal: AbortSignal,
+): Promise<TTSAudio> {
+  return Models.synthesizeSpeech.with({ signal })(revision, text);
+}
+
 /** A polling snapshot of a streaming translation. */
 export type TranslationUpdate = Native.TranslationUpdate;
+export type GlossaryEntry = Native.GlossaryEntry;
+export type { TranslationStyle } from "./translate-text";
 
-export function translateModel(revision: string, text: string, target: string, source: string, signal: AbortSignal): Promise<string> {
-  return Models.translateText.with({ signal })(revision, text, target, source);
+export function translateModel(
+  revision: string,
+  text: string,
+  target: string,
+  source: string,
+  signal: AbortSignal,
+  style: TranslationStyle = "standard",
+  glossary: GlossaryEntry[] = [],
+): Promise<string> {
+  return Models.translateText.with({ signal })(revision, text, target, source, style, glossary);
 }
 
 /** Starts a streaming translation and returns the token to poll with. */
-export function startTranslation(revision: string, text: string, target: string, source: string): Promise<string> {
-  return Models.startTranslation(revision, text, target, source);
+export function startTranslation(
+  revision: string,
+  text: string,
+  target: string,
+  source: string,
+  style: TranslationStyle = "standard",
+  glossary: GlossaryEntry[] = [],
+): Promise<string> {
+  return Models.startTranslation(revision, text, target, source, style, glossary);
 }
 
 export function pollTranslation(token: string): Promise<TranslationUpdate> {
@@ -289,6 +349,24 @@ export function recognizeSelection(
   signal: AbortSignal,
 ): Promise<Native.RecognitionResult> {
   return Capture.recognizeSelection.with({ signal })(mode, language, pngBase64);
+}
+
+export function recognizeTranslateImage(
+  language: string,
+  pngBase64: string,
+  signal: AbortSignal,
+): Promise<string> {
+  return Capture.recognizeTranslateImage.with({ signal })(language, pngBase64);
+}
+
+export function setTranslateAlwaysOnTop(pinned: boolean): Promise<boolean> {
+  if (!hasNative) return Promise.resolve(pinned);
+  return Capture.setTranslateAlwaysOnTop(pinned);
+}
+
+export function translateAlwaysOnTop(): Promise<boolean> {
+  if (!hasNative) return Promise.resolve(false);
+  return Capture.translateAlwaysOnTop();
 }
 
 export function copyRecognizedText(text: string, signal: AbortSignal): Promise<void> {

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/egoist/mygo"
 )
 
 // TranslationUpdate is the polling payload for a running translation.
@@ -37,7 +39,19 @@ func newTranslationToken() (string, error) {
 // StartTranslation begins a streaming translation and returns the token the
 // page polls with PollTranslation. Errors that would fail before any request
 // are returned here; later failures arrive in the update payload.
-func (service *ModelService) StartTranslation(revision, text, target, source string) (string, error) {
+func (service *ModelService) StartTranslation(ctx context.Context, revision, text, target, source, style string, glossary []GlossaryEntry) (string, error) {
+	return service.startTranslationFor(ctx, mygo.CallerWindow(ctx), revision, text, target, source, style, glossary)
+}
+
+func (service *ModelService) startTranslationFor(ctx context.Context, caller *mygo.Window, revision, text, target, source, style string, glossary []GlossaryEntry) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if service.app != nil && !service.app.isTranslateWindow(caller) {
+		if _, err := service.app.recognitionGenerationFor(ctx, caller); err != nil {
+			return "", err
+		}
+	}
 	profile, err := service.profileForRevision(revision)
 	if err != nil {
 		return "", err
@@ -45,7 +59,7 @@ func (service *ModelService) StartTranslation(revision, text, target, source str
 	if strings.TrimSpace(text) == "" {
 		return "", errors.New("没有可翻译的文字")
 	}
-	if _, err := translationPrompt(target, source); err != nil {
+	if _, err := translationPromptForText(text, target, source, style, glossary); err != nil {
 		return "", err
 	}
 	token, err := newTranslationToken()
@@ -62,7 +76,7 @@ func (service *ModelService) StartTranslation(revision, text, target, source str
 	service.streams[token] = stream
 	service.streamsMu.Unlock()
 	go func() {
-		_, runErr := translateWithModelStream(ctx, modelHTTPClient, profile, text, target, source, func(delta string) {
+		_, runErr := translateWithModelStream(ctx, modelHTTPClient, profile, text, target, source, style, glossary, func(delta string) {
 			stream.mu.Lock()
 			stream.text.WriteString(delta)
 			stream.mu.Unlock()

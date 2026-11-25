@@ -82,7 +82,9 @@ type App struct {
 	lineReady  bool
 	lineState  clothesline.State
 
-	translate *mygo.Window
+	translate               *mygo.Window
+	translatePinned         bool
+	setTranslateAlwaysOnTop func(bool)
 
 	scroll         *scrollSession
 	scrollMu       sync.Mutex
@@ -391,6 +393,32 @@ func (a *App) ShowTranslate() {
 	mygo.App.Focus()
 	win.Show()
 	win.Focus()
+}
+
+func (a *App) setTranslateAlwaysOnTopFor(caller *mygo.Window, pinned bool) (bool, error) {
+	if !a.isTranslateWindow(caller) {
+		return false, errRecognitionSelection
+	}
+	a.mu.Lock()
+	a.translatePinned = pinned
+	win := a.translate
+	hook := a.setTranslateAlwaysOnTop
+	a.mu.Unlock()
+	if hook != nil {
+		hook(pinned)
+	} else if win != nil && !win.IsDestroyed() {
+		win.SetAlwaysOnTop(pinned)
+	}
+	return pinned, nil
+}
+
+func (a *App) translateAlwaysOnTopFor(caller *mygo.Window) (bool, error) {
+	if !a.isTranslateWindow(caller) {
+		return false, errRecognitionSelection
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.translatePinned, nil
 }
 
 func (a *App) createOverlay() {

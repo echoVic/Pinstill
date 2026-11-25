@@ -214,6 +214,16 @@ func (s *CaptureService) OverlayInfo(ctx context.Context) OverlayInfo {
 // ShowMainWindow reveals and focuses the main window.
 func (s *CaptureService) ShowMainWindow() { s.app.showMain() }
 
+// SetTranslateAlwaysOnTop toggles whether the standalone translation window stays on top.
+func (s *CaptureService) SetTranslateAlwaysOnTop(ctx context.Context, pinned bool) (bool, error) {
+	return s.app.setTranslateAlwaysOnTopFor(mygo.CallerWindow(ctx), pinned)
+}
+
+// TranslateAlwaysOnTop reports whether the standalone translation window stays on top.
+func (s *CaptureService) TranslateAlwaysOnTop(ctx context.Context) (bool, error) {
+	return s.app.translateAlwaysOnTopFor(mygo.CallerWindow(ctx))
+}
+
 // HistoryService reads and edits the persisted captures.
 type HistoryService struct{ app *App }
 

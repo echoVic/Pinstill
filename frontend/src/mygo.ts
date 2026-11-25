@@ -29,6 +29,11 @@ export interface CaptureResult {
   id: string;
 }
 
+export interface GlossaryEntry {
+  source: string;
+  target: string;
+}
+
 /** HistoryCapture is a persisted capture loaded into the editor. */
 export interface HistoryCapture {
   id: string;
@@ -85,12 +90,33 @@ export interface ModelInput {
   apiKey: string;
 }
 
+export interface ModelPreset {
+  id: string;
+  name: string;
+  mode: string;
+  baseUrl: string;
+  model: string;
+  hasApiKey: boolean;
+  revision: string;
+}
+
+export interface ModelPresetInput {
+  id: string;
+  name: string;
+  mode: string;
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+}
+
 export interface ModelSettings {
   mode: string;
   baseUrl: string;
   model: string;
   hasApiKey: boolean;
   revision: string;
+  activeId?: string;
+  presets?: ModelPreset[];
 }
 
 /**
@@ -267,6 +293,28 @@ export interface Settings {
   pinBorder: boolean;
 }
 
+export interface TTSAudio {
+  mimeType: string;
+  dataBase64: string;
+}
+
+export interface TTSInput {
+  provider: string;
+  baseUrl: string;
+  model: string;
+  voice: string;
+  apiKey: string;
+}
+
+export interface TTSSettings {
+  provider: string;
+  baseUrl: string;
+  model: string;
+  voice: string;
+  hasApiKey: boolean;
+  revision: string;
+}
+
 /** ToastPayload asks a page to show a transient status message. */
 export interface ToastPayload {
   text: string;
@@ -371,6 +419,7 @@ export const Capture = {
   prepareSelectionFast: bind<[Rect], OverlayCapturePayload>("Capture.PrepareSelectionFast", (rect: Rect) => [rect]),
   previewOverlaySelection: bind<[number, Rect | null], void>("Capture.PreviewOverlaySelection", (session: number, rect: Rect | null) => [session, rect]),
   recognizeSelection: bind<[string, string, string], RecognitionResult>("Capture.RecognizeSelection", (kind: string, language: string, dataBase64: string) => [kind, language, dataBase64]),
+  recognizeTranslateImage: bind<[string, string], string>("Capture.RecognizeTranslateImage", (language: string, dataBase64: string) => [language, dataBase64]),
   removeClotheslineImage: bind<[string], void>("Capture.RemoveClotheslineImage", (id: string) => [id]),
   /**
    * RequestScreenPermission asks the OS for screen recording access. macOS shows
@@ -400,6 +449,8 @@ export const Capture = {
   setScrollAuto: bind<[string, boolean], void>("Capture.SetScrollAuto", (sessionID: string, enabled: boolean) => [sessionID, enabled]),
   /** SetScrollPaused pauses or resumes frame capturing for the running session. */
   setScrollPaused: bind<[string, boolean], void>("Capture.SetScrollPaused", (sessionID: string, paused: boolean) => [sessionID, paused]),
+  /** SetTranslateAlwaysOnTop toggles whether the standalone translation window stays on top. */
+  setTranslateAlwaysOnTop: bind<[boolean], boolean>("Capture.SetTranslateAlwaysOnTop", (pinned: boolean) => [pinned]),
   /**
    * Settings returns the settings currently applied, so pages (the overlay)
    * can honor the user's default action.
@@ -410,6 +461,8 @@ export const Capture = {
   showPinManager: bind<[], void>("Capture.ShowPinManager", () => []),
   /** StartScroll begins a manual scrolling capture for the current selection. */
   startScroll: bind<[Rect], void>("Capture.StartScroll", (rect: Rect) => [rect]),
+  /** TranslateAlwaysOnTop reports whether the standalone translation window stays on top. */
+  translateAlwaysOnTop: bind<[], boolean>("Capture.TranslateAlwaysOnTop", () => []),
   /** UpdatePinState persists the size and opacity the page reports. */
   updatePinState: bind<[string, PinWindowState], void>("Capture.UpdatePinState", (id: string, state: PinWindowState) => [id, state]),
   useClotheslineImage: bind<[string, string], boolean>("Capture.UseClotheslineImage", (id: string, action: string) => [id, action]),
@@ -443,18 +496,26 @@ export const History = {
 export const Models = {
   /** CancelTranslation stops a running translation, e.g. when the page is closed. */
   cancelTranslation: bind<[string], void>("Models.CancelTranslation", (token: string) => [token]),
+  deletePreset: bind<[string], ModelSettings>("Models.DeletePreset", (id: string) => [id]),
   /** PollTranslation reports the translation so far. The page polls until Done. */
   pollTranslation: bind<[string], TranslationUpdate>("Models.PollTranslation", (token: string) => [token]),
   recognizeImage: bind<[string, string], string>("Models.RecognizeImage", (revision: string, imageBase64: string) => [revision, imageBase64]),
+  savePreset: bind<[ModelPresetInput], ModelSettings>("Models.SavePreset", (input: ModelPresetInput) => [input]),
   saveSettings: bind<[ModelInput], ModelSettings>("Models.SaveSettings", (input: ModelInput) => [input]),
+  saveTTSSettings: bind<[TTSInput], TTSSettings>("Models.SaveTTSSettings", (input: TTSInput) => [input]),
+  selectPreset: bind<[string], ModelSettings>("Models.SelectPreset", (id: string) => [id]),
   settings: bind<[], ModelSettings>("Models.Settings", () => []),
   /**
    * StartTranslation begins a streaming translation and returns the token the
    * page polls with PollTranslation. Errors that would fail before any request
    * are returned here; later failures arrive in the update payload.
    */
-  startTranslation: bind<[string, string, string, string], string>("Models.StartTranslation", (revision: string, text: string, target: string, source: string) => [revision, text, target, source]),
-  translateText: bind<[string, string, string, string], string>("Models.TranslateText", (revision: string, text: string, target: string, source: string) => [revision, text, target, source]),
+  startTranslation: bind<[string, string, string, string, string, GlossaryEntry[]], string>("Models.StartTranslation", (revision: string, text: string, target: string, source: string, style: string, glossary: GlossaryEntry[]) => [revision, text, target, source, style, glossary]),
+  synthesizeSpeech: bind<[string, string], TTSAudio>("Models.SynthesizeSpeech", (revision: string, text: string) => [revision, text]),
+  ttsSettings: bind<[], TTSSettings>("Models.TTSSettings", () => []),
+  testConnection: bind<[ModelPresetInput], string>("Models.TestConnection", (input: ModelPresetInput) => [input]),
+  testTTS: bind<[TTSInput], TTSAudio>("Models.TestTTS", (input: TTSInput) => [input]),
+  translateText: bind<[string, string, string, string, string, GlossaryEntry[]], string>("Models.TranslateText", (revision: string, text: string, target: string, source: string, style: string, glossary: GlossaryEntry[]) => [revision, text, target, source, style, glossary]),
 } as const;
 
 // ---- Events ----

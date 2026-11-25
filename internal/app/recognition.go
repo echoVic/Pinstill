@@ -31,17 +31,52 @@ type RecognitionCode struct {
 	URL  string `json:"url,omitempty"`
 }
 
+func (app *App) isMainWindow(caller *mygo.Window) bool {
+	if app == nil || caller == nil {
+		return false
+	}
+	app.mu.Lock()
+	defer app.mu.Unlock()
+	return !app.quitting && caller == app.main
+}
+
+func (app *App) isTranslateWindow(caller *mygo.Window) bool {
+	if app == nil || caller == nil {
+		return false
+	}
+	app.mu.Lock()
+	defer app.mu.Unlock()
+	return !app.quitting && caller == app.translate
+}
+
 func (app *App) recognitionGeneration(ctx context.Context) (uint64, error) {
+	return app.recognitionGenerationFor(ctx, mygo.CallerWindow(ctx))
+}
+
+func (app *App) recognitionGenerationFor(ctx context.Context, caller *mygo.Window) (uint64, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	caller := mygo.CallerWindow(ctx)
+	if app == nil {
+		return 0, errRecognitionSelection
+	}
 	app.mu.Lock()
 	defer app.mu.Unlock()
 	if caller == nil || caller != app.overlay || !app.overlayCommitted || !app.capturing || app.quitting || app.scroll != nil || app.overlayPreviewID == "" {
 		return 0, errRecognitionSelection
 	}
 	return app.captureGeneration, nil
+}
+
+func (app *App) authorizeRecognizedCopy(ctx context.Context, caller *mygo.Window) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if app.isTranslateWindow(caller) {
+		return nil
+	}
+	_, err := app.recognitionGenerationFor(ctx, caller)
+	return err
 }
 
 func (service *CaptureService) RecognizeSelection(ctx context.Context, kind, language, dataBase64 string) (RecognitionResult, error) {
@@ -69,6 +104,32 @@ func (service *CaptureService) RecognizeSelection(ctx context.Context, kind, lan
 		return RecognitionResult{}, errRecognitionSelection
 	}
 	return result, nil
+}
+
+func (service *CaptureService) RecognizeTranslateImage(ctx context.Context, language, dataBase64 string) (string, error) {
+	return service.recognizeTranslateImageFor(ctx, mygo.CallerWindow(ctx), language, dataBase64)
+}
+
+func (service *CaptureService) recognizeTranslateImageFor(ctx context.Context, caller *mygo.Window, language, dataBase64 string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if !service.app.isTranslateWindow(caller) {
+		return "", errRecognitionSelection
+	}
+	if !recognitionMu.TryLock() {
+		return "", errors.New("上一次识别正在结束，请重试")
+	}
+	defer recognitionMu.Unlock()
+	data, err := decodeImageBase64(dataBase64)
+	if err != nil {
+		return "", err
+	}
+	result, err := recognizePNG(ctx, "ocr", language, data)
+	if err != nil {
+		return "", err
+	}
+	return result.Text, nil
 }
 
 func recognizePNG(ctx context.Context, kind, language string, data []byte) (RecognitionResult, error) {
@@ -129,7 +190,7 @@ func recognizedWebURL(value string) string {
 }
 
 func (service *CaptureService) CopyRecognizedText(ctx context.Context, text string) error {
-	if _, err := service.app.recognitionGeneration(ctx); err != nil {
+	if err := service.app.authorizeRecognizedCopy(ctx, mygo.CallerWindow(ctx)); err != nil {
 		return err
 	}
 	if text == "" {
