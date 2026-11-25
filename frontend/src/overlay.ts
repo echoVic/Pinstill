@@ -37,7 +37,6 @@ import {
   type OverlayCapture,
   type OverlayInfo,
   type OverlayWindow,
-  type RecognitionMode,
   type Rect,
 } from "./bridge";
 import {
@@ -48,7 +47,7 @@ import {
 } from "./colors";
 import { ColorPalettePanel, createPaletteToggleButton } from "./palette";
 import { PrecisionInspector } from "./precision";
-import { RecognitionPanel } from "./recognition";
+import { RecognitionPanel, type RecognitionAction } from "./recognition";
 import { DRAW_TOOLS, TOOLS, TOOL_ICONS, isDrawTool, type ToolId } from "./tools";
 import { blobToBase64, decodeImageBlob, flashButtonSuccess, setButtonPending } from "./util";
 
@@ -106,18 +105,12 @@ const EXTRA_TOOL_DEFS: Array<{
   tool: string;
   label: string;
   icon: string;
-  placeholder: boolean;
 }> = [
-  { tool: "translate", label: "翻译", icon: "languages", placeholder: true },
-  { tool: "ocr", label: "提取文字", icon: "scan-text", placeholder: false },
-  { tool: "qr", label: "识别二维码", icon: "qr-code", placeholder: false },
-  // Real Round 4 action: hands the selection to the scrolling-capture session.
-  { tool: "scroll", label: "滚动截图", icon: "scroll-text", placeholder: false },
+  { tool: "translate", label: "翻译", icon: "languages" },
+  { tool: "ocr", label: "提取文字", icon: "scan-text" },
+  { tool: "qr", label: "识别二维码", icon: "qr-code" },
+  { tool: "scroll", label: "滚动截图", icon: "scroll-text" },
 ];
-
-const PLACEHOLDER_TOOLS = new Set(
-  EXTRA_TOOL_DEFS.filter((def) => def.placeholder).map((def) => def.tool),
-);
 
 // Lucide-style inline icons (the overlay page does not pull in the icon set).
 const SVG_PATHS: Record<string, string> = {
@@ -725,7 +718,7 @@ function buildToolbar(): void {
     button.className = "tool-btn";
     button.dataset.tool = def.tool;
     button.setAttribute("aria-label", def.label);
-    button.title = def.placeholder ? `${def.label}（待接入）` : def.label;
+    button.title = def.label;
     button.innerHTML = `${svgIcon(def.icon)}<span class="tip">${def.label}</span>`;
     toolsHost.append(button);
   }
@@ -819,9 +812,8 @@ function onToolbarClick(event: Event): void {
     if (tool === "undo") undo();
     else if (tool === "redo") redo();
     else if (tool === "scroll") void startScrollFromToolbar();
-    else if (tool === "ocr" || tool === "qr") void startRecognition(tool);
+    else if (tool === "ocr" || tool === "qr" || tool === "translate") void startRecognition(tool);
     else if (tool === "watermark") toggleWatermarkTool();
-    else if (tool && PLACEHOLDER_TOOLS.has(tool)) showRecognitionPlaceholder(tool);
     else if (tool) selectTool(tool as ToolId);
     return;
   }
@@ -866,19 +858,7 @@ async function startScrollFromToolbar(): Promise<void> {
   }
 }
 
-function showRecognitionPlaceholder(tool: string): void {
-  const def = EXTRA_TOOL_DEFS.find((entry) => entry.tool === tool);
-  if (!def || phase !== "annotating") return;
-  setToolbarStatus(`${def.label} · 待接入`, "info");
-  showTransient(`${def.label} · 待接入：桌面版接入前，可先复制/保存当前截图`, 3200);
-  window.setTimeout(() => {
-    if (phase === "annotating" && toolbarStatus.textContent === `${def.label} · 待接入`) {
-      setToolbarStatus("");
-    }
-  }, 3200);
-}
-
-async function startRecognition(mode: RecognitionMode): Promise<void> {
+async function startRecognition(mode: RecognitionAction): Promise<void> {
   if (keyboardAdjustment && !await settleKeyboardAdjustment()) return;
   if (phase !== "annotating" || !engine || selectionDrag || recognitionPanel.open) return;
   if (!hasNative || !isMacPlatform()) {
@@ -892,13 +872,15 @@ async function startRecognition(mode: RecognitionMode): Promise<void> {
     drawingPointer = null;
   }
   lastCanvasClick = null;
-  await recognitionPanel.show(mode, storedPreferences.ocrLanguage, async () => {
+  let image: Promise<string> | undefined;
+  const captureImage = async (): Promise<string> => {
     const blob = await new Promise<Blob>((resolve, reject) => {
       canvas.toBlob((image) => image ? resolve(image) : reject(new Error("无法读取选区画面")), "image/png");
     });
     if (blob.size > MAX_ENCODED_BYTES) throw new Error("图片文件超过上限（64 MiB）");
     return blobToBase64(blob);
-  });
+  };
+  await recognitionPanel.show(mode, storedPreferences, () => image ??= captureImage());
 }
 
 function selectedAnnotation(): Readonly<Shape> | null {
@@ -2480,7 +2462,9 @@ onOverlayShown((payload) => {
 });
 
 onOverlayHidden((session) => {
-  if (session === displayInfo?.session) clearBackdrop();
+  if (session !== displayInfo?.session) return;
+  clearBackdrop();
+  recognitionPanel.close();
 });
 
 onOverlayPreview(({ session, rect }) => {

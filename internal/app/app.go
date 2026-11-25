@@ -122,6 +122,7 @@ func New() *App {
 func (a *App) Bind() {
 	mygo.BindAs("Capture", &CaptureService{app: a})
 	mygo.BindAs("History", &HistoryService{app: a})
+	mygo.BindAs("Models", &ModelService{app: a, secrets: mygo.Secrets})
 }
 
 // Start opens the app's windows and native integrations. Call it from

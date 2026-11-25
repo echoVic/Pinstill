@@ -36,6 +36,7 @@ import {
   type PinArchiveEntry,
 } from "./bridge";
 import { refreshPinstillIcons } from "./icons";
+import { renderModelSettings } from "./model-settings";
 import {
   DEFAULT_PREFERENCES,
   SETTINGS_KEY_LABELS,
@@ -634,9 +635,13 @@ function renderSettings(): void {
     for (const row of group.rows) card.append(renderSettingRow(row));
     body.append(card);
   }
+  if (category.id === "recognition") body.append(renderModelSettings(hasNative && isMacPlatform()));
   // Permissions come from the OS, not from saved preferences: no "reset".
   const resetButton = document.getElementById("resetSettings") as HTMLButtonElement | null;
-  if (resetButton) resetButton.hidden = category.id === "permissions";
+  if (resetButton) {
+    resetButton.hidden = category.id === "permissions";
+    resetButton.textContent = category.id === "recognition" ? "恢复识别与翻译偏好" : "恢复本分类默认值";
+  }
   if (category.id === "permissions") void refreshPermissionCenter();
 }
 

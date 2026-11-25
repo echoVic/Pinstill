@@ -44,7 +44,6 @@ export interface Preferences {
   // 识别与翻译
   ocrLanguage: string;
   translateTo: string;
-  translationProvider: string;
   sideBySide: boolean;
 }
 
@@ -411,16 +410,6 @@ export const SETTINGS_SCHEMA: SettingsCategory[] = [
             ],
           },
           {
-            key: "translationProvider",
-            name: "翻译服务",
-            description: "识别功能将在后续版本接入，此处先保存偏好。",
-            type: "select",
-            options: [
-              { value: "系统翻译", label: "系统翻译" },
-              { value: "自定义服务（待接入）", label: "自定义服务（待接入）" },
-            ],
-          },
-          {
             key: "sideBySide",
             name: "同时显示原文",
             description: "对照阅读原文与翻译结果。",
@@ -434,7 +423,7 @@ export const SETTINGS_SCHEMA: SettingsCategory[] = [
     id: "permissions",
     name: "权限",
     icon: "permissions",
-    description: "Pinstill 只在本机处理截图。系统权限决定能否读取屏幕内容与自动滚动。",
+    description: "系统权限决定能否读取屏幕内容、自动滚动和在登录时启动。",
     groups: [
       {
         title: "系统权限",
@@ -493,7 +482,6 @@ export const DEFAULT_PREFERENCES: Preferences = {
   pinBorder: true,
   ocrLanguage: "中英文混合",
   translateTo: "简体中文",
-  translationProvider: "系统翻译",
   sideBySide: true,
 };
 

@@ -78,6 +78,21 @@ export interface ManagedPin {
   createdAt: string;
 }
 
+export interface ModelInput {
+  mode: string;
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+}
+
+export interface ModelSettings {
+  mode: string;
+  baseUrl: string;
+  model: string;
+  hasApiKey: boolean;
+  revision: string;
+}
+
 /**
  * OverlayCapturePayload hands a freshly captured selection back to the
  * overlay page, which annotates it in place on the desktop.
@@ -415,6 +430,13 @@ export const History = {
    * the chosen path (empty when the user cancelled).
    */
   save: bind<[string], string>("History.Save", (id: string) => [id]),
+} as const;
+
+export const Models = {
+  recognizeImage: bind<[string, string], string>("Models.RecognizeImage", (revision: string, imageBase64: string) => [revision, imageBase64]),
+  saveSettings: bind<[ModelInput], ModelSettings>("Models.SaveSettings", (input: ModelInput) => [input]),
+  settings: bind<[], ModelSettings>("Models.Settings", () => []),
+  translateText: bind<[string, string, string], string>("Models.TranslateText", (revision: string, text: string, target: string) => [revision, text, target]),
 } as const;
 
 // ---- Events ----

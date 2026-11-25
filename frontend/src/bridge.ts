@@ -8,7 +8,7 @@
 // stays clickable.
 
 import { isMyGo } from "mygo-runtime";
-import { Capture, History, events } from "./mygo";
+import { Capture, History, Models, events } from "./mygo";
 import type * as Native from "./mygo";
 import { downloadBlob } from "./util";
 
@@ -246,6 +246,24 @@ export async function copyPixelColor(hex: string): Promise<void> {
 
 export type RecognitionMode = "ocr" | "qr";
 export type RecognitionCode = Native.RecognitionCode;
+export type ModelInput = Native.ModelInput;
+export type ModelSettings = Native.ModelSettings;
+
+export function modelSettings(signal?: AbortSignal): Promise<ModelSettings> {
+  return Models.settings.with({ signal })();
+}
+
+export function saveModelSettings(input: ModelInput): Promise<ModelSettings> {
+  return Models.saveSettings(input);
+}
+
+export function translateModel(revision: string, text: string, target: string, signal: AbortSignal): Promise<string> {
+  return Models.translateText.with({ signal })(revision, text, target);
+}
+
+export function recognizeWithModel(revision: string, pngBase64: string, signal: AbortSignal): Promise<string> {
+  return Models.recognizeImage.with({ signal })(revision, pngBase64);
+}
 
 export function recognizeSelection(
   mode: RecognitionMode,

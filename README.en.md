@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | English
 
-Pinstill is a free, open-source screenshot tool for Mac. Press **⌘⇧1** to select a region, then mark it up, capture a scrolling page, extract text or read QR codes. Keep several reference images side by side just below the menu bar while you work. Capture and recognition run on your Mac.
+Pinstill is a free, open-source screenshot tool for Mac. Press **⌘⇧1** to select a region, then mark it up, capture a scrolling page, extract text or read QR codes. Keep several reference images side by side just below the menu bar while you work. Capture and built-in recognition run on your Mac.
 
 [Website](https://pinstill.echovic.com/en/) · [Download the latest release](https://github.com/echoVic/Pinstill/releases/latest) · [Changelog](CHANGELOG.md)
 
@@ -35,11 +35,19 @@ Starting with `v0.1.3`, Pinstill checks for updates in the background. You can a
 
 ## Text extraction and QR codes
 
-Select a region and choose **Extract Text**. Pinstill recognises Chinese and English by default, preserves line breaks and lets you copy a selection or the whole result. Choose a recognition language in Settings → Recognition & Translation.
+Select a region and choose **Extract Text**. With the model service off, built-in OCR recognises Chinese and English by default and preserves line breaks. Copy a selection or the whole result. Choose a language for built-in OCR in Settings → Recognition & Translation.
 
-Choose **Scan QR Code** to see each code's contents. Copy the text or review the full web address before opening it. Opening a link in your browser ends the capture. Both tools use macOS Vision to recognise the current selection with its markup. Press `Esc` to close the results and continue marking up or saving. [Recognition demo](https://pinstill.echovic.com/en/#recognition)
+Choose **Scan QR Code** to scan your selection on your Mac with macOS Vision. Copy the text or review the full web address before opening it. Opening a link in your browser ends the capture. Press `Esc` to close the results and continue marking up or saving. [Recognition demo](https://pinstill.echovic.com/en/#recognition)
 
 ![Text extraction and QR results with demo content](outputs/pinstill-recognition-mock.png)
+
+### Screenshot translation and model OCR
+
+Under Settings → Recognition & Translation → Model Service, choose a local model or a cloud API and enter the OpenAI-compatible base URL and model ID. Ollama defaults to `http://127.0.0.1:11434/v1`, and LM Studio defaults to `http://127.0.0.1:1234/v1`. Cloud services require HTTPS and an API key. The system keychain stores the configuration. Select Off and save to remove it.
+
+- **Extract Text**　Once configured, an image-capable model handles text extraction first, including handwriting and complex layouts. Translate the result from the same panel, or switch to built-in OCR.
+- **Translate**　Pinstill uses the configured model to recognise the selection, then translates the extracted text. Copy the original and translation separately. Choose on-device OCR to send only the extracted text to the model.
+- **Cloud confirmation**　Pinstill shows the destination and asks before sending the selected image.
 
 ## Scrolling capture and history
 
@@ -49,7 +57,7 @@ Choose **Scan QR Code** to see each code's contents. Copy the text or review the
 ## Data and permissions
 
 - Capture history, pins and clothesline images use `captures/`, `pins/` and `clothesline/` under `~/Library/Application Support/Pinstill/`. The current selection and scrolling preview are kept in memory.
-- The app reads screenshots through the local `shot://localhost/...` protocol. Image processing and recognition happen on your Mac. Pinstill connects to GitHub to check for and download updates.
+- The app reads screenshots through the local `shot://localhost/...` protocol. Built-in OCR and QR recognition run on your Mac. Model services are off by default. When enabled, they receive content from the actions described above. Pinstill connects to GitHub to check for and download updates.
 - Screen Recording permission is needed for capture. Automatic scrolling also needs Accessibility. Settings → Permissions shows permission and launch-at-login status.
 
 ## Development
@@ -81,7 +89,7 @@ To run macOS app self-tests, quit Pinstill and run `bash work/e2e.sh`. Add `--sk
 ## Known limitations
 
 - The Windows capture backend is at the cross-compilation and synthetic-test stage. Mixed DPI, negative coordinates and multi-monitor setups still need real-hardware validation.
-- Screenshot translation is pending. Scrolling capture can miss self-drawn scrolling, dynamic headers and fully repeating content.
+- Scrolling capture can miss self-drawn scrolling, dynamic headers and fully repeating content.
 - On macOS, a cross-display capture uses the highest pixel density in the selection and keeps any gaps between displays transparent. Scrolling capture needs a region within one display.
 - Launch at login fails when the app isn't in `/Applications`; the settings page reports that as it is.
 

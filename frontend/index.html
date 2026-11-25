@@ -164,11 +164,14 @@ body.preview-open .workspace{overflow:hidden}
 .setting-label{font-size:13px;color:#e8e1d5;line-height:1.5}
 .setting-description{font-size:11px;color:#a49c8e;line-height:1.6;margin-top:4px;max-width:390px}
 .settings-control{flex-shrink:0}
-.settings-control select,.settings-control input[type=text],.shortcut-record{
+.settings-control select,.settings-control input[type=text],.settings-control input[type=url],.settings-control input[type=password],.shortcut-record{
   font:inherit;font-size:12px;border:1px solid #ffffff22;background:#302d25;color:#eee4d5;
   border-radius:7px;padding:8px 11px;max-width:200px;min-width:130px;
 }
 .settings-control select{color-scheme:dark}
+.model-settings-footer{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px 16px;padding:12px 20px;border-top:1px solid #ffffff0b}
+.model-settings-status{margin:0;color:#a9a295;font-size:11px;line-height:1.6}
+.model-settings-status.error{color:#f1a297}
 .settings-control input[type=color]{width:36px;height:30px;border:1px solid #ffffff20;border-radius:6px;background:#302d25;padding:3px;cursor:pointer}
 .settings-control input[type=range]{accent-color:#e8ac64;width:90px}
 .setting-range{display:flex;align-items:center;gap:10px;font-size:12px;color:#c6bba9}
@@ -289,7 +292,7 @@ select:focus-visible,input[type=text]:focus-visible,input[type=range]:focus-visi
   .settings-nav{position:static;flex-direction:row;flex-wrap:wrap;gap:3px}
   .settings-nav button{padding:9px 11px;font-size:12px}
   .setting-row{gap:12px;padding:16px}
-  .settings-control select,.settings-control input[type=text],.shortcut-record{min-width:100px;max-width:145px}
+  .settings-control select,.settings-control input[type=text],.settings-control input[type=url],.settings-control input[type=password],.shortcut-record{min-width:100px;max-width:145px}
   .settings-description{margin-bottom:18px}
   .settings-footer{align-items:flex-start}
   .history-grid{grid-template-columns:1fr}
@@ -309,7 +312,7 @@ select:focus-visible,input[type=text]:focus-visible,input[type=range]:focus-visi
       <button class="active" data-view="history" aria-current="page">历史</button>
       <button data-view="settings">偏好设置</button>
     </nav>
-    <div class="rail-foot">本地处理 · 不上传截图<div class="status" id="permissionStatus"><span class="dot"></span><span id="permissionLabel">已准备好截取</span></div></div>
+    <div class="rail-foot">本地截图 · 可选模型服务<div class="status" id="permissionStatus"><span class="dot"></span><span id="permissionLabel">已准备好截取</span></div></div>
   </aside>
   <main class="workspace"><div class="main">
     <div class="top">
@@ -352,7 +355,7 @@ select:focus-visible,input[type=text]:focus-visible,input[type=range]:focus-visi
         <p class="archived-pin-status" id="archivedPinStatus" role="status" aria-live="polite"></p>
       </section>
     </section>
-    <section class="settings-view" id="settingsView" hidden aria-label="偏好设置"><div class="settings-layout"><nav class="settings-nav" aria-label="设置分类" id="settingsNav"></nav><div class="settings-content"><div id="settingsBody"></div><div class="settings-footer"><span class="settings-status" id="settingsStatus" role="status">设置已保存在此浏览器</span><button id="resetSettings" type="button">恢复本分类默认值</button></div><p class="settings-preview-note" id="settingsPreviewNote">设计预览 · 设置保存在当前浏览器。开机启动、系统快捷键、文件夹访问及识别服务将在桌面应用中接入。</p></div></div></section>
+    <section class="settings-view" id="settingsView" hidden aria-label="偏好设置"><div class="settings-layout"><nav class="settings-nav" aria-label="设置分类" id="settingsNav"></nav><div class="settings-content"><div id="settingsBody"></div><div class="settings-footer"><span class="settings-status" id="settingsStatus" role="status">设置已保存在此浏览器</span><button id="resetSettings" type="button">恢复本分类默认值</button></div><p class="settings-preview-note" id="settingsPreviewNote">预览设置保存在当前浏览器。系统权限和模型服务在桌面应用中使用。</p></div></div></section>
   </div></main>
 </div>
 <div class="history-preview" id="historyPreview" role="dialog" aria-modal="true" aria-label="历史截图预览" hidden>
