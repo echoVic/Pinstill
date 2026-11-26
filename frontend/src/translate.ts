@@ -9,6 +9,7 @@ import {
   selectModelPreset,
   setTranslateAlwaysOnTop,
   showMainWindow,
+  takeTranslateDraft,
   startTranslation,
   synthesizeSpeech,
   ttsSettings,
@@ -183,6 +184,32 @@ function syncActionState(): void {
   copyBoth.disabled = !hasSource || !hasResult;
   syncStarButton();
   syncSpeechButtons();
+}
+
+function base64ToBlob(base64: string): Blob {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: "image/png" });
+}
+
+async function pullDraft(): Promise<void> {
+  try {
+    const draft = await takeTranslateDraft();
+    if (draft.image) {
+      await handleImageFile(base64ToBlob(draft.image));
+      return;
+    }
+    if (!draft.source) return;
+    source.value = draft.source;
+    result.value = draft.target;
+    currentHistoryId = "";
+    currentStarred = false;
+    syncActionState();
+    if (!draft.target) void translate();
+  } catch {
+    // Nothing is waiting; keep the current contents.
+  }
 }
 
 function applyPinnedState(pinned: boolean): void {
@@ -1040,6 +1067,7 @@ window.addEventListener("pagehide", () => {
 });
 
 window.addEventListener("focus", () => {
+  void pullDraft();
   void refreshModelAvailability();
   void refreshTTSAvailability();
   if (
@@ -1067,3 +1095,4 @@ syncActionState();
 void refreshModelAvailability();
 void refreshTTSAvailability();
 source.focus();
+void pullDraft();

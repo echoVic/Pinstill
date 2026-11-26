@@ -83,6 +83,7 @@ type App struct {
 	lineState  clothesline.State
 
 	translate               *mygo.Window
+	translateDraft          *TranslateDraft
 	translatePinned         bool
 	setTranslateAlwaysOnTop func(bool)
 
@@ -1323,4 +1324,33 @@ func (a *App) clearHistory() error {
 	}
 	a.emitHistoryChanged()
 	return nil
+}
+// TranslateDraft carries text from a capture into the translate window.
+type TranslateDraft struct {
+	Source string `json:"source"`
+	Target string `json:"target"`
+	Image  string `json:"image"`
+}
+
+func (a *App) setTranslateDraft(source, target string) {
+	a.mu.Lock()
+	a.translateDraft = &TranslateDraft{Source: source, Target: target}
+	a.mu.Unlock()
+}
+
+func (a *App) setTranslateDraftImage(imageBase64 string) {
+	a.mu.Lock()
+	a.translateDraft = &TranslateDraft{Image: imageBase64}
+	a.mu.Unlock()
+}
+
+func (a *App) takeTranslateDraft() TranslateDraft {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	draft := a.translateDraft
+	a.translateDraft = nil
+	if draft == nil {
+		return TranslateDraft{}
+	}
+	return *draft
 }

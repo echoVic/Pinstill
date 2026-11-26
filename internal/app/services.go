@@ -214,6 +214,25 @@ func (s *CaptureService) OverlayInfo(ctx context.Context) OverlayInfo {
 // ShowMainWindow reveals and focuses the main window.
 func (s *CaptureService) ShowMainWindow() { s.app.showMain() }
 
+// ShowTranslateWith opens the translate window with text already filled in.
+func (s *CaptureService) ShowTranslateWith(source, target string) error {
+	s.app.setTranslateDraft(source, target)
+	s.app.ShowTranslate()
+	return nil
+}
+
+// ShowTranslateImage opens the translate window with a screenshot to read.
+func (s *CaptureService) ShowTranslateImage(imageBase64 string) error {
+	s.app.setTranslateDraftImage(imageBase64)
+	s.app.ShowTranslate()
+	return nil
+}
+
+// TakeTranslateDraft returns and clears text waiting for the translate window.
+func (s *CaptureService) TakeTranslateDraft() (TranslateDraft, error) {
+	return s.app.takeTranslateDraft(), nil
+}
+
 // SetTranslateAlwaysOnTop toggles whether the standalone translation window stays on top.
 func (s *CaptureService) SetTranslateAlwaysOnTop(ctx context.Context, pinned bool) (bool, error) {
 	return s.app.setTranslateAlwaysOnTopFor(mygo.CallerWindow(ctx), pinned)

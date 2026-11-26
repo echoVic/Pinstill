@@ -527,6 +527,27 @@ export function showMainWindow(): Promise<void> {
   return Capture.showMainWindow();
 }
 
+/** Text handed to the translate window from a capture. */
+export type TranslateDraft = Native.TranslateDraft;
+
+/** Opens the translate window with text already filled in. */
+export function showTranslateWith(source: string, target: string): Promise<void> {
+  if (!hasNative) return Promise.resolve();
+  return Capture.showTranslateWith(source, target);
+}
+
+/** Takes (and clears) text waiting for the translate window. */
+/** Opens the translate window with a screenshot to read on-device. */
+export function showTranslateImage(imageBase64: string): Promise<void> {
+  if (!hasNative) return Promise.resolve();
+  return Capture.showTranslateImage(imageBase64);
+}
+
+export function takeTranslateDraft(): Promise<TranslateDraft> {
+  if (!hasNative) return Promise.resolve({ source: "", target: "", image: "" });
+  return Capture.takeTranslateDraft();
+}
+
 export function historyList(): Promise<HistoryEntry[]> {
   if (!hasNative) return Promise.resolve(mockHistory().map((entry) => ({ ...entry })));
   return History.list();

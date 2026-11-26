@@ -1,4 +1,4 @@
-import { cancelTranslation, copyRecognizedText, modelSettings, openRecognizedLink, pollTranslation, recognizeSelection, recognizeWithModel, startTranslation } from "./bridge";
+import { cancelTranslation, copyRecognizedText, finishAnnotated, modelSettings, openRecognizedLink, pollTranslation, recognizeSelection, recognizeWithModel, showTranslateImage, showTranslateWith, startTranslation } from "./bridge";
 import type { ModelSettings, RecognitionCode, RecognitionMode } from "./bridge";
 import { translateLanguageLabel } from "./languages";
 import type { Preferences } from "./settings";
@@ -62,14 +62,16 @@ export class RecognitionPanel {
         for (const code of codes) this.renderCode(code);
         return;
       }
+      if (mode === "translate") {
+        // The translate window owns the whole flow: on-device OCR, model
+        // translation and history. The capture session ends after handing over.
+        await this.readText({ mode, preferences, image }, undefined, "native");
+        return;
+      }
       const request: TextCaptureRequest = { mode, preferences, image };
-      const settings = await modelSettings(signal).catch((error: unknown) => {
-        if (mode === "translate") throw error;
-        return undefined;
-      });
+      const settings = await modelSettings(signal).catch(() => undefined);
       if (signal.aborted) return;
       if (!settings?.revision) {
-        if (mode === "translate") throw new Error("请先在偏好设置 → 识别与翻译中配置模型服务");
         await this.readText(request, undefined, "native");
       } else if (settings.mode === "cloud") {
         this.confirmCloudOCR(request, settings);
@@ -145,6 +147,14 @@ export class RecognitionPanel {
     try {
       const png = await image();
       if (signal.aborted) return;
+      if (mode === "translate") {
+        // The translate window reads the capture on-device and streams the
+        // translation, so the capture session can end here.
+        await showTranslateImage(png);
+        void finishAnnotated("cancel", png).catch(() => {});
+        this.close();
+        return;
+      }
       const text = model
         ? await recognizeWithModel(model.revision, png, signal)
         : (await this.recognizeLocally("ocr", preferences.ocrLanguage, png, signal)).text;
@@ -153,13 +163,9 @@ export class RecognitionPanel {
         this.setStatus("选区里没有识别到文字");
         return;
       }
-      if (mode === "translate" && settings) {
-        await this.translateAndRender(settings, preferences, text, signal);
-      } else {
-        if (model) this.renderModelText(model, preferences, text);
-        else this.renderText(text);
-        this.setStatus("");
-      }
+      if (model) this.renderModelText(model, preferences, text);
+      else this.renderText(text);
+      this.setStatus("");
     } catch (error) {
       if (!signal.aborted) this.setStatus(`${mode === "translate" ? "翻译失败" : "识别失败"}：${this.message(error)}`, true);
     }
@@ -181,6 +187,11 @@ export class RecognitionPanel {
       if (!value) return Promise.reject(new Error("还没有译文"));
       return copyRecognizedText(`原文：\n${text}\n\n译文：\n${value}`, signal);
     }, "已复制对照");
+    this.button(bilingual, "open-translate-window", "在翻译窗口打开", (signal) => {
+      const value = translated.field.value.trim();
+      if (!value) return Promise.reject(new Error("还没有译文"));
+      return showTranslateWith(text, value);
+    }, "已发送到翻译窗口");
     this.results.append(bilingual);
     this.setStatus(`正在翻译为 ${translateLanguageLabel(preferences.translateTo)}…`);
     let token = "";

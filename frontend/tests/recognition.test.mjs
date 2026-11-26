@@ -126,30 +126,21 @@ test('Enter in recognition results does not export the screenshot', async () => 
   assert.deepEqual(actions, []);
 });
 
-test('screenshot translation uses the configured local model for OCR before translating the result', async () => {
-  const calls = [];
-  const copied = [];
+test('screenshot translation hands the capture to the translate window instead of rendering in the overlay', async () => {
+  const handed = [];
+  const finished = [];
   const overlay = await openOverlay({
     modelSettings: async () => localModel,
-    recognizeSelection: async () => { assert.fail('Vision ran before the configured model'); },
-    recognizeWithModel: async (revision, image) => {
-      calls.push(['model-ocr', revision, image]);
-      return text;
-    },
-    startTranslation: async (revision, value, target) => {
-      calls.push(['translate', revision, value, target]);
-      return 'token-one';
-    },
-    pollTranslation: async () => ({ text: 'スクリーンショットの文字', done: true, error: '' }),
-    copyRecognizedText: async (value) => { copied.push(value); },
+    recognizeSelection: async () => { assert.fail('OCR ran in the overlay'); },
+    recognizeWithModel: async () => { assert.fail('model OCR ran in the overlay'); },
+    showTranslateImage: async (png) => { handed.push(png); },
+    finishAnnotated: async (action, png) => { finished.push([action, png]); return { completed: false, cancelled: true }; },
   });
   chooseTool(overlay, 'translate');
   await settle();
-  assert.deepEqual(calls, [['model-ocr', localModel.revision, encodedPNG], ['translate', localModel.revision, text, 'ja']]);
-  assert.deepEqual(overlay.document.querySelectorAll('#recognitionPanel textarea').map((field) => field.value), [text, 'スクリーンショットの文字']);
-  overlay.document.querySelector('[data-recognition-copy-translation]').click();
-  await settle();
-  assert.deepEqual(copied, ['スクリーンショットの文字']);
+  assert.deepEqual(handed, [encodedPNG]);
+  assert.deepEqual(finished, [['cancel', encodedPNG]]);
+  assert.equal(overlay.document.getElementById('recognitionPanel').open, false);
 });
 
 test('cloud model OCR waits for explicit approval of the shown destination', async () => {
@@ -172,20 +163,17 @@ test('cloud model OCR waits for explicit approval of the shown destination', asy
   assert.equal(overlay.document.querySelector('#recognitionPanel textarea').value, '手写文字');
 });
 
-test('dismissing cloud screenshot translation confirmation sends no image or text', async () => {
-  const uploads = [];
+test('screenshot translation sends no image to a cloud model', async () => {
   const overlay = await openOverlay({
     modelSettings: async () => model,
-    recognizeWithModel: async (...args) => { uploads.push(args); return 'result'; },
-    translateModel: async (...args) => { uploads.push(args); return 'result'; },
+    recognizeWithModel: async () => { assert.fail('the image was sent to the cloud'); },
+    recognizeSelection: async () => { assert.fail('OCR ran in the overlay'); },
+    showTranslateImage: async () => {},
+    finishAnnotated: async () => ({ completed: true }),
   });
   chooseTool(overlay, 'translate');
   await settle();
-  assert.ok(overlay.document.querySelector('[data-recognition-confirm-model-ocr]'));
-  overlay.window.fire('keydown', { key: 'Escape' });
-  assert.deepEqual(uploads, []);
-  assert.equal(overlay.document.getElementById('recognitionPanel').open, false);
-  assert.equal(overlay.run('phase'), 'annotating');
+  assert.equal(overlay.document.querySelector('[data-recognition-confirm-model-ocr]'), null);
 });
 
 test('a stalled built-in OCR request times out and ignores a late result', async () => {
@@ -229,28 +217,15 @@ test('model OCR results can be translated as text on request', async () => {
   assert.deepEqual(overlay.document.querySelectorAll('#recognitionPanel textarea').map((field) => field.value), ['手写文字', '手書きの文字']);
 });
 
-test('cloud translation offers built-in OCR and keeps the image on the Mac when selected', async () => {
-  const calls = [];
+test('handing off screenshot translation closes the recognition panel', async () => {
   const overlay = await openOverlay({
-    modelSettings: async () => model,
-    recognizeSelection: async (mode, language, image) => {
-      calls.push([mode, language, image]);
-      return { text };
-    },
-    recognizeWithModel: async () => { assert.fail('the image was sent to the cloud'); },
-    startTranslation: async (revision, value, target) => {
-      calls.push(['translate', revision, value, target]);
-      return 'token-three';
-    },
-    pollTranslation: async () => ({ text: 'translated text', done: true, error: '' }),
+    showTranslateImage: async () => {},
+    finishAnnotated: async () => ({ completed: true }),
   });
   chooseTool(overlay, 'translate');
   await settle();
-  assert.deepEqual(calls, []);
-  overlay.document.querySelector('[data-recognition-local-ocr]').click();
-  await settle();
-  assert.deepEqual(calls, [['ocr', 'English', encodedPNG], ['translate', model.revision, text, 'ja']]);
-  assert.equal(overlay.document.querySelector('textarea[aria-label="译文"]').value, 'translated text');
+  assert.equal(overlay.document.getElementById('recognitionPanel').open, false);
+  assert.equal(overlay.document.querySelector('#recognitionPanel textarea'), null);
 });
 
 test('switching to built-in OCR cancels a pending model and keeps the new result', async () => {

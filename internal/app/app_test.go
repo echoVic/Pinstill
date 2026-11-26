@@ -561,3 +561,25 @@ func TestRevealOverlayChecksSessionWhenUIRuns(t *testing.T) {
 		t.Fatal("reveal consumed the new session")
 	}
 }
+func TestTranslateDraftHandoff(t *testing.T) {
+	a := &App{}
+	a.setTranslateDraft("hello world", "你好，世界")
+	got := a.takeTranslateDraft()
+	if got.Source != "hello world" || got.Target != "你好，世界" {
+		t.Fatalf("draft = %+v", got)
+	}
+	if again := a.takeTranslateDraft(); again.Source != "" || again.Target != "" {
+		t.Fatalf("draft was not cleared: %+v", again)
+	}
+}
+func TestTranslateDraftImageHandoff(t *testing.T) {
+	a := &App{}
+	a.setTranslateDraftImage("iVBORw0KGgo=")
+	got := a.takeTranslateDraft()
+	if got.Image != "iVBORw0KGgo=" || got.Source != "" {
+		t.Fatalf("image draft = %+v", got)
+	}
+	if again := a.takeTranslateDraft(); again.Image != "" {
+		t.Fatalf("image draft was not cleared: %+v", again)
+	}
+}

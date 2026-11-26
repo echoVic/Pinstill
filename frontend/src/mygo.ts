@@ -321,6 +321,13 @@ export interface ToastPayload {
   kind: string;
 }
 
+/** TranslateDraft carries text from a capture into the translate window. */
+export interface TranslateDraft {
+  source: string;
+  target: string;
+  image: string;
+}
+
 /** TranslationUpdate is the polling payload for a running translation. */
 export interface TranslationUpdate {
   text: string;
@@ -459,8 +466,14 @@ export const Capture = {
   /** ShowMainWindow reveals and focuses the main window. */
   showMainWindow: bind<[], void>("Capture.ShowMainWindow", () => []),
   showPinManager: bind<[], void>("Capture.ShowPinManager", () => []),
+  /** ShowTranslateImage opens the translate window with a screenshot to read. */
+  showTranslateImage: bind<[string], void>("Capture.ShowTranslateImage", (imageBase64: string) => [imageBase64]),
+  /** ShowTranslateWith opens the translate window with text already filled in. */
+  showTranslateWith: bind<[string, string], void>("Capture.ShowTranslateWith", (source: string, target: string) => [source, target]),
   /** StartScroll begins a manual scrolling capture for the current selection. */
   startScroll: bind<[Rect], void>("Capture.StartScroll", (rect: Rect) => [rect]),
+  /** TakeTranslateDraft returns and clears text waiting for the translate window. */
+  takeTranslateDraft: bind<[], TranslateDraft>("Capture.TakeTranslateDraft", () => []),
   /** TranslateAlwaysOnTop reports whether the standalone translation window stays on top. */
   translateAlwaysOnTop: bind<[], boolean>("Capture.TranslateAlwaysOnTop", () => []),
   /** UpdatePinState persists the size and opacity the page reports. */
