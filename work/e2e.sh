@@ -158,6 +158,14 @@ expect 'SELFTEST esc: before=true overlay_visible=false main_visible=false' "$ru
 expect 'SELFTEST esc: before=false overlay_visible=false main_visible=false' "$run_dir/data-esc/artifacts/esc.log"
 expect 'SELFTEST esc: checks=ok' "$run_dir/data-esc/artifacts/esc.log"
 
+step "Selftest: reopen the workbench without interrupting other panels"
+run_selftest workbench || fail=1
+expect 'SELFTEST workbench: reopen=true' "$run_dir/data-workbench/artifacts/workbench.log"
+expect 'SELFTEST workbench: activation_handler=true' "$run_dir/data-workbench/artifacts/workbench.log"
+expect 'SELFTEST workbench: restore=true' "$run_dir/data-workbench/artifacts/workbench.log"
+expect 'SELFTEST workbench: translate_kept_main_hidden=true' "$run_dir/data-workbench/artifacts/workbench.log"
+expect 'SELFTEST workbench: pin_manager_kept_main_hidden=true' "$run_dir/data-workbench/artifacts/workbench.log"
+
 step "Selftest: desktop action flow (drag + toolbar)"
 run_selftest flow || fail=1
 expect 'SELFTEST flow: toolbar_drag=60,40' "$run_dir/data-flow/artifacts/flow.log"

@@ -54,7 +54,7 @@ Under Settings → Recognition & Translation → Model Service, choose a local m
 ## Scrolling capture and history
 
 - **Scrolling capture**　Select a region within one display and choose Scrolling Capture. Scroll by hand and choose Finish Now, or enable Auto Scroll in the controls with Accessibility permission. If two frames do not line up, Pinstill keeps the stitched portion and asks you to scroll back slightly. Capture finishes at 120 frames, 30,000 pixels in height or 32 Mi pixels. [Scrolling capture demo](https://pinstill.echovic.com/en/#scroll)
-- **Capture history**　Open History & Settings from the menu bar. In the preview you can copy, save, pin, hang or delete a capture. Set how long captures are kept and how much space history may use in Settings.
+- **Capture history**　Open History & Settings from the menu bar. Closing the main window leaves capture available; click the Dock icon or switch back with `⌘Tab` to reopen it. In the preview you can copy, save, pin, hang or delete a capture. Set how long captures are kept and how much space history may use in Settings.
 
 ## Data and permissions
 

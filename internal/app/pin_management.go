@@ -224,9 +224,7 @@ func (a *App) showPinManager() {
 			return
 		}
 		if window != nil && !window.IsDestroyed() {
-			mygo.App.Focus()
-			window.Show()
-			window.Focus()
+			showWorkbenchWindow(window)
 			a.emitManagedPins()
 			return
 		}
@@ -236,9 +234,7 @@ func (a *App) showPinManager() {
 			BackgroundColor: "#171613",
 		})
 		window.OnReadyToShow(func() {
-			mygo.App.Focus()
-			window.Show()
-			window.Focus()
+			showWorkbenchWindow(window)
 		})
 		window.OnClosed(func() {
 			a.mu.Lock()

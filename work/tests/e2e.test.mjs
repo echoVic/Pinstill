@@ -20,7 +20,7 @@ function fixture(t, options = {}) {
   // Redirect the old hardcoded logs too, so RED runs cannot touch shared /tmp files.
   let script = readFileSync(join(repo, 'work/e2e.sh'), 'utf8').replaceAll('/tmp/pinstill-selftest-', `${root}/legacy-selftest-`);
   // Most failure tests need only the real runner and preflight. Keep the two
-  // full traversals below for all case wiring; avoid replaying 24 fake apps for
+  // full traversals below for all case wiring; avoid replaying every fake app for
   // each injected failure. Slice only at the stable case-list boundary.
   if (options.modes) {
     const boundary = script.indexOf('\nstep "Selftest: real quit path"');
@@ -112,11 +112,12 @@ test('every case gets fresh data, only the persistence pair shares data, and sep
   const f = fixture(t);
   for (let i = 0; i < 2; i++) assert.equal(f.run(['--skip-build']).status, 0);
   const launches = f.lines('launches').map(line => line.split('|'));
-  assert.equal(launches.length, 48);
+  const cases = Object.keys(logs);
+  assert.equal(launches.length, 2 * cases.length);
   const unique = new Set();
-  for (let offset = 0; offset < launches.length; offset += 24) {
-    const run = launches.slice(offset, offset + 24);
-    assert.deepEqual(run.map(([mode]) => mode), Object.keys(logs));
+  for (let offset = 0; offset < launches.length; offset += cases.length) {
+    const run = launches.slice(offset, offset + cases.length);
+    assert.deepEqual(run.map(([mode]) => mode), cases);
     const setup = run.find(([mode]) => mode === 'pinpersist-setup')[1];
     for (const [mode, dir, sim] of run) {
       assert.ok(dir.startsWith(join(f.root, 'tmp') + '/'), `${mode} must override inherited personal data`);

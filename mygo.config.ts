@@ -7,7 +7,7 @@ export default defineConfig({
   name: "Pinstill",
   slug: "pinstill",
   identifier: "dev.echovic.pinstill",
-  version: "0.4.1",
+  version: "0.4.2",
   publisher: "echovic",
   license: "MIT",
   main: "./cmd/pinstill",

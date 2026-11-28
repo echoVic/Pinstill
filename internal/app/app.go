@@ -171,9 +171,10 @@ func (a *App) Start() {
 			a.toast("贴图状态保存失败，退出已取消: "+err.Error(), "error")
 		}
 	})
-	// Activating the app (clicking the menu bar icon, the Dock, ...) must not
-	// open the history/settings window: only the tray menu item, the second
-	// launch path and explicit buttons in the UI do that.
+	if runtime.GOOS == "darwin" {
+		mygo.App.OnActivate(func(bool) { a.reopenWorkbench() })
+		mygo.App.OnDidBecomeActive(a.reopenWorkbench)
+	}
 	if mode := os.Getenv("PINSTILL_SELFTEST"); mode != "" {
 		go a.runSelfTest(mode)
 	}
@@ -384,16 +385,14 @@ func (a *App) createTranslateWindow() {
 // ShowTranslate reveals the standalone text translation window used by the
 // menu bar item and the translate shortcut.
 func (a *App) ShowTranslate() {
-	a.mu.Lock()
-	win := a.translate
-	quitting := a.quitting
-	a.mu.Unlock()
-	if win == nil || win.IsDestroyed() || quitting {
-		return
-	}
-	mygo.App.Focus()
-	win.Show()
-	win.Focus()
+	mygo.RunOnMain(func() {
+		a.mu.Lock()
+		win, quitting := a.translate, a.quitting
+		a.mu.Unlock()
+		if win != nil && !win.IsDestroyed() && !quitting {
+			showWorkbenchWindow(win)
+		}
+	})
 }
 
 func (a *App) setTranslateAlwaysOnTopFor(caller *mygo.Window, pinned bool) (bool, error) {
@@ -1191,7 +1190,6 @@ func (a *App) notifyCaptureFailure(message string) {
 	}()
 }
 
-// showMain reveals and focuses the main window.
 // Minimized and hidden windows already stay out of the capture. Leaving them
 // alone preserves their presentation without showing/focusing them afterward.
 func hideForCapture(win interface {
@@ -1206,15 +1204,37 @@ func hideForCapture(win interface {
 	return true
 }
 
-func (a *App) showMain() {
+func (a *App) reopenWorkbench() {
 	a.mu.Lock()
-	win := a.main
-	quitting := a.quitting
+	busy := a.quitting || a.capturing || a.scroll != nil
+	windows := []*mygo.Window{a.main, a.translate, a.pinManager, a.result}
 	a.mu.Unlock()
-	if win == nil || win.IsDestroyed() || quitting {
+	if busy {
 		return
 	}
-	mygo.App.Focus()
+	for _, window := range windows {
+		if window != nil && !window.IsDestroyed() && window.IsVisible() && !window.IsMinimized() {
+			return
+		}
+	}
+	a.showMain()
+}
+
+func (a *App) showMain() {
+	mygo.RunOnMain(func() {
+		a.mu.Lock()
+		win, quitting := a.main, a.quitting
+		a.mu.Unlock()
+		if win != nil && !win.IsDestroyed() && !quitting {
+			showWorkbenchWindow(win)
+		}
+	})
+}
+
+func showWorkbenchWindow(win *mygo.Window) {
+	if win.IsMinimized() {
+		win.Restore()
+	}
 	win.Show()
 	win.Focus()
 }

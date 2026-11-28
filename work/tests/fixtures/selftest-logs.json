@@ -4,6 +4,7 @@
   "overlay": "SELFTEST overlay: ok",
   "drag": "SELFTEST drag: delivered\nsame=true",
   "esc": "SELFTEST esc: before=true overlay_visible=false main_visible=false\nSELFTEST esc: before=false overlay_visible=false main_visible=false\nSELFTEST esc: checks=ok",
+  "workbench": "SELFTEST workbench: reopen=true\nSELFTEST workbench: activation_handler=true\nSELFTEST workbench: restore=true\nSELFTEST workbench: translate_kept_main_hidden=true\nSELFTEST workbench: pin_manager_kept_main_hidden=true",
   "flow": "SELFTEST flow: toolbar_drag=60,40\nSELFTEST flow: copy clipboard 1280x800\nSELFTEST flow: pin pins=1\nSELFTEST flow: cancel history before=1 after=1\nSELFTEST flow: auto clipboard 1280x800",
   "dblclick": "SELFTEST dblclick: first=clicked second=clicked clipboard=1280x800\nSELFTEST dblclick: checks=ok",
   "resize": "SELFTEST resize: handles=8 before=800x600 after=920x600\nSELFTEST resize: shrink before=920x600 after=820x540\nSELFTEST resize: checks=ok",

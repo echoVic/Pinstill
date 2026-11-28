@@ -205,6 +205,8 @@ func (a *App) runSelfTest(mode string) {
 			a.selftestDrag()
 		case "esc":
 			a.selftestEscape()
+		case "workbench":
+			a.selftestWorkbench()
 		case "fullscreen":
 			a.selftestFullScreen()
 		case "historyactions":
@@ -551,6 +553,8 @@ func (a *App) selftestEscape() {
 		selftestCheckError(a.beginRegion())
 		time.Sleep(900 * time.Millisecond)
 		selftestRequire(a.overlayVisible() && !a.main.IsVisible(), "capture overlay did not hide the workbench")
+		mygo.RunOnMain(a.reopenWorkbench)
+		selftestRequire(!a.main.IsVisible(), "activation opened the workbench during capture")
 		selftestValue(a.overlay.Page().Eval(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))`))
 		deadline := time.Now().Add(3 * time.Second)
 		for a.overlayVisible() && time.Now().Before(deadline) {
